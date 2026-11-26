@@ -53,13 +53,14 @@ import { discoveryNote, exclusionNotes, incompleteLockfiles, unreadableNotes } f
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { registryQuote } from "../untrusted-text.js";
-import type { VulnerabilityCoverage, VulnerabilityEntry } from "../live/types.js";
+import type { ResolvedDependency, VulnerabilityCoverage, VulnerabilityEntry, VulnerabilityScanResult } from "../live/types.js";
 import { scanUnfinishedText, withinCallBudget } from "../call-budget.js";
 import { attachCommands, sequencePlan, type PlanCommand, type RunOrderStep } from "./upgrade-plan-sequence.js";
 import { AFTER_RUN, protocolOf } from "./upgrade-plan-protocol.js";
-import { explainCommandlessRows } from "./upgrade-planner-commandless.js";
+import { cargoDependencyReader, hasCargoPrecondition, withCargoStepPreconditions } from "./upgrade-planner-cargo-steps.js";
+import { explainCommandlessRows, NO_COMMAND_REASON_START } from "./upgrade-planner-commandless.js";
 import { rustVersionRunOrderNote, rustVersionSummary, withRustVersions, type RustVersionNeed } from "./upgrade-planner-rust-version.js";
-import { declaredNpmOperator, hasUnsafeDir, withheldStepsOf, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
+import { declaredNpmOperator, hasUnsafeDir, withheldStepsOf, staleLocksNote, uvWorkspaces, withholdUnsafeDirs, withoutOwnPackageUpgrades, hasSelfRequiringTarget, withoutSelfRequiringTargets, withPythonFloorHolds, withPythonSupport, withUvWorkspaceLocks, withYarnClassicResolutions, workspaceOwnNames } from "./upgrade-plan-runnable.js";
 import { escapeUnsafeDirs, isShellSafeCargoTarget, isShellSafeDir, liveUnsafeDirs } from "../live/shell-safe.js";
 import { walkNotReadNote } from "./what-should-i-know.js";
 import * as path from "node:path";
@@ -268,6 +269,14 @@ export interface UpgradePlanResult {
 const OFFER_CHECK_BUDGET_MS = 10_000;
 /** Time run_order may spend reading the go.mod of the `go get` targets it combines. */
 const SEQUENCE_BUDGET_MS = 3_000;
+/** How the reason starts for a row whose target clears none of its advisories. */
+const NOT_A_FIX_START = `${NO_COMMAND_REASON_START}: it is NOT a fix, `;
+/** Time the uv pins' requirements may take to be judged on the project's lowest Python. */
+const PYTHON_FLOOR_BUDGET_MS = 4_000;
+/** Time the check that a target clears any of its row's advisories may take. */
+const NOT_A_FIX_BUDGET_MS = 4_000;
+/** Time the Cargo steps may spend reading what their targets require (upgrade-planner-cargo-steps.ts). */
+const CARGO_STEP_BUDGET_MS = 6_000;
 /** Time the Cargo rows may spend reading the rust-version of releases not already in the cache. */
 const RUST_VERSION_BUDGET_MS = 4_000;
 
@@ -293,7 +302,7 @@ const APP_ATTACHED_NOTE = "The 4DA app's stored plan is never used in its place;
 export const upgradePlannerTool = {
   name: "upgrade_planner",
   description:
-    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). The plan is computed by this server from the project's lockfiles on disk, with or without the 4DA desktop app (provenance lockfile_engine). With the app's database attached, `app_plan_check` says how the app's stored plan compares (agrees; differs, with up to 10 `differences`; not_comparable when its plan format is one this server does not read, its advisory data is more than 24 hours old, or a lockfile changed after it was generated; no_plan); the app's plan never replaces this one. The exception is project_path \"*\" with the app attached: the answer is then the app's stored plan across every project it tracks (provenance app_plan, `app_plan_check.status` unverified, not checked against the lockfiles on disk); when \"*\" is asked and no app plan can be read (no app attached, none stored, a newer plan format), the answer covers only the server's own project, its summary starts with NOT CHECKED saying so and why, `allProjects` is { covered: false, reason } and vulnerabilityDataAvailable is false. The app's plan: per package the ecosystem, each installed version with its minimum clean target, upgrade type, the projects that hold it, the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update, mixed, no_fix) and `next_step` in words, `stale` when past its expiry, when its advisory data is more than 24 hours old, or when a lockfile of a project it covers changed after it. The plan: the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; a Cargo row whose release needs a newer Rust than the manifest's rust-version says so in `needsNewerRust` (the step stays: the build on the declared Rust is what fails); dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. Each run_order step names the files it changes (`changes`, project-relative) and, where a failed command can leave one edited (`cargo add`), how to put exactly that back (`if_it_fails`); `after_run` says to call vulnerability_scan again when the steps have run, and what the plan cannot promise. A directory walk that stopped before reading the whole project (its directory bound or time budget) makes the plan incomplete the same way. A step in a directory whose name is not a plain path (shell metacharacters, a leading \"-\", control or invisible characters) names no command and no directory: that step is withheld (its reasons name the directory escaped), the row's steps in other directories stay in run_order, and the row is not counted as fixed. `package` narrows the plan to one package. Privacy: the plan may query public registries and OSV with package names and versions; it never sends source code.",
+    "Ranked dependency upgrade plan for one project — call before upgrading, adding, or auditing any dependency to pick the safest order. `project_path` picks the project (default: the one the server was started in; \"*\" for every project). The plan is computed by this server from the project's lockfiles on disk, with or without the 4DA desktop app (provenance lockfile_engine). With the app's database attached, `app_plan_check` says how the app's stored plan compares (agrees; differs, with up to 10 `differences`; not_comparable when its plan format is one this server does not read, its advisory data is more than 24 hours old, or a lockfile changed after it was generated; no_plan); the app's plan never replaces this one. The exception is project_path \"*\" with the app attached: the answer is then the app's stored plan across every project it tracks (provenance app_plan, `app_plan_check.status` unverified, not checked against the lockfiles on disk); when \"*\" is asked and no app plan can be read (no app attached, none stored, a newer plan format), the answer covers only the server's own project, its summary starts with NOT CHECKED saying so and why, `allProjects` is { covered: false, reason } and vulnerabilityDataAvailable is false. The app's plan: per package the ecosystem, each installed version with its minimum clean target, upgrade type, the projects that hold it, the mechanism (manifest_bump, lockfile_refresh, parent_update, blocked_upstream, lockfile_or_parent_update, mixed, no_fix) and `next_step` in words, `stale` when past its expiry, when its advisory data is more than 24 hours old, or when a lockfile of a project it covers changed after it. The plan: the smallest version that fixes each vulnerability (direct and transitive), checked against every known advisory of the package, whether a lockfile refresh already reaches it (lockfile_refresh with the command) or a parent blocks it: upgrade_parent with `parentUpgrades` naming the smallest parent release whose requirement admits a clean version (through the direct dependency it arrives by), override_or_replace with the override syntax when no parent release will (deprecated, already latest, or none admits one), waiting_on_upstream only when the paths were read and a parent the project cannot move blocks them, not_determined when the fix path could not be read (registry or lockfile unread, lookups off, out of time: unknown, never waiting); direct steps carry `upgradeCommands` and are raised to the release that also clears the transitives they pin; a copy bundled inside its owner waits on the owner; a Cargo row whose release needs a newer Rust than the manifest's rust-version says so in `needsNewerRust` (the step stays: the build on the declared Rust is what fails); dev-only rows are included and labelled `isDev`, as in vulnerability_scan; deprecation and version distance; it runs the OSV scan itself when none has run. When OSV.dev could not answer for every dependency, `vulnerabilityDataAvailable` is false, `vulnerabilityCoverage` counts the unchecked ones and the summary starts with \"NOT CHECKED\", a row with no answer and nothing newer to move to is action not_checked (never counted as vulnerable or clean): the plan then misses whatever those dependencies carry. Each run_order step names the files it changes (`changes`, project-relative) and, where a failed command can leave one edited (`cargo add`), how to put exactly that back (`if_it_fails`); `after_run` says to call vulnerability_scan again when the steps have run, and what the plan cannot promise. A Cargo `--precise` step carries the pre-update its target needs (read from the crates.io index), Cargo moves run a crate before the crates that depend on it, every uv upgrade of one lockfile is one `uv lock`, and a step whose precondition cannot be established (a `cargo add` whose old and new lines would link one native library, a uv release that requires another version of the project itself) is words in upgradeInstructions, not a command. A directory walk that stopped before reading the whole project (its directory bound or time budget) makes the plan incomplete the same way. A step in a directory whose name is not a plain path (shell metacharacters, a leading \"-\", control or invisible characters) names no command and no directory: that step is withheld (its reasons name the directory escaped), the row's steps in other directories stay in run_order, and the row is not counted as fixed. `package` narrows the plan to one package. Privacy: the plan may query public registries and OSV with package names and versions; it never sends source code.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -912,8 +921,19 @@ async function executeStandalonePlanner(
   withoutOwnPackageUpgrades(limited, workspaceOwnNames(root, uvSpaces));
   withYarnClassicResolutions(limited, root);
   await withPythonSupport(limited, root, liveIntel.getFixPathSources());
+  // A uv target that requires the project itself at another version cannot lock (upgrade-plan-runnable.ts).
+  await withoutSelfRequiringTargets(limited, root, liveIntel.getFixPathSources());
+  // A uv pin whose requirement resolves, on the project's lowest Python, to an affected release is held (upgrade-plan-runnable.ts).
+  await withPythonFloorHolds(limited, root, liveIntel.getFixPathSources(), (deps) => liveIntel.queryAdvisories(deps), Date.now() + withinCallBudget(PYTHON_FLOOR_BUDGET_MS, 500));
   // A Cargo step that installs a release needing a newer Rust than the project's rust-version says so (upgrade-planner-rust-version.ts).
   await withRustVersions(limited, root, liveIntel, withinCallBudget(RUST_VERSION_BUDGET_MS, 500));
+  // A Cargo step's preconditions, read before it is named: the pre-update a `--precise` needs, and
+  // a `cargo add` whose two lines would link one native library (upgrade-planner-cargo-steps.ts).
+  await withCargoStepPreconditions(limited, root, liveIntel.getFixPathSources(), Date.now() + withinCallBudget(CARGO_STEP_BUDGET_MS, 500));
+  // A target that clears none of the row's advisories is not a fix: no step serves it and it is not
+  // counted as fixed (gh cli v2.14.0: gorilla/websocket v1.4.2 -> v1.5.3 was listed under a go get's
+  // `fixes`; GO-2026-6278 affects 1.5.3 again). Asked of OSV.dev for the target itself (cached).
+  await markTargetsThatFixNothing(limited, (r) => (vulnsByPackage.get(instanceKey(r.ecosystem, r.package, r.currentVersion)) ?? []).filter((v) => v.platformActive), (deps) => liveIntel.queryAdvisories(deps), withinCallBudget(NOT_A_FIX_BUDGET_MS, 500));
   // A directory name comes from the repository: a step in one that is not a plain path names no
   // command and no directory, only words (audit 2026-11-25 B-B1; shell-safe.ts isShellSafeDir).
   const unsafeDirs = withholdUnsafeDirs(limited, installDirsOf);
@@ -925,9 +945,10 @@ async function executeStandalonePlanner(
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
+  const notAFix = (r: (typeof limited)[number]) => r.reasons.some((x) => x.startsWith(NOT_A_FIX_START));
   const heldRows = limited.filter(heldUnclean);
   // Not counted as fixed: a target that is not a clean fix, or a step in a directory whose name is not safe in a command.
-  const notCounted = (r: (typeof limited)[number]) => heldUnclean(r) || hasUnsafeDir(r);
+  const notCounted = (r: (typeof limited)[number]) => heldUnclean(r) || notAFix(r) || hasUnsafeDir(r) || hasCargoPrecondition(r) || hasSelfRequiringTarget(r);
   const unsafeRows = limited.filter(hasUnsafeDir);
   const withheldTotal = unsafeRows.reduce((n, r) => n + withheldStepsOf(r), 0);
   // The rows shown as one script safe to run top to bottom (upgrade-plan-sequence.ts).
@@ -938,11 +959,12 @@ async function executeStandalonePlanner(
   );
   const sequence = await sequencePlan(limited, {
     totalRows: filtered.length,
-    heldUnclean: (r) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x)),
+    heldUnclean: (r) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x) || x.startsWith(NOT_A_FIX_START)),
     goSource: liveIntel.getReleaseSources().Go,
     peers: { root, lockfileFor: (dir) => liveIntel.lockfileFor(dir, "npm"), isDirect: (name, version) => declaredNpm.has(`${name}\0${version}`) },
     declaredOperator: (dir, name) => declaredNpmOperator(root, dir, name),
     withheldSteps: withheldStepsOf,
+    cargoDependsOn: cargoDependencyReader(root),
     budgetMs: withinCallBudget(SEQUENCE_BUDGET_MS, 500),
   });
   // A direct upgrade after which other packages keep an affected copy of the package fixes only the project's own (upgrade-planner-shared-copy.ts).
@@ -1246,4 +1268,48 @@ function vulnerabilitiesReason(groups: ReturnType<typeof groupAdvisories>): stri
 /** Before the fix path is checked; verifyFixPaths rewrites it once the target is known (M2). */
 function noFixReason(n: number): string {
   return `${n} of them ${n === 1 ? "has" : "have"} no published fix`;
+}
+
+/**
+ * Rows with a step whose target is still affected by every advisory on the installed copy: no step
+ * is given for them (their commands go) and the reason says why; a row whose target's advisories
+ * could not be read keeps its step.
+ */
+async function markTargetsThatFixNothing(
+  rows: UpgradeRecommendation[],
+  vulnsOf: (r: UpgradeRecommendation) => VulnerabilityEntry[],
+  query: (deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>,
+  budgetMs: number,
+): Promise<void> {
+  const stepped = (r: UpgradeRecommendation) =>
+    Boolean(r.upgradeCommands?.length || r.refreshCommands?.length || r.parentUpgrades?.some((u) => u.refreshCommands?.length || u.levers.some((l) => l.commands?.length)));
+  const asked = rows.filter((r) => r.targetVersion && r.targetVersion !== r.currentVersion && vulnsOf(r).length > 0 && stepped(r));
+  if (asked.length === 0) return;
+  const deps: ResolvedDependency[] = asked.map((r) => ({ name: r.package, version: r.targetVersion, ecosystem: r.ecosystem as ResolvedDependency["ecosystem"], isDev: false, isDirect: false, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), Math.max(0, budgetMs));
+    timer.unref?.();
+  });
+  const answer = await Promise.race([query(deps).catch(() => null), late]);
+  clearTimeout(timer);
+  if (!answer) return;
+  const unanswered = new Set(answer.uncheckedDependencies ?? []);
+  for (const r of asked) {
+    const key = `${r.ecosystem}\0${r.package}\0${r.targetVersion}`;
+    if (unanswered.has(key)) continue;
+    const atTarget = answer.vulnerabilities.filter((v) => v.ecosystem === r.ecosystem && v.package === r.package && v.currentVersion === r.targetVersion);
+    const named = new Set(atTarget.flatMap((v) => [v.vulnId, ...v.aliases]));
+    const own = vulnsOf(r);
+    if (own.length === 0 || !own.every((v) => named.has(v.vulnId) || v.aliases.some((a) => named.has(a)))) continue;
+    const ids = [...new Set(own.map((v) => v.vulnId))];
+    const text = `${NOT_A_FIX_START}since ${r.package} ${r.targetVersion} is still affected by ${ids.join(", ")}, every advisory on ${r.package} ${r.currentVersion ?? ""}`.trimEnd() + ": no step is given for it and it is not counted as fixed";
+    if (!r.reasons.includes(text)) r.reasons.push(text);
+    delete r.upgradeCommands;
+    delete r.refreshCommands;
+    for (const u of r.parentUpgrades ?? []) {
+      delete u.refreshCommands;
+      for (const l of u.levers) delete l.commands;
+    }
+  }
 }

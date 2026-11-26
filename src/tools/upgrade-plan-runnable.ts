@@ -26,7 +26,9 @@ import { expandWorkspaces, memberNamesOf, pnpmYamlList } from "../live/js-manife
 import { normalizePythonName } from "../live/lockfile-parsers-pygo.js";
 import { tomlHeader, tomlKeyValue, tomlLines, tomlStrings } from "../live/private-hosts.js";
 import { yarnBlockVersion, yarnHeaderSpecs } from "../live/js-lockfile-readers.js";
-import { lowestPython, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { lowestPython, parsePep508, pythonSpecAdmits } from "../live/pygo-parents.js";
+import { isPrereleaseVersion } from "../live/osv-ranges.js";
+import type { ResolvedDependency, VulnerabilityScanResult } from "../live/types.js";
 import { isShellSafeDir, unsafeDirWords } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
 import { overrideCommandsOf, recordOverrideCommands } from "./upgrade-plan-overrides.js";
@@ -315,6 +317,178 @@ export async function withPythonSupport(rows: RunnableRow[], projectRoot: string
     }
     for (const x of moved) if (!p.r.reasons.includes(x.instruction)) p.r.reasons.push(x.instruction);
   }
+}
+
+/** The packages a uv.lock records as the project's own (editable or virtual sources), with their versions. */
+function uvOwnPackages(dir: string): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const lock = readText(path.join(dir, "uv.lock"));
+  if (lock === null) return out;
+  for (const block of lock.split(/^\[\[package\]\]\s*$/m).slice(1)) {
+    const body = block.split(/^\[(?!\[package\]\])/m)[0];
+    const name = /^name\s*=\s*"([^"]+)"/m.exec(body)?.[1];
+    const source = /^source\s*=\s*\{([^}]*)\}/m.exec(body)?.[1] ?? "";
+    if (!name || !/\b(?:editable|virtual)\s*=/.test(source)) continue;
+    out.set(normalizePythonName(name), /^version\s*=\s*"([^"]+)"/m.exec(body)?.[1] ?? null);
+  }
+  return out;
+}
+
+/**
+ * A `uv lock --upgrade-package name==version` whose release requires the project itself at a
+ * version the project is not (crewAI 0.86.0: crewai-tools 1.15.1 requires crewai==1.15.1, and the
+ * project is crewai 0.86.0): uv cannot lock it ("requirements are unsatisfiable"). Moved to words.
+ * Read from the release's own requirements (cached); a release whose requirements are not known
+ * keeps its command.
+ */
+export async function withoutSelfRequiringTargets(rows: RunnableRow[], projectRoot: string, sources: Pick<FixPathSources, "pypiRequiresDist"> | null): Promise<void> {
+  if (!sources) return;
+  for (const r of rows) {
+    if (r.ecosystem !== "PyPI") continue;
+    const lists: Array<{ list: Array<{ dir: string; command: string }>; set: (left: Array<{ dir: string; command: string }>, words: Array<{ dir: string; instruction: string }>) => void }> = [];
+    if (r.upgradeCommands) {
+      lists.push({
+        list: r.upgradeCommands,
+        set: (left, words) => {
+          if (left.length > 0) r.upgradeCommands = left as RunnableRow["upgradeCommands"];
+          else delete r.upgradeCommands;
+          r.upgradeInstructions = [...(r.upgradeInstructions ?? []), ...words];
+        },
+      });
+    }
+    for (const u of r.parentUpgrades ?? []) {
+      for (const l of u.levers) {
+        if (!l.commands) continue;
+        lists.push({
+          list: l.commands,
+          set: (left, words) => {
+            if (left.length > 0) l.commands = left as typeof l.commands;
+            else delete l.commands;
+            l.instructions = [...(l.instructions ?? []), ...words];
+          },
+        });
+      }
+    }
+    for (const { list, set } of lists) {
+      const words: Array<{ dir: string; command: string; instruction: string }> = [];
+      for (const c of list) {
+        const m = UV_PIN.exec(c.command);
+        if (!m) continue;
+        const own = uvOwnPackages(path.resolve(projectRoot, c.dir));
+        if (own.size === 0) continue;
+        const requires = await sources.pypiRequiresDist(m[1], m[2]).catch(() => null);
+        if (!requires) continue;
+        for (const req of requires) {
+          const parsed = parsePep508(req);
+          if (!parsed || parsed.extra || !own.has(parsed.name)) continue;
+          const version = own.get(parsed.name) ?? null;
+          if (parsed.spec !== "" && version !== null && pythonSpecAdmits(parsed.spec, version) !== false) continue;
+          const spec = /^[A-Za-z0-9.*!=<>~,+_-]{0,64}$/.test(parsed.spec) ? ` "${parsed.spec}"` : "";
+          words.push({
+            dir: c.dir,
+            command: c.command,
+            instruction: `no command: ${m[1]} ${m[2]} requires ${parsed.name}${spec}, and ${parsed.name} is this project itself${version ? ` (${version} in uv.lock)` : ""}: uv cannot lock a release that requires another version of the project, so \`${c.command}\` fails ("requirements are unsatisfiable"). It becomes possible once the project's own version is one ${m[1]} ${m[2]} admits; until then this advisory stays`,
+          });
+          break;
+        }
+      }
+      if (words.length === 0) continue;
+      set(
+        list.filter((c) => !words.some((w) => w.dir === c.dir && w.command === c.command)),
+        words.map((w) => ({ dir: w.dir, instruction: w.instruction })),
+      );
+      r.reasons = r.reasons.filter((t) => !(t.startsWith("Fixable now with a lockfile refresh") && words.some((w) => t.includes(`\`${w.command}\``))));
+      for (const w of words) if (!r.reasons.includes(`${SELF_REQUIRING_START}${w.instruction}`)) r.reasons.push(`${SELF_REQUIRING_START}${w.instruction}`);
+    }
+  }
+}
+
+/**
+ * Whether a PEP 508 marker holds on Python `python`: only `python_version` / `python_full_version`
+ * comparisons joined by `and` / `or` are read; anything else is null (not known).
+ */
+function pythonMarkerHolds(marker: string, python: string): boolean | null {
+  const text = marker.trim();
+  if (text === "") return true;
+  const ors = text.split(/\s+or\s+/);
+  let any = false;
+  for (const or of ors) {
+    let all = true;
+    for (const clause of or.split(/\s+and\s+/)) {
+      const m = /^\(?\s*python(?:_full)?_version\s*(<=|>=|==|!=|<|>|~=)\s*["']([0-9.*]+)["']\s*\)?$/.exec(clause.trim());
+      if (!m) return null;
+      const admits = pythonSpecAdmits(`${m[1]}${m[2]}`, python);
+      if (admits === null) return null;
+      all &&= admits;
+    }
+    any ||= all;
+  }
+  return any;
+}
+
+/**
+ * A uv pin whose release requires a dependency that, on the project's lowest supported Python,
+ * resolves to an affected release (crewAI 0.86.0: virtualenv 21.14.13 requires filelock
+ * ">=3.24.2,<5" on Python 3.10, where the newest filelock it can install is 4.1.0, which 18
+ * advisories affect; 4.2.x needs Python 3.11). The step would bring the affected copy in: it is held
+ * as NOT a clean fix (out of run_order, not counted as fixed). Only a pick the Python floor changes
+ * is judged here (the newest release the requirement admits is the planner's own held check);
+ * whatever cannot be read leaves the step as it is.
+ */
+export async function withPythonFloorHolds(
+  rows: RunnableRow[],
+  projectRoot: string,
+  sources: Pick<FixPathSources, "pypiRequiresDist" | "releaseFacts"> | null,
+  query: ((deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>) | null,
+  deadline: number,
+): Promise<void> {
+  if (!sources || !query) return;
+  for (const r of rows) {
+    if (r.ecosystem !== "PyPI") continue;
+    const commands = [...(r.upgradeCommands ?? []), ...(r.refreshCommands ?? []), ...(r.parentUpgrades ?? []).flatMap((u) => u.levers.flatMap((l) => l.commands ?? []))];
+    for (const c of commands) {
+      if (Date.now() > deadline) return;
+      const m = UV_PIN.exec(c.command);
+      if (!m) continue;
+      const python = projectPython(path.resolve(projectRoot, c.dir));
+      const lowest = lowestPython(python?.spec ?? null);
+      if (!python || !lowest) continue;
+      const requires = await sources.pypiRequiresDist(m[1], m[2]).catch(() => null);
+      if (!requires) continue;
+      for (const raw of requires) {
+        const parsed = parsePep508(raw);
+        if (!parsed || parsed.extra || parsed.spec === "") continue;
+        const marker = raw.includes(";") ? raw.slice(raw.indexOf(";") + 1) : "";
+        if (pythonMarkerHolds(marker, lowest) !== true) continue;
+        const facts = await sources.releaseFacts("PyPI", parsed.name).catch(() => null);
+        if (!facts) continue;
+        const admitted = facts.versions
+          .filter((v) => !isPrereleaseVersion(v, "PyPI") && pythonSpecAdmits(parsed.spec, v) === true)
+          .sort((a, b) => compareVersions(b, a, "PyPI"));
+        const onFloor = admitted.find((v) => {
+          const needs = facts.requiresPython?.[v];
+          return !needs || pythonSpecAdmits(needs, lowest) !== false;
+        });
+        if (!onFloor || onFloor === admitted[0]) continue;
+        const answer = await query([{ name: parsed.name, version: onFloor, ecosystem: "PyPI", isDev: false, isDirect: false, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [] }]).catch(() => null);
+        if (!answer || (answer.uncheckedDependencies ?? []).length > 0) continue;
+        const ids = [...new Set(answer.vulnerabilities.filter((v) => !v.maintenance && v.currentVersion === onFloor).map((v) => v.vulnId))];
+        if (ids.length === 0) continue;
+        const shown = ids.slice(0, 4).join(", ") + (ids.length > 4 ? ` and ${ids.length - 4} more` : "");
+        const why = `${m[1]} ${m[2]} is NOT a clean fix: confirm a release with dependency_check before pinning it. On this project's lowest supported Python (${lowest}, from ${python.from}) it requires ${parsed.name} "${parsed.spec}", and the newest ${parsed.name} that Python can install is ${onFloor} (${admitted[0]} needs a newer Python), which ${shown} affect: \`${c.command}\` would bring it in`;
+        if (!r.reasons.includes(why)) r.reasons.push(why);
+        break;
+      }
+    }
+  }
+}
+
+/** How the reason withoutSelfRequiringTargets writes starts. */
+export const SELF_REQUIRING_START = "uv: ";
+
+/** Whether withoutSelfRequiringTargets took a step off the row: not counted as fixed. */
+export function hasSelfRequiringTarget(row: { reasons: string[] }): boolean {
+  return row.reasons.some((r) => r.startsWith(`${SELF_REQUIRING_START}no command: `));
 }
 
 /** run_order_note's sentence for uv workspace members' own lockfiles. */

@@ -46,7 +46,7 @@ import { yarnWorkspaceMember } from "./yarn-workspace.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
-import { CRATES_USER_AGENT, releaseFeatureNames } from "./crates-versions.js";
+import { CRATES_USER_AGENT, defaultEnabledDependencies, releaseFeatureNames } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
@@ -55,6 +55,7 @@ import type { RequirementEcosystem, RequirementOptions, RequirementSources } fro
 import { confirmTargets } from "./batch-confirm.js";
 import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, registryQuote } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
+import { osvCacheKey } from "./osv-scanner.js";
 
 const TIMEOUT_MS = 15_000;
 const ADVISORY_TTL = 6 * 3600;
@@ -135,6 +136,18 @@ export interface CratesSparse {
    * cached before it was read: such a record is read again (upgrade-planner-rust-version.ts).
    */
   rustVersions?: Record<string, string>;
+  /**
+   * version -> the native library that release links (the index's `links`, Cargo allows one package
+   * per value in a build); a release that links none is absent. The whole field is absent on a record
+   * cached before it was read: such a record is read again (upgrade-planner-cargo-steps.ts).
+   */
+  links?: Record<string, string>;
+  /**
+   * version -> the optional dependencies its `default` feature turns on (crates-versions.ts
+   * defaultEnabledDependencies): a build with default features has them, so `--precise` must meet
+   * their requirements too (chrono 0.4.30's iana-time-zone). Absent on a record cached before it was read.
+   */
+  defaultDeps?: Record<string, string[]>;
 }
 
 /** npm's abbreviated document: per version, the fields fix paths read. */
@@ -215,6 +228,18 @@ export class FixPathSources {
   /** Local state only, no lookup: the list is asked for again by the next `packageAdvisories` for it. */
   readonly refreshAdvisoriesOnNextRead = (ecosystem: OsvEcosystem, name: string): void => {
     this.refreshDue.add(`fixpath:v${CACHE_VERSION}:osv-package:${ecosystem}:${name}`);
+  };
+
+  /**
+   * When OSV.dev's cached answers were fetched, from the cache rows alone (nothing is asked): per
+   * release, its batch answer (`answer`) and its package's advisory list (`list`), each null when the
+   * cache holds none. dependency_check states how old the data behind a verdict is (audit C-3).
+   * An arrow member, as every lookup here is (the private-guard test holds prototype lookups).
+   */
+  readonly advisoryFetchedAt = (releases: ReadonlyArray<{ ecosystem: OsvEcosystem; name: string; version: string }>): Array<{ answer: string | null; list: string | null }> => {
+    const listKey = (r: { ecosystem: OsvEcosystem; name: string }) => `fixpath:v${CACHE_VERSION}:osv-package:${r.ecosystem}:${r.name}`;
+    const rows = this.cache.getStaleMany<unknown>([...new Set(releases.flatMap((r) => [osvCacheKey(r), listKey(r)]))]);
+    return releases.map((r) => ({ answer: rows.get(osvCacheKey(r))?.fetchedAt ?? null, list: rows.get(listKey(r))?.fetchedAt ?? null }));
   };
 
   /** Every non-withdrawn OSV advisory for a package, as ranges; null when OSV could not be read. */
@@ -470,7 +495,7 @@ export class FixPathSources {
     try {
       const res = await fetchWithTimeout(sparseIndexUrl(name), { headers: { "User-Agent": CRATES_USER_AGENT } }, TIMEOUT_MS);
       if (!res.ok) return null;
-      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {} };
+      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {}, links: {}, defaultDeps: {} };
       for (const line of (await res.text()).split("\n")) {
         if (!line.trim()) continue;
         try {
@@ -481,6 +506,7 @@ export class FixPathSources {
             features?: unknown;
             features2?: unknown;
             rust_version?: unknown;
+            links?: unknown;
           };
           if (!entry.yanked) out.versions.push(entry.vers);
           else out.yanked!.push(entry.vers);
@@ -488,6 +514,11 @@ export class FixPathSources {
           if (offered) (out.features ??= {})[entry.vers] = offered;
           // A Rust version as Cargo writes one ("1.64", "1.67.1"); anything else is not kept.
           if (typeof entry.rust_version === "string" && /^\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(entry.rust_version.trim())) out.rustVersions![entry.vers] = entry.rust_version.trim();
+          if (typeof entry.links === "string" && entry.links.length > 0 && entry.links.length <= 128) out.links![entry.vers] = entry.links;
+          // Features name a dependency by the name the crate uses; reqs key it by the crate's own name.
+          const optional = new Map((entry.deps ?? []).filter((d) => d.optional === true).map((d) => [d.name, d.package ?? d.name] as const));
+          const byDefault = [...defaultEnabledDependencies(entry as Parameters<typeof defaultEnabledDependencies>[0])].filter((d) => optional.has(d)).map((d) => optional.get(d)!);
+          if (byDefault.length > 0) out.defaultDeps![entry.vers] = byDefault;
           const reqs: Record<string, CrateDepReq[]> = {};
           for (const d of entry.deps ?? []) {
             if (d.kind === "dev") continue;
@@ -2097,12 +2128,17 @@ export async function cargoPrecisePrerequisites(
     if (visited.has(`${crate}@${version}`)) continue;
     visited.add(`${crate}@${version}`);
     if (visited.size > MAX_CLOSURE_CRATES) return null;
-    const deps = (await sources.cratesSparse(crate))?.reqs[version];
+    let record = await sources.cratesSparse(crate);
+    // A record cached before the default features were read is read again (chrono 0.4.30 needs iana-time-zone by default).
+    if (record && record.defaultDeps === undefined) record = (await sources.cratesSparse(crate, true)) ?? record;
+    const deps = record?.reqs[version];
     if (!deps) return null;
+    const byDefault = new Set(record?.defaultDeps?.[version] ?? []);
     for (const [dep, entries] of Object.entries(deps)) {
       const lockedVersions = locked.get(dep) ?? [];
       for (const { req, optional } of entries) {
-        if (optional && lockedVersions.length === 0) continue; // a feature this build does not enable
+        // An optional dependency no locked copy and no default feature brings in: a feature this build does not enable.
+        if (optional && lockedVersions.length === 0 && !byDefault.has(dep)) continue;
         if (lockedVersions.some((v) => cargoReqAdmits(req, v) === true)) continue;
         const available = (await sources.cratesSparse(dep))?.versions;
         if (!available) return null;

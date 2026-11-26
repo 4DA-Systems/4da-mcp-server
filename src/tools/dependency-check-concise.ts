@@ -41,6 +41,7 @@ export interface DetailedItem {
   unreadable_file?: string;
   canonical_module_path?: string;
   retry_after_seconds?: number;
+  advisory_data_age_minutes?: number;
 }
 
 export interface DetailedAnswer {
@@ -91,6 +92,7 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
     ...(item.unreadable_file ? { unreadable_file: item.unreadable_file } : {}),
     ...(item.canonical_module_path ? { canonical_module_path: item.canonical_module_path } : {}),
     ...(item.retry_after_seconds ? { retry_after_seconds: item.retry_after_seconds } : {}),
+    ...(item.advisory_data_age_minutes !== undefined ? { advisory_data_age_minutes: item.advisory_data_age_minutes } : {}),
     ...(value?.affecting_to?.length ? { advisories: value.affecting_to } : {}),
     ...(value?.fixed_by_this_change?.length ? { fixes: value.fixed_by_this_change } : {}),
     ...(value?.malicious_package ? { malicious_package: value.malicious_package } : {}),

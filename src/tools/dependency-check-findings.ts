@@ -19,6 +19,7 @@ import { lookupKey, type Resolved } from "./dependency-check-items.js";
 import type { AdvisoryListReader, Lookups, PassContext } from "./dependency-check-lookups.js";
 import { isYoung } from "./dependency-check-resolve.js";
 import { hasRealAdvisory } from "./dependency-check-batch.js";
+import { findCaseVariants } from "./dependency-check-gocase.js";
 
 /** What a pass finds about its items beside their advisories. */
 export interface Findings {
@@ -28,6 +29,8 @@ export interface Findings {
   malicious: Map<Resolved, MaliciousName>;
   /** New npm and PyPI dependencies one slip from a popular package. */
   nameChecks: Map<Resolved, Signal>;
+  /** Go paths with upper-case letters answered clean, whose lower-case path has advisories (dependency-check-gocase.ts, C-5). */
+  caseVariants: Map<Resolved, Signal>;
 }
 
 /** The hold waivers, then the malware names, then the near-miss names. */
@@ -48,7 +51,8 @@ export async function gatherFindings(ctx: PassContext, lookups: Lookups, items: 
       : [],
   );
   const nameChecks = await findNearMisses(items, indexes, malicious, now, (ecosystem, name) => installedNames.has(installedKey(ecosystem, name)));
-  return { holdWaivers, malicious, nameChecks };
+  const caseVariants = await findCaseVariants(ctx, items, advisoriesFor);
+  return { holdWaivers, malicious, nameChecks, caseVariants };
 }
 
 /** Go publish dates read per item to decide a hold waiver (the list has none). */
