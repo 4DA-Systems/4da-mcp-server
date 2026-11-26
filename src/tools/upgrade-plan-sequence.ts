@@ -230,6 +230,11 @@ const ECOSYSTEM_OF_TOOL: Record<string, string> = { npm: "npm", pnpm: "npm", yar
  */
 const PHASE = { pre: 0, precise: 1, set: 2, compile: 2, goget: 2, other: 2, refresh: 3, tidy: 4, reinstall: 5 } as const;
 
+/** The npm-family tools whose steps are ordered by the lockfile they act on. */
+const JS_TOOLS = new Set(["npm", "pnpm", "yarn", "bun"]);
+/** An override or resolution written by `npm pkg set` (upgrade-plan-overrides.ts). */
+const OVERRIDE_SET = /^npm pkg set "(?:overrides|resolutions|pnpm\.overrides)\./;
+
 /** One step of the script, merged from every row command that does the same thing. */
 interface Node {
   key: string;
@@ -269,6 +274,12 @@ export interface RunOrderOptions {
    * (upgrade-plan-runnable.ts withholdUnsafeDirs): its other steps still run; the note says how many were withheld.
    */
   withheldSteps?: (row: SequencedRow) => number;
+  /**
+   * The npm-family lockfile (absolute path) that holds the project at a step's directory; null when
+   * none. Commands of one row on different lockfiles are not ordered against each other, and an
+   * override or resolution runs before the version-setting steps on its own lockfile.
+   */
+  jsLockfileOf?: (dir: string) => string | null;
 }
 
 export interface PeerConflict {
@@ -463,16 +474,41 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
     edges.set(from, (edges.get(from) ?? new Set()).add(to));
   };
 
+  // npm-family lockfile of a JS command's directory (null: not a JS command, or not known).
+  const jsLock = new Map<string, string | null>();
+  const lockOf = (c: PlanCommand): string | null => {
+    if (!opts.jsLockfileOf || !JS_TOOLS.has(c.run.split(" ")[0])) return null;
+    if (!jsLock.has(c.dir)) jsLock.set(c.dir, opts.jsLockfileOf(c.dir));
+    return jsLock.get(c.dir) ?? null;
+  };
+  const overrideNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
+  const setNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
   for (const row of rows) {
     const fix = keyOf(row);
-    let previous: string | null = null;
+    let previous: { key: string; lock: string | null } | null = null;
     for (const c of row.commands) {
       const p = parseCommand(c.run);
       const n = place(p, c, row, fix);
       n.fixes.add(fix);
-      if (previous) edge(previous, n.key);
-      previous = n.key;
+      const lock = lockOf(c);
+      // The row's own order holds within one lockfile; two lockfiles are two projects (formik: the
+      // root's install ran last, and website's resolution after it, past website's upgrades).
+      if (previous && !(previous.lock !== null && lock !== null && previous.lock !== lock)) edge(previous.key, n.key);
+      previous = { key: n.key, lock };
+      if (lock !== null && OVERRIDE_SET.test(c.run)) overrideNodes.push({ key: n.key, lock, row });
+      if (lock !== null && p.kind === "set") setNodes.push({ key: n.key, lock, row });
     }
+  }
+  // An override or resolution runs before the version-setting steps of other rows on its lockfile:
+  // an install never takes a copy past the forced release for a later install to force it down.
+  // Only a row whose fix on that lockfile is the override alone leads: a row that also sets a version
+  // there keeps its own order, and no two rows' edges can then form a cycle.
+  const rowSets = (r: SequencedRow, lock: string) => setNodes.some((s) => s.row === r && s.lock === lock);
+  // An override node one row places after its own version step (the same command text merges rows) never leads.
+  const follows = new Set(overrideNodes.filter((o) => rowSets(o.row, o.lock)).map((o) => o.key));
+  for (const o of overrideNodes) {
+    if (follows.has(o.key)) continue;
+    for (const s of setNodes) if (s.lock === o.lock && s.key !== o.key) edge(o.key, s.key);
   }
   for (const e of extra) {
     const p = parseCommand(e.run);
@@ -778,7 +814,9 @@ async function goRequirements(rows: SequencedRow[], source: SequenceContext["goS
  */
 export async function sequencePlan(rows: SequencedRow[], ctx: SequenceContext): Promise<{ run_order: RunOrderStep[]; run_order_note: string }> {
   const goRequires = await goRequirements(rows, ctx.goSource, Date.now() + ctx.budgetMs);
-  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: ctx.peers ? peerConflictReader(ctx.peers) : undefined, declaredOperator: ctx.declaredOperator, withheldSteps: ctx.withheldSteps });
+  const peers = ctx.peers;
+  const jsLockfileOf = peers ? (dir: string) => peers.lockfileFor(path.resolve(peers.root, dir)) : undefined;
+  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: peers ? peerConflictReader(peers) : undefined, declaredOperator: ctx.declaredOperator, withheldSteps: ctx.withheldSteps, jsLockfileOf });
   for (const [row, why] of result.peerBlocked) if (!row.reasons.includes(why)) row.reasons.push(why);
   return { run_order: result.run_order, run_order_note: result.run_order_note };
 }
