@@ -2103,7 +2103,8 @@ export async function cargoPrecisePrerequisites(
     if (visited.size > MAX_CLOSURE_CRATES) return null;
     let record = await sources.cratesSparse(crate);
     // A record cached before the default features were read is read again (chrono 0.4.30 needs iana-time-zone by default).
-    if (record && record.defaultDeps === undefined) record = (await sources.cratesSparse(crate, true)) ?? record;
+    // An unanswered re-read is unknown, never the old record's guess (an unfinished check never reads as a pass).
+    if (record && record.defaultDeps === undefined) record = await sources.cratesSparse(crate, true);
     const deps = record?.reqs[version];
     if (!deps) return null;
     const byDefault = new Set(record?.defaultDeps?.[version] ?? []);

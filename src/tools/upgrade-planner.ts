@@ -271,6 +271,8 @@ const OFFER_CHECK_BUDGET_MS = 10_000;
 const SEQUENCE_BUDGET_MS = 3_000;
 /** How the reason starts for a row whose target clears none of its advisories. */
 const NOT_A_FIX_START = `${NO_COMMAND_REASON_START}: it is NOT a fix, `;
+/** How the reason starts for a row whose target could not be checked against its advisories in this call. */
+const NOT_ESTABLISHED_START = `${NO_COMMAND_REASON_START}: whether `;
 /** Time the uv pins' requirements may take to be judged on the project's lowest Python. */
 const PYTHON_FLOOR_BUDGET_MS = 4_000;
 /** Time the check that a target clears any of its row's advisories may take. */
@@ -947,7 +949,7 @@ async function executeStandalonePlanner(
   // judged (D-4): checked, NOT clean fixes, counted on their own and never as fixed by the step they
   // ride on (an upgrade, a refresh, a parent upgrade; 6.2.6 second review I1).
   const heldUnclean = (r: (typeof limited)[number]) => r.reasons.some((x) => HELD_UNCLEAN_REASON.test(x));
-  const notAFix = (r: (typeof limited)[number]) => r.reasons.some((x) => x.startsWith(NOT_A_FIX_START));
+  const notAFix = (r: (typeof limited)[number]) => r.reasons.some((x) => x.startsWith(NOT_A_FIX_START) || x.startsWith(NOT_ESTABLISHED_START));
   const heldRows = limited.filter(heldUnclean);
   // Not counted as fixed: a target that is not a clean fix, or a step in a directory whose name is not safe in a command.
   const notCounted = (r: (typeof limited)[number]) => heldUnclean(r) || notAFix(r) || hasUnsafeDir(r) || hasCargoPrecondition(r) || hasSelfRequiringTarget(r);
@@ -1279,7 +1281,7 @@ function noFixReason(n: number): string {
  * is given for them (their commands go) and the reason says why; a row whose target's advisories
  * could not be read keeps its step.
  */
-async function markTargetsThatFixNothing(
+export async function markTargetsThatFixNothing(
   rows: UpgradeRecommendation[],
   vulnsOf: (r: UpgradeRecommendation) => VulnerabilityEntry[],
   query: (deps: ResolvedDependency[]) => Promise<VulnerabilityScanResult>,
@@ -1297,11 +1299,23 @@ async function markTargetsThatFixNothing(
   });
   const answer = await Promise.race([query(deps).catch(() => null), late]);
   clearTimeout(timer);
-  if (!answer) return;
-  const unanswered = new Set(answer.uncheckedDependencies ?? []);
+  const unanswered = new Set(answer?.uncheckedDependencies ?? []);
+  // Three outcomes, never two: a target OSV.dev did not answer for in this call has no step (not established).
+  const notEstablished = (r: UpgradeRecommendation, why: string) => {
+    const text = `${NOT_A_FIX_START.replace("it is NOT a fix, ", "")}whether ${r.package} ${r.targetVersion} clears any advisory on ${r.package} ${r.currentVersion ?? ""}`.trimEnd() + ` could not be checked in this call (${why}), so no step is given and it is not counted as fixed; call upgrade_planner again`;
+    if (!r.reasons.includes(text)) r.reasons.push(text);
+    dropSteps(r);
+  };
   for (const r of asked) {
     const key = `${r.ecosystem}\0${r.package}\0${r.targetVersion}`;
-    if (unanswered.has(key)) continue;
+    if (!answer) {
+      notEstablished(r, "OSV.dev did not answer in time");
+      continue;
+    }
+    if (unanswered.has(key)) {
+      notEstablished(r, `OSV.dev gave no answer for ${r.package} ${r.targetVersion}`);
+      continue;
+    }
     const atTarget = answer.vulnerabilities.filter((v) => v.ecosystem === r.ecosystem && v.package === r.package && v.currentVersion === r.targetVersion);
     const named = new Set(atTarget.flatMap((v) => [v.vulnId, ...v.aliases]));
     const own = vulnsOf(r);
@@ -1309,12 +1323,17 @@ async function markTargetsThatFixNothing(
     const ids = [...new Set(own.map((v) => v.vulnId))];
     const text = `${NOT_A_FIX_START}since ${r.package} ${r.targetVersion} is still affected by ${ids.join(", ")}, every advisory on ${r.package} ${r.currentVersion ?? ""}`.trimEnd() + ": no step is given for it and it is not counted as fixed";
     if (!r.reasons.includes(text)) r.reasons.push(text);
-    delete r.upgradeCommands;
-    delete r.refreshCommands;
-    for (const u of r.parentUpgrades ?? []) {
-      delete u.refreshCommands;
-      for (const l of u.levers) delete l.commands;
-    }
+    dropSteps(r);
+  }
+}
+
+/** Takes every command off a row (its words stay). */
+function dropSteps(r: UpgradeRecommendation): void {
+  delete r.upgradeCommands;
+  delete r.refreshCommands;
+  for (const u of r.parentUpgrades ?? []) {
+    delete u.refreshCommands;
+    for (const l of u.levers) delete l.commands;
   }
 }
 

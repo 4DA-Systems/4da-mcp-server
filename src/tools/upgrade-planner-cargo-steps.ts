@@ -165,17 +165,23 @@ const LIBRARY = /^[A-Za-z0-9_.+-]{1,64}$/;
 /**
  * For `cargo add crate@target` over `installed` on another compatibility line: a locked crate (not
  * the project's own) that keeps requiring `installed`, and a crate both trees need on different
- * lines that links the same native library. Null when there is none or it cannot be shown.
+ * lines that links the same native library. Three outcomes, never two: a check that could not finish
+ * (the deadline, a failed index read, the walk's bound) is "unknown", never "none" (lead, wave 2:
+ * under a slow crates.io the unfinished check read as no conflict and `cargo add git2@0.21.0` ran).
  */
-async function linksConflict(sources: FixPathSources, graph: CargoGraph, crate: string, installed: string, target: string, deadline: number): Promise<LinksConflict | null> {
+type LinksVerdict = { kind: "conflict"; conflict: LinksConflict } | { kind: "none" } | { kind: "unknown"; why: string };
+
+async function linksConflict(sources: FixPathSources, graph: CargoGraph, crate: string, installed: string, target: string, deadline: number): Promise<LinksVerdict> {
   const from = `${crate}@${installed}`;
   const holder = graph.packages.find((p) => p.source !== null && (graph.deps.get(`${p.name}@${p.version}`) ?? []).includes(from));
-  if (!holder) return null;
+  // No other locked crate keeps the old line: the old copy leaves with the upgrade, so nothing can clash.
+  if (!holder) return { kind: "none" };
   // The old copy's own tree stays with it.
   const oldTree = new Map<string, string>();
   const seen = new Set<string>();
   const stack = [from];
-  while (stack.length > 0 && seen.size < 400) {
+  while (stack.length > 0) {
+    if (seen.size >= 400) return { kind: "unknown", why: `${crate} ${installed}'s locked tree is larger than this check reads` };
     const k = stack.pop()!;
     if (seen.has(k)) continue;
     seen.add(k);
@@ -185,41 +191,66 @@ async function linksConflict(sources: FixPathSources, graph: CargoGraph, crate: 
   }
   const sparse = async (name: string) => {
     if (Date.now() > deadline) return null;
-    const hit = await sources.cratesSparse(name).catch(() => null);
-    if (hit && hit.links === undefined) return sources.cratesSparse(name, true).catch(() => null);
-    return hit;
+    const left = deadline - Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), left);
+      timer.unref?.();
+    });
+    const read = async () => {
+      const hit = await sources.cratesSparse(name).catch(() => null);
+      // A record cached before `links` was read cannot answer: read again, and an unanswered read is unknown.
+      if (hit && hit.links === undefined) {
+        const fresh = await sources.cratesSparse(name, true).catch(() => null);
+        return fresh && fresh.links !== undefined ? fresh : null;
+      }
+      return hit;
+    };
+    const out = await Promise.race([read(), late]);
+    clearTimeout(timer);
+    return out;
   };
+  const unread = (name: string) => ({ kind: "unknown" as const, why: Date.now() > deadline ? `the crates.io index did not answer for ${name} within this call's time` : `the crates.io index could not be read for ${name}` });
   const visited = new Set<string>();
   const queue: Array<[string, string]> = [[crate, target]];
   while (queue.length > 0) {
     const [name, version] = queue.shift()!;
     if (visited.has(`${name}@${version}`)) continue;
     visited.add(`${name}@${version}`);
-    if (visited.size > MAX_WALK) return null;
+    if (visited.size > MAX_WALK) return { kind: "unknown", why: `${crate} ${target} brings in more new crates than this check reads (${MAX_WALK})` };
     const record = await sparse(name);
-    const reqs = record?.reqs[version];
-    if (!reqs) return null;
+    if (!record) return unread(name);
+    const reqs = record.reqs[version];
+    if (!reqs) return { kind: "unknown", why: `the crates.io index lists no requirements for ${name} ${version}` };
     for (const [dep, entries] of Object.entries(reqs)) {
       const lockedVersions = graph.locked.get(dep) ?? [];
       for (const { req, optional } of entries) {
         if (optional && lockedVersions.length === 0) continue;
         if (lockedVersions.some((v) => cargoReqAdmits(req, v) === true)) continue;
         const depRecord = await sparse(dep);
-        if (!depRecord) return null;
+        if (!depRecord) return unread(dep);
         const best = depRecord.versions
           .filter((v) => !isPrereleaseVersion(v, "crates.io") && cargoReqAdmits(req, v) === true)
           .sort((a, b) => compareVersions(b, a, "crates.io"))[0];
-        if (!best) return null;
+        if (!best) return { kind: "unknown", why: `no release of ${dep} matches ${name} ${version}'s requirement "${req}"` };
         const old = oldTree.get(dep);
         const library = depRecord.links?.[best];
         if (old && cargoLine(old) !== cargoLine(best) && library && depRecord.links?.[old] === library) {
-          return { holder: holder.name, holderVersion: holder.version, library, sys: dep, oldSys: old, newSys: best };
+          return { kind: "conflict", conflict: { holder: holder.name, holderVersion: holder.version, library, sys: dep, oldSys: old, newSys: best } };
         }
         if (!visited.has(`${dep}@${best}`)) queue.push([dep, best]);
       }
     }
   }
-  return null;
+  return { kind: "none" };
+}
+
+function linksUnknownWords(crate: string, installed: string, target: string, why: string): string {
+  const safeWhy = why.replace(/[^\x20-\x7e]/g, "?");
+  return (
+    `\`cargo add ${crate}@${target}\`: the check that ${crate} ${target} and the ${crate} ${installed} another locked crate keeps do not link the same native library (Cargo allows one per build) could not be finished in this call (${safeWhy}), so the command is not given. ` +
+    `Call upgrade_planner again; or run it knowingly, and if cargo reports "links to the native library", put back the requirement the step changed (if_it_fails) and move the crate that keeps ${crate} ${installed} first`
+  );
 }
 
 function linksWords(crate: string, installed: string, target: string, c: LinksConflict): string {
@@ -290,16 +321,16 @@ export async function withCargoStepPreconditions(rows: CargoStepRow[], root: str
         return prereqs.length > 0 ? { command: `cargo update ${prereqs.map((p) => `-p ${p}`).join(" ")} && ${c.command}` } : null;
       }
       const add = ADD.exec(c.command);
-      if (add && sources) {
+      if (add) {
         const [, crate, target] = add;
         const lock = lockOf(c.dir);
-        if (!lock) return null;
-        const versions = lock.graph.locked.get(crate) ?? [];
+        const versions = lock?.graph.locked.get(crate) ?? [];
         // The copy the command replaces: on another line than the target (an in-line move keeps one copy).
         for (const installed of versions) {
           if (cargoLine(installed) === cargoLine(target)) continue;
-          const conflict = await linksConflict(sources, lock.graph, crate, installed, target, deadline);
-          if (conflict) return { words: linksWords(crate, installed, target, conflict) };
+          const verdict = sources && lock ? await linksConflict(sources, lock.graph, crate, installed, target, deadline) : { kind: "unknown" as const, why: "live lookups are off" };
+          if (verdict.kind === "conflict") return { words: linksWords(crate, installed, target, verdict.conflict) };
+          if (verdict.kind === "unknown") return { words: linksUnknownWords(crate, installed, target, verdict.why) };
         }
       }
       return null;

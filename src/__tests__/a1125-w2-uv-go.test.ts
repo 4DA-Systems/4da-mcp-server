@@ -21,7 +21,7 @@ import { hasSelfRequiringTarget, withoutSelfRequiringTargets, withPythonFloorHol
 import { HELD_UNCLEAN_REASON } from "../live/fix-paths.js";
 import type { VulnerabilityScanResult } from "../live/types.js";
 import { adv, createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
-import { unpinnedInMergedUvLock } from "../tools/upgrade-planner.js";
+import { markTargetsThatFixNothing, unpinnedInMergedUvLock } from "../tools/upgrade-planner.js";
 
 const uvRow = (pkg: string, run: string): SequencedRow => ({
   package: pkg,
@@ -93,13 +93,21 @@ describe("a uv target that requires the project itself at another version is not
     expect(hasSelfRequiringTarget(r)).toBe(true);
   });
 
-  it("a requirement the project's version satisfies, an extra, or unread requirements keep the command", async () => {
-    for (const requires of [["crewai>=0.80"], ["crewai==1.15.1; extra == 'core'"], null]) {
+  it("a requirement the project's version satisfies, or an extra, keeps the command", async () => {
+    for (const requires of [["crewai>=0.80"], ["crewai==1.15.1; extra == 'core'"]]) {
       const r = row();
       await withoutSelfRequiringTargets([r], root, sources(requires));
       expect(r.upgradeCommands).toHaveLength(1);
       expect(hasSelfRequiringTarget(r)).toBe(false);
     }
+  });
+
+  it("requirements PyPI does not answer for: not established, so words and not counted, never the command", async () => {
+    const r = row();
+    await withoutSelfRequiringTargets([r], root, sources(null));
+    expect(r.upgradeCommands).toBeUndefined();
+    expect(r.upgradeInstructions?.[0].instruction).toMatch(/^no command: whether crewai-tools 1\.15\.1 requires another version of this project itself \(crewai\) could not be checked in this call/);
+    expect(hasSelfRequiringTarget(r)).toBe(true);
   });
 });
 
@@ -237,5 +245,43 @@ describe("a uv refresh with no pin, inside the merged uv lock, never names an ou
     ]);
     expect(pinned.reasons).toEqual(["x (a refresh resolves it to 4.14.2)"]);
     expect(alone.reasons).toEqual(["y (a refresh resolves it to 3.7)"]);
+  });
+});
+
+describe("a precondition check that could not finish never reads as a pass (lead, wave 2)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "4da-w2-unfinished-")));
+    fs.writeFileSync(path.join(root, "uv.lock"), 'version = 1\nrequires-python = ">=3.10"\n');
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  const pin = (): RunnableRow => ({
+    package: "virtualenv", ecosystem: "PyPI", currentVersion: "20.27.0", targetVersion: "21.14.13", scope: "transitive", reasons: [],
+    refreshCommands: [{ dir: ".", command: "uv lock --upgrade-package virtualenv==21.14.13" }],
+  });
+  const facts = { versions: ["4.1.0", "4.2.1"], withdrawn: [], withdrawnWhy: {}, latest: "4.2.1", requiresPython: { "4.1.0": ">=3.10", "4.2.1": ">=3.11" } };
+  const held = (r: RunnableRow) => r.reasons.find((x) => HELD_UNCLEAN_REASON.test(x) && /could not be checked in this call/.test(x));
+  const ok = async () => ({ vulnerabilities: [] }) as unknown as VulnerabilityScanResult;
+
+  it.each([
+    ["the release's requirements are not answered", { pypiRequiresDist: async () => null, releaseFacts: async () => facts }, ok, Date.now() + 5_000, /PyPI did not answer for what virtualenv 21\.14\.13 requires/],
+    ["the dependency's releases are not answered", { pypiRequiresDist: async () => ['filelock<5,>=3.24.2; python_version >= "3.10"'], releaseFacts: async () => null }, ok, Date.now() + 5_000, /PyPI did not answer for filelock's releases/],
+    ["OSV.dev does not answer", { pypiRequiresDist: async () => ["filelock<5,>=3.24.2"], releaseFacts: async () => facts }, async () => { throw new Error("down"); }, Date.now() + 5_000, /OSV\.dev did not answer for filelock 4\.1\.0/],
+    ["the time has run out", { pypiRequiresDist: async () => ["filelock<5,>=3.24.2"], releaseFacts: async () => facts }, ok, Date.now() - 1, /the time for this check ran out/],
+  ])("Python floor: %s -> held, with the reason", async (_case, sources, query, deadline, why) => {
+    const r = pin();
+    await withPythonFloorHolds([r], root, sources as never, query as never, deadline as number);
+    expect(held(r)).toMatch(why as RegExp);
+  });
+
+  it("the target check: OSV.dev does not answer for the target, so the row gets no step and says why", async () => {
+    const row = {
+      package: "foo", ecosystem: "npm", currentVersion: "1.0.0", targetVersion: "1.5.0", reasons: [] as string[],
+      upgradeCommands: [{ dir: ".", command: "npm install foo@1.5.0" }],
+    };
+    const own = [{ vulnId: "GHSA-aaaa-bbbb-cccc", aliases: [], platformActive: true }];
+    await markTargetsThatFixNothing([row] as never, () => own as never, async () => { throw new Error("down"); }, 1_000);
+    expect(row.upgradeCommands).toBeUndefined();
+    expect(row.reasons[0]).toMatch(/^No command is named for this upgrade: whether foo 1\.5\.0 clears any advisory on foo 1\.0\.0 could not be checked in this call \(OSV\.dev did not answer in time\)/);
   });
 });
