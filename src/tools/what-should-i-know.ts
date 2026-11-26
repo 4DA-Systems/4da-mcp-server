@@ -741,7 +741,9 @@ export async function executeWhatShouldIKnow(
     // is checked, and the answer says so (the same screen the task text gets).
     const plainOf = (given: string) => {
       // Item 7: a Poetry caret or tilde the task writes for PyPI is judged as the PEP 440 range it means.
-      const v = d.ecosystem === "PyPI" ? (poetrySpec(given) ?? given) : given;
+      // `==3.0.3` is the release 3.0.3 (one row, not two).
+      const pinned = d.ecosystem === "PyPI" && /^===?[^=<>!~,*]+$/.test(given) ? given.replace(/^===?/, "") : given;
+      const v = d.ecosystem === "PyPI" ? (poetrySpec(pinned) ?? pinned) : pinned;
       const plus = v.indexOf("+");
       if (plus <= 0) return v;
       labelCut.add(`${d.name} ${v.slice(0, plus)}`);
@@ -750,7 +752,9 @@ export async function executeWhatShouldIKnow(
     const versions = [...new Set([...(writtenVersions.length > 0 ? writtenVersions.map(plainOf) : [undefined]), ...(d.version ? [plainOf(d.version)] : [])])];
     // Checked under the spelling the task reads ("ZqxVuln" declared for the task's zqxvuln@1.0.0 was looked up as
     // ZqxVuln and came back unknown), and recorded under it.
-    const spelled = knownNew[0]?.name ?? knownWanted[0]?.name ?? words[0]?.word ?? d.name;
+    // Round 6, item 5: checked under the declared spelling, so the engine's answer, and the ledger line, are exactly
+    // what dependency_check gives for the declared item (Django stays Django).
+    const spelled = d.name;
     // Recorded under the declared spelling: what dependency_check, asked for this entry, writes (V7).
     declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name);
     for (const version of versions) {
