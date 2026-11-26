@@ -557,35 +557,70 @@ function cargoFieldsOf(entries) {
  * with the old names `dev_dependencies` and `build_dependencies` too (audit 2026-11-25, D minors). A
  * snippet whose table is not known (table null) is read as a dependency table, as it always was.
  */
+/**
+ * A section name as the dependency maps key it: a long one (a header of thousands of parts) by a
+ * short stand-in, the same for the same name within this call, so each of thousands of keys under
+ * it is not a string of that length (a 40,000-part header with 8,000 keys took 3 s).
+ */
+const LONG_SECTIONS = new Map();
+function shortSection(section) {
+  if (section.length <= 300) return section;
+  let id = LONG_SECTIONS.get(section);
+  if (id === undefined) LONG_SECTIONS.set(section, (id = `${section.slice(0, 120)}...#${LONG_SECTIONS.size}`));
+  return id;
+}
+
 function cargoEntries(entries, found) {
-  const walk = (path, tableLength, value) => {
+  // Each table's joined name, once (entries under one header share its parts).
+  const joined = new Map();
+  const sectionOf = (table, keys, at) => {
+    if (at >= table.length) return shortSection([...table, ...keys.slice(0, at + 1 - table.length)].join("."));
+    let byAt = joined.get(table);
+    if (!byAt) joined.set(table, (byAt = new Map()));
+    if (!byAt.has(at)) byAt.set(at, shortSection(table.slice(0, at + 1).join(".")));
+    return byAt.get(at);
+  };
+  // `keys`: the key parts after the table's, an inline table's keys appended. Linear in the parts:
+  // a dependency table stands at the table's last or second-to-last part, or (cargo's dotted and
+  // inline forms) at part 0, 1 under `workspace` or 2 under `target`, so nothing past part 2 of
+  // the full path is searched, and an inline table is followed only while the path is shorter
+  // than that (99,000 dotted parts took 24 s with a copy per part; fifth independent check).
+  const walk = (table, keys, value) => {
+    tick();
+    const T = table.length;
+    const part = (i) => (i < T ? table[i] : keys[i - T]);
+    const length = T + keys.length;
     let at = -1;
-    if (tableLength >= 1 && CARGO_DEPENDENCY_TABLES.has(path[tableLength - 1])) at = tableLength - 1;
-    else if (tableLength >= 2 && CARGO_DEPENDENCY_TABLES.has(path[tableLength - 2])) at = tableLength - 2;
+    if (T >= 1 && CARGO_DEPENDENCY_TABLES.has(table[T - 1])) at = T - 1;
+    else if (T >= 2 && CARGO_DEPENDENCY_TABLES.has(table[T - 2])) at = T - 2;
     else {
-      for (let i = tableLength; i < path.length && at < 0; i++) {
-        const before = path.slice(0, i);
-        if (CARGO_DEPENDENCY_TABLES.has(path[i]) && (i === 0 || (i === 1 && before[0] === "workspace") || (i === 2 && before[0] === "target"))) at = i;
+      for (let i = T; i < Math.min(length, 3) && at < 0; i++) {
+        if (CARGO_DEPENDENCY_TABLES.has(part(i)) && (i === 0 || (i === 1 && part(0) === "workspace") || (i === 2 && part(0) === "target"))) at = i;
       }
     }
-    const rest = at >= 0 ? path.slice(at + 1) : [];
-    if (at >= 0 && rest.length >= 1) {
-      const section = path.slice(0, at + 1).join(".");
-      if (rest.length > 1) found(section, rest[0], rest.slice(1).join("."), value);
-      else if (!TOML_NOT_DEPENDENCIES.has(rest[0].toLowerCase())) found(section, rest[0], null, value);
+    if (at >= 0 && length > at + 1) {
+      const name = part(at + 1);
+      const fieldStart = at + 2;
+      const field = fieldStart >= length ? null : (fieldStart >= T ? keys.slice(fieldStart - T) : [...table.slice(fieldStart), ...keys]).join(".");
+      // Inside a dependency table every key is a dependency, `version` and `name` included
+      // (`version = { version = "1.6.0", package = "smallvec" }`; fifth independent check, G3a).
+      found(sectionOf(table, keys, at), name, field, value);
       return;
     }
     // Not yet below a dependency table: an inline table's keys go on the path (`dependencies = { serde = "1" }`).
-    if (value.t && path.length < MAX_NESTING) for (const [k, v] of Object.entries(value.t)) walk([...path, ...k.split(".")], tableLength, v);
+    // (followed while the dependency table has no name below it yet, or none is found and the path
+    // is under 3 parts).
+    if (value.t && (at >= 0 ? length === at + 1 : length < 3)) for (const [k, v] of Object.entries(value.t)) walk(table, [...keys, ...k.split(".")], v);
   };
   for (const { table, keys, value } of entries) {
     if (!keys) continue;
     if (table === null) {
+      // A snippet whose table is not known: `version = ...` there is most likely [package]'s.
       if (keys.length > 1) found("", keys[0], keys.slice(1).join("."), value);
       else if (!TOML_NOT_DEPENDENCIES.has(keys[0].toLowerCase())) found("", keys[0], null, value);
       continue;
     }
-    walk([...table, ...keys], table.length, value);
+    walk(table, keys, value);
   }
 }
 
@@ -698,11 +733,13 @@ function pyprojectDependencies(entries, local = new Set()) {
 function poetryDependencies(entries) {
   const poetry = new Map();
   const walk = (path, value) => {
+    tick();
     const at = poetryDependencyAt(path);
     if (!at) {
       // Not yet at a dependency: an inline table's keys go on the path, as Poetry reads them
       // (`[tool.poetry]` with `dependencies = { requests = "2.19.0" }`; audit 2026-11-25, D minors).
-      if (value.t && path.length < MAX_NESTING) for (const [k, v] of Object.entries(value.t)) walk([...path, ...k.split(".")], v);
+      // poetryDependencyAt reads parts 0 to 5 only: past 6 parts no key added can make one.
+      if (value.t && path.length < 6) for (const [k, v] of Object.entries(value.t)) walk([...path, ...k.split(".")], v);
       return;
     }
     if (at.name.toLowerCase() === "python") return;
@@ -716,6 +753,12 @@ function poetryDependencies(entries) {
   };
   for (const { table, keys, value } of entries) {
     if (!keys || table === null) continue;
+    // Built only where it can name a Poetry dependency (`tool.poetry.` first): a long header with
+    // many keys under it is not copied once per key.
+    const part = (i) => (i < table.length ? table[i] : keys[i - table.length]);
+    const length = table.length + keys.length;
+    if (part(0) !== "tool" || (length > 1 && part(1) !== "poetry")) continue;
+    if (length > 6 && !(part(2) === "dependencies" || part(2) === "dev-dependencies" || (part(2) === "group" && part(4) === "dependencies"))) continue;
     walk([...table, ...keys], value);
   }
   for (const d of poetry.values()) d.alternatives = d.list ?? [d.fields];
@@ -820,7 +863,13 @@ function pnpmContentLines(text) {
  * (three blind checks of the a1125 hook lane: `''` escapes, tags and anchors before a quote,
  * carried quotes, block scalars holding braces), so a brace anywhere stands for one.
  */
-const pnpmHasBrace = (lines) => lines.some((line) => !line.trimStart().startsWith("#") && /[{}]/.test(line.replace(/\{[ \t]*\}/g, "")));
+function pnpmHasBrace(lines) {
+  for (const line of lines) {
+    tick();
+    if (!line.trimStart().startsWith("#") && /[{}]/.test(line.replace(/\{[ \t]*\}/g, ""))) return true;
+  }
+  return false;
+}
 
 /**
  * pnpm-workspace.yaml: the versions its `catalog`, named `catalogs` and `overrides` set, keyed by
