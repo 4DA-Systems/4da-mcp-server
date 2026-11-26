@@ -77,7 +77,10 @@
  * - A version with an `avoid` or `wait` verdict: denied with that verdict's reason.
  * - A version with no verdict, or only `unknown`: denied with the `dependency_check` call to make;
  *   the call goes through once it answers proceed or review. A package whose newest ledger line is
- *   cut short, dated ahead of the clock or not fully valid has an unknown verdict.
+ *   cut short, dated ahead of the clock or not fully valid has an unknown verdict. The two ledger
+ *   files are read as one snapshot (stat'ed, read, stat'ed again, at most three times, as the
+ *   server may be moving check-ledger.jsonl over check-ledger.1.jsonl): a ledger still changing
+ *   holds the call.
  * - A dist-tag other than latest (`x@next`) or a Go branch: "name the version".
  * - A name the project takes from elsewhere (`local_source`) or one whose lockfile could not be
  *   read (`unreadable_lockfile`).
@@ -4211,6 +4214,46 @@ function ledgerStarted(dir) {
  * holds no ledger file (the servers that ran there are older than 6.5.0 and record no verdict, so
  * a call stopped here could never pass).
  */
+/** A ledger file's identity: its size, change time and file id ("absent" when there is none). */
+function fileIdentity(path) {
+  // Test only: the files change between every two stats, as during a rotation that never settles.
+  if (FAULT === "ledger-rotating") return String(Math.random());
+  try {
+    const st = statSync(path);
+    return `${st.size}:${st.mtimeMs}:${st.ino}:${st.birthtimeMs}`;
+  } catch {
+    return "absent";
+  }
+}
+const OVER_BOUND = Symbol("over the bound");
+
+/**
+ * Round 12 (tenth independent check, a missing sentence): the two ledger files as one consistent
+ * snapshot. The server moves check-ledger.jsonl over check-ledger.1.jsonl while a hook may be
+ * reading the one after the other, and an avoid in the current file was missed (21 of 2,400 calls
+ * with a rotation in flight). Both files are stat'ed, read, and stat'ed again; if either one's
+ * identity changed, they are read again, at most three times; still changing: null (the call is
+ * held, its verdicts unknown). Each text is null for a file that is not there, OVER_BOUND past the bound.
+ */
+function ledgerSnapshot(dir) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const paths = LEDGER_FILES.map((file) => join(dir, file));
+    const before = paths.map(fileIdentity);
+    const texts = paths.map((path, i) => {
+      if (before[i] === "absent") return null;
+      if (Number(before[i].split(":")[0]) > MAX_LEDGER_BYTES) return OVER_BOUND;
+      try {
+        return readFileSync(path, "utf8");
+      } catch {
+        return null;
+      }
+    });
+    const after = paths.map(fileIdentity);
+    if (after.every((id, i) => id === before[i])) return texts;
+  }
+  return null;
+}
+
 function readLedger(dir, now) {
   fault("ledger-read");
   if (!existsSync(dir) || !ledgerStarted(dir)) return null;
@@ -4220,18 +4263,18 @@ function readLedger(dir, now) {
   // for it is set aside, so an older proceed never stands in for it. A later answer releases it.
   const unknown = [];
   let seq = 0;
-  for (const file of LEDGER_FILES) {
-    let text;
-    try {
-      const path = join(dir, file);
+  const snapshot = ledgerSnapshot(dir);
+  if (snapshot === null) {
+    refuse("the check ledger changed while it was read (the server was rotating it)");
+    return entries;
+  }
+  for (const [i, file] of LEDGER_FILES.entries()) {
+    const text = snapshot[i];
+    if (text === null) continue;
+    if (text === OVER_BOUND) {
       // A ledger past the bound is not read, and the call is held: its verdicts are not known
       // (round 2 skipped such a file, so a newer avoid in it was never seen).
-      if (statSync(path).size > MAX_LEDGER_BYTES) {
-        refuse(`the check ledger ${file} is over ${MAX_LEDGER_BYTES / 1024 / 1024} MB`);
-        continue;
-      }
-      text = readFileSync(path, "utf8");
-    } catch {
+      refuse(`the check ledger ${file} is over ${MAX_LEDGER_BYTES / 1024 / 1024} MB`);
       continue;
     }
     let n = 0;
