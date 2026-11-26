@@ -238,5 +238,22 @@ describe(`review-confirm10 cases hold the invariants (${sets.join(", ")})`, () =
     }
   }, CASE_MS);
 
+  // Round 12b, item 3: in his world (scan ready), a declaration safe on its own; the same call with one refused entry
+  // holds review_needed by that entry alone; without `version` it is confirmation_needed.
+  if (sets.includes("b10d"))
+    it("a refused entry alone holds review_needed; a versionless public entry beside it, confirmation_needed", async () => {
+      live = null;
+      // PyPI: the harness gives PyPI releases a publish time (its npm documents carry none, so npm is "unknown").
+      for (const [rel, body] of Object.entries(TEMPLATES.py ?? {})) h.write(rel, body);
+      const good = { ecosystem: "PyPI", name: "litestar", version: "2.13.0", public: true };
+      const bad = { ecosystem: "PyPI", name: "zqxbad", public: "yes" };
+      const alone = (await call({ task: "Add litestar for the API.", packages: [good] })).r!;
+      expect(alone.delegation_assessment.level, JSON.stringify(alone.requested_versions ?? alone.new_packages)).toBe("safe_to_delegate");
+      const withBad = (await call({ task: "Add litestar for the API.", packages: [good, bad] })).r!;
+      expect(withBad.delegation_assessment.level).toBe("review_needed");
+      expect(withBad.delegation_assessment.reason).toContain("was refused");
+      const versionless = (await call({ task: "Add litestar for the API.", packages: [{ ...good, version: undefined }, bad] })).r!;
+      expect(versionless.delegation_assessment.level).toBe("confirmation_needed");
+    }, CASE_MS);
 });
 }
