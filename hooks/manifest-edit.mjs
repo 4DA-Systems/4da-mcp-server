@@ -54,6 +54,14 @@
  * Poetry `path`, `git`, `url`, a named source; a go.mod `replace` to a directory) goes ahead, its
  * name never repeated. go.mod `exclude` and `retract` introduce no version.
  *
+ * The check ledger is the server's: a call that names it (its file name or the data folder's path,
+ * found in the call's raw text) is held unless it is one plain read command alone on its line. The
+ * hook is a guard-rail against an agent's mistakes and shortcuts, not a sandbox: a command that
+ * removes or renames the data folder's parent or matches the folder by a wildcard, a path built
+ * from a variable, and a program that writes the file without naming it are not seen; and since
+ * the hook denies only where a ledger exists, a removed ledger means no denials until the server
+ * starts again.
+ *
  * FOURDA_GUARD=advise: never denies; after a manifest edit (PostToolUse) the agent is told which
  * versions moved and which calls check them. FOURDA_GUARD=off: the hook does nothing.
  *
@@ -3070,151 +3078,97 @@ function denialFor(introduced, ledger, dir, what) {
 // =============================================================================
 
 /**
- * A path as compared with the ledger's: absolute, its folder's links resolved where the folder
- * exists, case folded on Windows. `~` is the home folder, and on Windows Git Bash's `/c/...` is
- * `C:\...`. A shell variable is not followed (`$HOME/...`, `$env:LOCALAPPDATA\...`): a command
- * holding one is not taken apart at all (simpleCommands).
+ * A tool call that NAMES the check ledger is held unless it is plainly a read (fifth independent
+ * check of the a1125 hook lane: a reader of the ways shell text can write a file was beaten 38
+ * times in 88, by quoting, `cd`, `-Confirm:$false`, `if { }`, here-docs and more). No shell is read
+ * to decide what a command does with the file. "Names" is a plain search of the call's raw text,
+ * case folded, whatever its size: the file's name `check-ledger` (not a source file of that name,
+ * `check-ledger.ts`), or the data folder's path in either slash form, its Git Bash `/c/...` form or
+ * `~/...` form, as written and as resolved. A read goes ahead only as one plain command from
+ * LEDGER_READ_COMMANDS, with nothing else on the line.
+ *
+ * What this does not see (the hook is a guard-rail against an agent's mistakes and shortcuts, not
+ * a sandbox): a command that removes or renames the data folder's parent or matches the folder by
+ * a wildcard, a path built from a variable, and a program that writes the file without naming it.
+ * And since the hook denies only where a ledger exists, a removed ledger means no denials until the
+ * server starts again.
  */
-function comparablePath(word, cwd) {
-  let w = word.replace(/[\\/]+$/, "") || word;
-  if (w === "~" || w.startsWith("~/") || w.startsWith("~\\")) w = join(homedir(), w.slice(1));
-  else if (process.platform === "win32" && /^\/[A-Za-z](?:\/|$)/.test(w)) w = `${w[1]}:\\${w.slice(3)}`;
-  let full = resolve(cwd, w);
+const LEDGER_MENTION = /check-ledger(?!\.(?:d\.)?(?:test\.)?[cm]?[jt]sx?\b)/;
+/** Programs that only show a file or a folder: one of them, alone on the line, may name the ledger. */
+const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "more", "wc", "get-content", "gc", "ls", "dir", "get-childitem", "gci", "du"]);
+
+/** The case-folded spellings of the data folder a call's text may hold. */
+function ledgerFolderMarks(env) {
+  const marks = new Set();
+  const home = homedir().replace(/[\\/]+$/, "").toLowerCase().replace(/\\/g, "/");
+  const add = (p) => {
+    const f = p.replace(/[\\/]+$/, "").toLowerCase().replace(/\\/g, "/");
+    if (f.length < 4) return;
+    marks.add(f);
+    marks.add(f.replace(/\//g, "\\"));
+    if (/^[a-z]:\//.test(f)) marks.add(`/${f[0]}${f.slice(2)}`);
+    if (home.length >= 3 && f.startsWith(`${home}/`)) {
+      marks.add(`~${f.slice(home.length)}`);
+      marks.add(`~${f.slice(home.length)}`.replace(/\//g, "\\"));
+    }
+  };
+  const dir = resolve(dataDir(env));
+  add(dir);
   try {
-    full = join(realpathSync.native(dirname(full)), basename(full));
+    add(realpathSync.native(dir));
   } catch {
-    // The folder does not exist: compared as written.
+    // No such folder yet: its spelling as written.
   }
-  return process.platform === "win32" ? full.toLowerCase() : full;
+  return [...marks];
 }
 
-/** The last part of a path word. */
-const lastPart = (word) => word.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
-
-/** Whether a file name (a glob allowed: `check-ledger*`, `*`) could name one of the ledger's files. */
-function ledgerName(name) {
-  if (!name.toLowerCase().startsWith("check-ledger") && !/[*?[]/.test(name)) return false;
-  if (name.length > 300) return true;
-  const source = name.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-  try {
-    const pattern = new RegExp(`^${source}$`, process.platform === "win32" ? "i" : "");
-    return LEDGER_FILES.some((file) => pattern.test(file));
-  } catch {
-    return true;
-  }
+/** Whether a call's raw text names the ledger (LEDGER_MENTION, or a spelling of its folder). */
+function namesLedgerText(text, marks) {
+  const t = text.toLowerCase();
+  return LEDGER_MENTION.test(t) || marks.some((m) => t.includes(m));
 }
 
-/**
- * Whether a word of a command (or a path a tool writes) names a ledger file the hook reads in
- * `ledgerDir` (comparablePath), or with `folder` that folder itself (removing or moving it removes
- * the ledger): the word itself, or a path written inside it (a `-c` / `-e` code string, `cmd /c "..."`).
- */
-function namesLedger(word, cwd, ledgerDir, folder = false) {
-  const parts = word.split(/[\s'"`(),;=+{}<>|&]+/);
-  for (const part of parts.length === 1 ? parts : [word, ...parts]) {
-    if (!part) continue;
-    const name = lastPart(part);
-    const isFolder = folder && name.toLowerCase() === basename(ledgerDir).toLowerCase();
-    if (!isFolder && !ledgerName(name)) continue;
-    const full = comparablePath(part, cwd);
-    if (isFolder ? full === ledgerDir : dirname(full) === ledgerDir) return true;
-  }
-  return false;
+/** Whether a command is one plain command from LEDGER_READ_COMMANDS: no pipe, redirection, separator, line end, backquote or substitution. */
+function plainLedgerRead(command, dialect) {
+  if (command.length > MAX_COMMAND_CHARS || /[|;&<>\r\n`]|\$\(/.test(command)) return false;
+  const kept = [unreadPart, unreadRemedy, unreadInstalls];
+  const commands = simpleCommands(command, dialect);
+  [unreadPart, unreadRemedy, unreadInstalls] = kept;
+  return commands !== null && commands.length === 1 && LEDGER_READ_COMMANDS.has(programName(commands[0][0]));
 }
 
-/** Programs that only read the files they name: one of them may name the ledger. */
-const LEDGER_READERS = new Set([
-  "cat", "type", "more", "less", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "jq", "ls", "dir", "stat", "file",
-  "sha256sum", "sha1sum", "md5sum", "cksum", "od", "xxd", "hexdump", "strings", "cut", "nl",
-  "get-content", "gc", "select-string", "sls", "get-item", "gi", "get-itemproperty", "gp", "test-path", "get-childitem", "gci", "get-filehash", "format-hex", "fhx",
-]);
-/** Commands that pass on what a reader gives them and write no file. */
-const LEDGER_PIPE_SAFE = new Set([
-  "sort", "uniq", "echo", "printf", "true", "select-object", "select", "where-object", "where", "?", "foreach-object", "%", "sort-object",
-  "measure-object", "measure", "format-table", "ft", "format-list", "fl", "out-string", "out-host", "group-object", "convertfrom-json", "convertto-json", "write-output", "write-host",
-]);
-/** Programs that copy: one may name the ledger as the file it copies from. */
-const LEDGER_COPIERS = new Set(["cp", "copy", "copy-item", "cpi"]);
-
-/**
- * How a command writes the ledger file the hook reads, or null. Held: a redirection onto it; a
- * program that names it, or its folder, other than one that only reads it (LEDGER_READERS, `sed`
- * without `-i`, a copy from it to a path outside its folder): `tee`, `Set-Content`, `Out-File`,
- * `sed -i`, `mv`, `rm`, `node -e` / `python -c` code naming its path, a copy or rename onto it or
- * into its folder; and a read of it beside another command that is not a plain filter (a pipe
- * passes its path on: `Get-Item <ledger> | Remove-Item`). `cd` / `Set-Location` with a plain path
- * is followed. A command this reader cannot take apart (a variable, a substitution) is not.
- */
-function ledgerWriteIn(command, dialect, cwd, ledgerDir) {
-  if (typeof command !== "string") return null;
-  const lower = command.toLowerCase();
-  if (!lower.includes("check-ledger") && !/[*?[]/.test(command) && !lower.includes(basename(ledgerDir).toLowerCase())) return null;
-  // The tokenizer's own holds (a comma beside an install) are the install reader's to report.
-  const kept = [unreadPart, unreadRemedy];
-  const redirects = [];
-  const commands = simpleCommands(command, dialect, redirects);
-  [unreadPart, unreadRemedy] = kept;
-  if (!commands) return null;
-  let dir = cwd;
-  // Each folder a `cd` on the line moves to: a redirection is judged from every one of them.
-  const dirs = [cwd];
-  let readBy = null;
-  let other = null;
-  for (const words of commands) {
-    tick();
-    const start = commandStart(words);
-    const program = start >= 0 && start < words.length ? programName(words[start]) : "";
-    const args = start >= 0 ? words.slice(start + 1) : words;
-    if (["cd", "chdir", "pushd", "set-location", "sl"].includes(program)) {
-      const to = args.find((a) => !a.startsWith("-"));
-      if (to) dirs.push((dir = resolve(dir, to === "~" || to.startsWith("~/") || to.startsWith("~\\") ? join(homedir(), to.slice(1)) : to)));
-      continue;
-    }
-    const named = args.some((a) => namesLedger(a, dir, ledgerDir, true));
-    // A rename gives the new name alone (`Rename-Item <folder>\x.jsonl check-ledger.jsonl`).
-    const renamed =
-      !named && args.some((a) => ledgerName(lastPart(a))) && args.some((a) => !a.startsWith("-") && dirname(comparablePath(a, dir)) === ledgerDir);
-    if (!named && !renamed) {
-      if (!LEDGER_READERS.has(program) && !LEDGER_PIPE_SAFE.has(program)) other ??= program || "a command";
-      continue;
-    }
-    if (LEDGER_READERS.has(program) || (program === "sed" && !args.some((a) => /^-(?:[a-zA-Z]*i|-in-place)/.test(a)))) {
-      readBy ??= program;
-      continue;
-    }
-    if (LEDGER_COPIERS.has(program) && !renamed) {
-      // From the ledger to a path outside its folder, no option: a read. Anything else is held.
-      const positional = args.filter((a) => !a.startsWith("-"));
-      const to = positional.at(-1) ?? "";
-      const into = comparablePath(to, dir);
-      if (positional.length === args.length && positional.length >= 2 && !positional.slice(1).some((a) => namesLedger(a, dir, ledgerDir, true)) && into !== ledgerDir && dirname(into) !== ledgerDir) {
-        readBy ??= program;
-        continue;
-      }
-    }
-    return program || "a command";
-  }
-  for (const r of redirects) if (r.write && dirs.some((d) => namesLedger(r.target, d, ledgerDir))) return "a redirection onto it";
-  if (readBy !== null && other !== null) return `${readBy} beside ${other}, which may be passed its path`;
-  return null;
-}
-
-/** For a PreToolUse call, how it writes the ledger the hook reads, or null. */
-function writesLedger(input, env) {
+/** For a PreToolUse call, "command" or "edit" when it names the ledger and is not plainly a read, else null. */
+function ledgerCall(input, env) {
   const toolInput = input.tool_input;
   if (!toolInput || typeof toolInput !== "object") return null;
-  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  const ledgerDir = comparablePath(dataDir(env), cwd);
-  if (input.tool_name === "Bash" || input.tool_name === "PowerShell") return ledgerWriteIn(toolInput.command, input.tool_name === "PowerShell" ? "powershell" : "bash", cwd, ledgerDir);
-  if ((input.tool_name === "Edit" || input.tool_name === "MultiEdit" || input.tool_name === "Write") && typeof toolInput.file_path === "string") {
-    return ledgerName(lastPart(toolInput.file_path)) && dirname(comparablePath(toolInput.file_path, cwd)) === ledgerDir ? input.tool_name : null;
+  const marks = ledgerFolderMarks(env);
+  if (input.tool_name === "Bash" || input.tool_name === "PowerShell") {
+    const command = toolInput.command;
+    if (typeof command !== "string" || !namesLedgerText(command, marks)) return null;
+    return plainLedgerRead(command, input.tool_name === "PowerShell" ? "powershell" : "bash") ? null : "command";
+  }
+  const path = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.notebook_path === "string" ? toolInput.notebook_path : null;
+  if (path === null) return null;
+  if (namesLedgerText(path, marks)) return "edit";
+  // Another spelling of the folder (an 8.3 name, a junction): the file's folder, resolved.
+  try {
+    const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+    const folder = realpathSync.native(dirname(resolve(cwd, path)));
+    if (namesLedgerText(folder, marks)) return "edit";
+  } catch {
+    // The folder does not exist: not the data folder.
   }
   return null;
 }
 
-/** The denial for a call that writes the ledger. */
-function ledgerDenial(what, how, dir) {
-  return `4DA guard: this ${what} was stopped before it ran: it writes the check ledger in ${quoted(dir, 300)} (${how}). Only the 4da server writes this file: it records each dependency_check verdict there, and this guard reads it to decide what may be installed. To change a verdict, call dependency_check again. Reading the file stays allowed in a command of its own (cat, head, tail, grep, Get-Content, Select-String, or a copy of it to another folder). If the user wants the file changed, tell the user; FOURDA_GUARD is the user's setting, not yours to change.`;
+/** The denial for a call that names the ledger. */
+function ledgerDenial(what, dir) {
+  // The path as both shells read it as written: forward slashes, in single quotes (no escapes).
+  const plain = `${dir.replace(/\\/g, "/").replace(/\/+$/, "")}/check-ledger.jsonl`;
+  const file = plain.includes("'") ? plain : `'${plain}'`;
+  return what === "command"
+    ? `4DA guard: this command was stopped before it ran: it names the 4da check ledger (${file}). Only the 4da server writes it: it records each dependency_check verdict there, and this guard reads it to decide what may be installed. To read it, run cat ${file} (or Get-Content ${file}) as a command of its own, with nothing else on the line (no pipe, redirection or second command). To change a verdict, call dependency_check again. If the user wants the file changed, tell the user; FOURDA_GUARD is the user's setting, not yours to change.`
+    : `4DA guard: this edit was stopped before it ran: it writes in the 4da data folder (${quoted(dir, 300)}), where the check ledger is. Only the 4da server writes there: it records each dependency_check verdict, and this guard reads it to decide what may be installed. To change a verdict, call dependency_check again. To read the ledger, run cat ${file} as a command of its own. If the user wants it changed, tell the user; FOURDA_GUARD is the user's setting, not yours to change.`;
 }
 
 /** "block" (the default), "advise" or "off", from FOURDA_GUARD. */
@@ -3272,9 +3226,9 @@ function judgeCall(input, env, now) {
   if (overBudget()) {
     // Already past the budget before reading (a slow start or stdin): read nothing more.
   }
-  // The check ledger is the server's: an edit or command that writes it is held, whatever else it does.
-  const ledgerWrite = writesLedger(input, env);
-  if (ledgerWrite) return denyJson(ledgerDenial(input.tool_name === "Bash" || input.tool_name === "PowerShell" ? "command" : "edit", ledgerWrite, dataDir(env)));
+  // The check ledger is the server's: a call that names it is held unless it is plainly a read, whatever else it does.
+  const namesLedger = ledgerCall(input, env);
+  if (namesLedger) return denyJson(ledgerDenial(namesLedger, resolve(dataDir(env))));
   const found = introducedBy(input);
   if (!found) return "";
   const changes = [];
@@ -3573,6 +3527,9 @@ const MAX_PARSE_CHARS = 64 * 1024 * 1024;
 function oversizedParsed(input) {
   if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || !input.tool_input || typeof input.tool_input !== "object") return "";
   if (guardMode(process.env.FOURDA_GUARD) !== "block") return "";
+  // The ledger check reads the raw text only: it holds a call this size too.
+  const ledger = ledgerCall(input, process.env);
+  if (ledger) return denyJson(ledgerDenial(ledger, resolve(dataDir(process.env))));
   // The pre-check of a command this size is timed: one it cannot finish inside the budget is held.
   let may = true;
   precheckStopAt = (mainStartedAt ?? performance.now()) + READ_BUDGET_MS + 500;
@@ -3607,6 +3564,11 @@ function oversized(head) {
     path = null;
   }
   const input = { tool_name: tool, tool_input: { file_path: path ?? undefined, command } };
+  // The ledger, named anywhere in the first part as it arrives (JSON-escaped: a backslash doubled).
+  const marks = ledgerFolderMarks(process.env);
+  if (tool && namesLedgerText(head, [...marks, ...marks.map((m) => m.replace(/\\/g, "\\\\"))])) {
+    return denyJson(ledgerDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", resolve(dataDir(process.env))));
+  }
   if (!tool || !mayInstall(input) || !readLedgerExists(dataDir(process.env))) return "";
   return denyJson(notReadDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
 }
