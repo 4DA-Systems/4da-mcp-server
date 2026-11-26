@@ -15,7 +15,7 @@ import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands } from "../tools/briefing-canonical.js";
-import { CLEAN_COMMAND, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
+import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
 import { MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
@@ -109,10 +109,9 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
   it("a command not read whole is said by its manager and verb, with the wordings the CHANGELOG quotes", () => {
     const comma = canonicalCommands("pip install requests, x")[0]!;
     expect(comma.canonical).toBe(false);
-    expect(unreadableReason({ ...comma, unreadable: comma.why as never, operands: [] })).toBe(`This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check. ${CLEAN_COMMAND}`);
-    // Round 8, m8: reworded as advice about the `task` passed, the user's words kept (README/CHANGELOG follow).
-    expect(CLEAN_COMMAND).toBe("For a clean answer you may also pass the command on its own line or in a code span, with only package names after the verb (`npm install x y`), and call again: keep the user's words as the request and add the line, do not rewrite the request.");
-    expect(next).toContain(`the reason adds "${CLEAN_COMMAND}"`);
+    expect(unreadableReason({ ...comma, unreadable: comma.why as never, operands: [] })).toBe(`This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check. ${STAYS_REVIEW}`);
+    // Round 9, E3: the remedy is gone; the truth instead (README/CHANGELOG follow from the ROUND 9 block).
+    expect(STAYS_REVIEW).toBe("This stays review_needed for the command as the task writes it: it is not an error. Check what the command installs with dependency_check before running it.");
     expect(next).toContain("(\"This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check.\")");
     expect(canonicalCommands("npm create vite")[0]!.why).toBe("it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check");
     expect(next).toContain('"it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check"');
@@ -256,12 +255,10 @@ describe("the guard hook's wording the docs quote", () => {
 describe("what_should_i_know after confirmation round 8: the wordings and the list the docs quote", () => {
   const wsik = text("src/tools/what-should-i-know.ts");
 
-  it("a version no form ties to a package: the reason and next_step the CHANGELOG quotes", () => {
-    const untied = 'The task writes a version this briefing cannot tie to a package. Declare `version` for each package you declare public (the version you will write, or "latest"), and call again.';
-    expect(wsik).toContain(`const VERSION_UNTIED = '${untied}';`);
-    expect(next).toContain(`"${untied}"`);
-    expect(next).not.toContain("attaches to no pair");
-    expect(readme).not.toContain("a version in prose is not used");
+  // Round 9, E1: the leftover-version rule is gone; a public entry without `version` is confirmation_needed.
+  it("a public entry without `version`: the fixed next_step", () => {
+    expect(wsik).toContain("State \\`version\\` for each package you declared public: the version or range you will write, or \"latest\" for the newest release (checked so far:");
+    expect(wsik).not.toContain("VERSION_UNTIED");
   });
 
   it("more than 100 names: the sentence the CHANGELOG quotes", () => {
@@ -272,7 +269,9 @@ describe("what_should_i_know after confirmation round 8: the wordings and the li
   it("the source check is a list, and the CHANGELOG names every spelling of it", () => {
     for (const spelling of SOURCE_SPELLINGS) {
       if (/^pip -[if] /.test(spelling)) continue;
-      const shown = spelling === "replace <module> => (go.mod)" ? "go.mod `replace ... =>`" : `\`${spelling.replace(/ \(.*\)$/, "")}\``;
+      // Round 9: the go.mod entry covers the block form too; the docs lane renames it from the ROUND 9 block.
+      if (spelling.startsWith("a go.mod replace directive")) continue;
+      const shown = `\`${spelling.replace(/ \(.*\)$/, "")}\``;
       expect(next, spelling).toContain(shown);
     }
     expect(next).toContain("pip's `-i` and `-f` inside a pip command");

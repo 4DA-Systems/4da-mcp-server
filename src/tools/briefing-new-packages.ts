@@ -416,7 +416,7 @@ function runnerAt(words: readonly string[], i: number): { ecosystem: CheckEcosys
 }
 
 /** How a name was read from the task: an install command's operand, a manifest snippet's entry, or a word after an adding verb. */
-export type TaskWordSeen = "command" | "runner" | "manifest" | "prose";
+export type TaskWordSeen = "command" | "runner" | "manifest" | "form" | "prose";
 
 /** A word the briefing did not look up, as the answer names it. */
 export interface HeldWord {
@@ -549,7 +549,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const fixed: TaskItems["fixed"] = [];
   const foreign: TaskItems["foreign"] = [];
   const seen = new Map<string, TaskWordSeen>();
-  const SEEN_RANK: Record<TaskWordSeen, number> = { command: 4, runner: 3, manifest: 2, prose: 1 };
+  const SEEN_RANK: Record<TaskWordSeen, number> = { command: 5, runner: 4, manifest: 3, form: 2, prose: 1 };
   const saw = (name: string, how: TaskWordSeen) => {
     const key = name.toLowerCase();
     const had = seen.get(key);

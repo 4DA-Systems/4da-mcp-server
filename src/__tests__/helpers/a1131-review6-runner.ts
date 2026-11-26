@@ -174,7 +174,8 @@ describe(`review-confirm6 cases hold the invariants (${sets.join(", ")})`, () =>
     for (const [rel, body] of Object.entries(c.files ?? {})) h.write(rel, body);
     if (c.task !== undefined) {
       const truth = c.truth ?? [];
-      const pk: Array<Record<string, any>> = truth.map((p) => ({ public: true, ...p }));
+      // Round 9, E1: the agent states the version it will write ("latest" where the truth names none).
+      const pk: Array<Record<string, any>> = truth.map((p) => ({ public: true, ...p, ...(p.public === false || p.version ? {} : { version: "latest" }) }));
       const not: string[] = [];
       let r: Record<string, any> | null = null;
       for (let k = 0; k < 5; k++) {

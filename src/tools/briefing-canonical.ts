@@ -33,7 +33,7 @@ const ECOSYSTEM: Record<Manager, CheckEcosystem> = { npm: "npm", pnpm: "npm", ya
 /** The adding verbs of each manager: a verb listed here with its operands is an install the grammar can read. */
 const ADDING: Record<Manager, ReadonlySet<string>> = {
   // npm's own aliases of install (its cli: i, in, ins, inst, insta, instal, isnt, isnta, isntal, isntall) and add.
-  npm: new Set(["install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add", "update", "up", "upgrade"]),
+  npm: new Set(["install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add", "update", "up", "upgrade", "it", "install-test"]),
   pnpm: new Set(["add", "install", "i", "update", "up", "upgrade"]),
   yarn: new Set(["add", "up", "upgrade"]),
   bun: new Set(["add", "a", "install", "i", "update"]),
@@ -58,6 +58,13 @@ const RUNNING: Record<Manager, ReadonlySet<string>> = {
   pipx: new Set(["run", "inject"]),
 };
 const RUNNER_WORDS = new Set(["npx", "pnpx", "bunx", "uvx", "deno"]);
+/** npm's verbs that install the lockfile as it stands (round 9): named, never read whole. */
+const LOCKFILE_VERBS = new Set(["cit", "install-ci-test"]);
+/**
+ * Package managers the grammar does not read (round 9, docs lane 6): a command of theirs is named, said as a tool this
+ * briefing does not read, and nothing of its line is offered or looked up (K3).
+ */
+const FOREIGN: Record<string, CheckEcosystem> = { pipenv: "PyPI", pdm: "PyPI", rye: "PyPI", hatch: "PyPI", conda: "PyPI", mamba: "PyPI", pixi: "PyPI" };
 
 /** Switches that take no value (case-SENSITIVE). */
 const SWITCHES: Record<Manager, ReadonlySet<string>> = {
@@ -158,11 +165,39 @@ export function plainOperand(ecosystem: CheckEcosystem, raw: string): { name: st
 }
 
 /**
- * The task cut into lines and shell commands: a new line, `;`, `&&`, `||`, `|`, a background `&`, a redirection
- * (`>`, `>>`, `<`, `2>`, `&>`, `2>&1`) and a shell comment (` # ` to the line's end). Sentences are cut below.
+ * The task cut into lines and shell commands: a new line, `;`, `&&`, `||`, `|` and a lone background `&` end a command.
+ * A redirection does not: it makes the command not read whole (round 9, E2). Sentences are cut below.
  */
 function pieces(text: string): string[] {
-  return text.split(/\r?\n|;|&&|\|\||\||(?<=\s)\d?(?:>>?|<|&>)(?:&\d)?|(?<![&\w])&(?![&\w])|\s#(?=\s)/);
+  return text.split(/\r?\n|;|&&|\|\||\|(?!&)|(?<![&\w>|])&(?![&\w>])/);
+}
+
+/**
+ * The sentences of a piece: a run of `.`, `!`, `?` or `…` right after a word character, a closing bracket, a quote
+ * or a backtick, then a blank, ends one. A walk, linear: a variable-length lookbehind rescanned a 150 KB run of dots
+ * from every position (14 s of CPU).
+ */
+function sentencesOf(piece: string): string[] {
+  const out: string[] = [];
+  const MARKS = ".!?…";
+  let start = 0;
+  let i = 0;
+  while (i < piece.length) {
+    if (MARKS.includes(piece[i]) && i > start && /[\w)\]"'`]/.test(piece[i - 1])) {
+      let j = i;
+      while (j < piece.length && MARKS.includes(piece[j])) j++;
+      if (j < piece.length && /\s/.test(piece[j])) {
+        out.push(piece.slice(start, j));
+        while (j < piece.length && /\s/.test(piece[j])) j++;
+        start = j;
+      }
+      i = j;
+      continue;
+    }
+    i++;
+  }
+  out.push(piece.slice(start));
+  return out;
 }
 
 /** Every named command of the text, each canonical or not. Linear in the text's length. */
@@ -172,7 +207,8 @@ export function canonicalCommands(text: string): CanonicalCommand[] {
     // Sentences: a sentence end is `.`, `!` or `?` followed by a blank (a version's dots are no sentence end).
     // Round 8, m3: a word ending in `.`, `!` or `?` before a blank ends its sentence, whatever the next word's case
     // ("Run npm install pino. zqxprivafter is ..."); a lone "." (a path, `pip install -e .`) does not.
-    for (const sentence of piece.split(/(?<=[\w)\]"'`][.!?])\s+/)) {
+    // Round 9: a run of marks ends it too ("pino!", "pino...", "pino…").
+    for (const sentence of sentencesOf(piece)) {
       const tokens = sentence.split(/\s+/).filter(Boolean).slice(0, MAX_TOKENS);
       for (let m = 0; m < tokens.length; m++) {
         const read = readAt(tokens, m);
@@ -200,6 +236,11 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
     manager = managerOf(first);
     const base = first.replace(/^[`"'(]+/, "").replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|bat|ps1)$/i, "").replace(/[`"')]+$/, "");
     if (!manager && RUNNER_WORDS.has(base)) runnerWord = base;
+    const foreign = !manager && !runnerWord ? Object.hasOwn(FOREIGN, base.toLowerCase()) : false;
+    if (foreign && /^(?:install|add|sync|update|upgrade|lock)$/.test(clean(tokens[m + 1] ?? "").toLowerCase())) {
+      const end = endOf(tokens, m, span);
+      return { command: notWhole(base.toLowerCase(), clean(tokens[m + 1]).toLowerCase(), FOREIGN[base.toLowerCase()], "it is a package manager this briefing does not read", tokens, m, end), end };
+    }
     if (!manager && !runnerWord) return null;
   }
   if (runnerWord) {
@@ -250,6 +291,7 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
     const why = plainVerb === "create" || plainVerb === "init" ? "it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check" : "it fetches and runs a package this briefing does not check";
     return { command: notWhole(manager!, plainVerb, ecosystem, why, tokens, m, end), end };
   }
+  if (manager === "npm" && LOCKFILE_VERBS.has(plainVerb)) return { command: notWhole("npm", plainVerb, ecosystem, "it installs the packages the lockfile holds, which this briefing does not read from the task", tokens, m, end), end };
   if (!ADDING[manager!].has(plainVerb) && !(manager === "cargo" && ADDING.cargo.has(verb))) return null;
   if (manager === "uv" && verb === "install") return null;
   // Where it starts does not matter: it ends at a shell separator, its code span's close or its sentence's end, and
@@ -262,7 +304,11 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
     const rawTok = tokens[j];
     const last = j === end - 1;
     let t = span === "`" ? rawTok.replace(/`[.,;:!?)]*$/, "") : span === ")" && j === end - 1 ? rawTok.replace(/\)[.,;:!?]*$/, "") : rawTok;
-    if (last) t = t.replace(/[.!?]$/, "");
+    if (last) {
+      let e = t.length;
+      while (e > 0 && ".!?\u2026".includes(t[e - 1])) e--;
+      t = t.slice(0, e);
+    }
     if (rawTok.includes("$(") || rawTok.includes("${") || (rawTok.startsWith("`") && j > m)) return { command: notWhole(manager!, verb, ecosystem, "a command substitution among its words", tokens, m, end), end };
     if (/,$/.test(t) || (t.includes(",") && ecosystem !== "PyPI")) return { command: notWhole(manager!, verb, ecosystem, "a comma in its list of packages", tokens, m, end), end };
     if (t.startsWith("-")) {
@@ -276,6 +322,9 @@ function readAt(tokens: string[], m: number): { command: CanonicalCommand; end: 
       }
       return { command: notWhole(manager!, verb, ecosystem, "an option this briefing does not read", tokens, m, end), end };
     }
+    // Round 9, E2: a redirection, spaced or attached (`>`, `>>`, `<`, `<<<`, `2>`, `2>&1`, `&>`, `|&`), is no end of the
+    // command: words after its target are still its arguments, so the command is not read whole.
+    if (/^(?:\d?(?:>>?|<)|&>|\|&)/.test(t)) return { command: notWhole(manager!, verb, ecosystem, "a redirection among its words", tokens, m, end), end };
     if ((t.startsWith('"') || t.startsWith("'")) && !(t.length > 1 && t.endsWith(t[0]))) return { command: notWhole(manager!, verb, ecosystem, "an unclosed quote", tokens, m, end), end };
     // `name@"4.17.20"`: a quoted spec is that spec. Poetry's `name@1.2.3` / `name@>=1.2` is the PEP 440 pin or range.
     const quoted = /^((?:@[^/@\s]+\/)?[^@\s"']+)@(["'])([^"'\s]+)\2$/.exec(t);

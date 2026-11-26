@@ -77,7 +77,7 @@ describe("safe_to_delegate needs a declaration (wave 2, change A)", () => {
   });
 
   it("a declaration of packages says how many it rests on", async () => {
-    const r = await brief("add lodash", { packages: [{ ecosystem: "npm", name: "lodash", public: true }] });
+    const r = await brief("add lodash", { packages: [{ ecosystem: "npm", name: "lodash", version: "latest", public: true }] });
     expect(r.task_packages.status).toBe("complete");
     expect(r.delegation_assessment.reason).toContain("You declared 1 package.");
   });
@@ -93,7 +93,7 @@ describe("not_read weighs only what stands where a package stands (wave 2, chang
   });
 
   it("an option value in an install command keeps review_needed", async () => {
-    const r = await brief("npm install lodash --_authToken zqxa1", { packages: [{ ecosystem: "npm", name: "lodash", public: true }] });
+    const r = await brief("npm install lodash --_authToken zqxa1", { packages: [{ ecosystem: "npm", name: "lodash", version: "latest", public: true }] });
     expect(r.delegation_assessment.level).toBe("review_needed");
     // Round 7b, item 2: said as the command not read whole, the value never repeated.
     expect(r.delegation_assessment.reason).toMatch(/could not read whole \(an option this briefing does not read\)/);

@@ -612,6 +612,23 @@ const KNOWN_COMPROMISED: Record<CheckEcosystem, ReadonlySet<string>> = {
 
 /** Whether `name` is exactly a name of a bundled list of `eco`: the popular names, or a name with a known malicious or hijacked release. */
 /** Whether a name is on the bundled list of names with a known malicious or hijacked release: known without a lookup. */
+/**
+ * Round 9 (docs lane 5): the names of KNOWN_COMPROMISED that are malware in every release (typosquats published as
+ * malware), not packages that once shipped a hijacked release (chalk, debug, is): known offline, wherever they stand.
+ */
+const MALWARE_ONLY: Record<CheckEcosystem, ReadonlySet<string>> = {
+  npm: new Set(["crossenv", "flatmap-stream", "getcookies", "electron-native-notify"]),
+  PyPI: new Set(["jeilyfish", "python3-dateutil", "colourama"]),
+  "crates.io": new Set(["rustdecimal", "faster_log", "async_println", "evm-units", "uniswap-utils"]),
+  Go: new Set(),
+};
+
+/** Whether a name is malware in every release on the bundled list (round 9). */
+export function knownMalwareOnly(name: string, eco: CheckEcosystem): boolean {
+  const lower = name.toLowerCase();
+  return MALWARE_ONLY[eco]?.has(eco === "PyPI" ? normalizePypiName(lower) : lower) ?? false;
+}
+
 export function knownCompromised(name: string, eco: CheckEcosystem): boolean {
   const lower = name.toLowerCase();
   return KNOWN_COMPROMISED[eco]?.has(eco === "PyPI" ? normalizePypiName(lower) : lower) ?? false;

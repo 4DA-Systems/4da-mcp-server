@@ -29,7 +29,8 @@ for (const t of tasks().filter((x) => !filter || filter.test(x.id))) {
   const first = (await s.call('what_should_i_know', { task: t.prompt }, { timeout: 120000 })).json ?? {};
   const afterFirst = readProxy(log);
   const packages = [
-    ...t.truth.public.map((p) => ({ ecosystem: p.ecosystem, name: p.name, ...(p.version ? { version: p.version } : {}), public: true })),
+    // A truthful agent states the version it will write: the one the task names, else "latest" (round 9, E1).
+    ...t.truth.public.map((p) => ({ ecosystem: p.ecosystem, name: p.name, version: p.version ?? "latest", public: true })),
     ...t.truth.private.slice(0, 1).map((name) => ({ ecosystem: eco, name, public: false })),
   ];
   const not_packages = [...t.truth.secrets, ...t.truth.words];

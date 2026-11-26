@@ -212,7 +212,7 @@ describe("P4: never safe_to_delegate while a name waits, nor on a call that decl
 
 describe("P5 (offline): after the confirm call, a malware typosquat and a critical pin are human_only again", () => {
   it.each([
-    ["add lodahs", [{ ecosystem: "npm", name: "lodahs", public: true }]],
+    ["add lodahs", [{ ecosystem: "npm", name: "lodahs", version: "latest", public: true }]],
     ["add elliptic 6.5.4", [{ ecosystem: "npm", name: "elliptic", version: "6.5.4", public: true }]],
     // Round 7, C4: a version in prose attaches to no pair: the agent declares the version it will write.
     ["pin elliptic to 6.5.4", [{ ecosystem: "npm", name: "elliptic", version: "6.5.4", public: true }]],

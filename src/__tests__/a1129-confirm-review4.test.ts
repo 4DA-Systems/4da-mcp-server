@@ -190,7 +190,8 @@ describe("review-confirm4 cases hold the invariants", () => {
         const notPackages = [...(prev!.args.not_packages ?? [])];
         for (const e of tp.to_confirm ?? []) {
           if ((st.not ?? []).includes(e.name) || (st.truth && !st.truth.includes(e.name.toLowerCase()))) notPackages.push(e.name);
-          else packages.push({ ecosystem: e.ecosystems[0], name: e.name, ...(e.version ? { version: e.version } : {}), public: !(st.private ?? []).includes(e.name) });
+          // Round 9, E1: the agent states the version it will write ("latest" where none is shown).
+          else packages.push({ ecosystem: e.ecosystems[0], name: e.name, version: e.version ?? "latest", public: !(st.private ?? []).includes(e.name) });
         }
         const left = st.agentLeft ?? 3;
         if (left > 0 && k === steps.length - 1) steps.push({ agent: true, agentLeft: left - 1, not: st.not, private: st.private, truth: st.truth });

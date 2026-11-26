@@ -54,7 +54,7 @@ export interface ToConfirm {
   ecosystems: string[];
   /** The version the task writes beside it, as written. */
   version?: string;
-  seen: "operand of an install command" | "operand of a runner command" | "entry of a manifest snippet" | "word after an adding verb";
+  seen: "operand of an install command" | "operand of a runner command" | "entry of a manifest snippet" | "a name with a version written in the task" | "word after an adding verb";
   /** A help for the agent: a near-miss of a popular name. Never a gate. */
   hint?: string;
   /** A help for the agent: the task calls it a key, a secret, a password or a token. Never a gate. */
@@ -138,6 +138,10 @@ export function refusedClasses(refused: readonly NotRead[]): string {
     [/declared public, and private/, "declared both public and private"],
     [/looks like a credential/, "with a name shaped like a credential"],
     [/must be a list|an entry must be an object/, "that are no { ecosystem, name, version?, public } entry"],
+    // not_packages (round 9, docs lane 4): the cause by name.
+    [/it is not a string/, "in not_packages that are not strings"],
+    [/each must be one word of the task/, "in not_packages that are no word of the task"],
+    [/at most \d+ words/, "in not_packages past the 100-word limit"],
   ];
   const counts = new Map<string, number>();
   for (const r of refused) {
@@ -267,7 +271,8 @@ export function readNotPackages(raw: unknown): { words: string[]; refused: NotRe
   if (!Array.isArray(raw)) return { words, refused: [{ shown: "not_packages", reason: "refused: it must be a list of words; nothing in it was read" }] };
   raw.forEach((w, at) => {
     if (at >= MAX_DECLARED) refused.push({ shown: `not_packages[${at}]`, reason: `refused: at most ${MAX_DECLARED} words are read per call` });
-    else if (typeof w !== "string" || !w.trim() || w.length > 300) refused.push({ shown: `not_packages[${at}]`, reason: "refused: each must be one word of the task" });
+    else if (typeof w !== "string") refused.push({ shown: `not_packages[${at}]`, reason: "refused: it is not a string; each must be one word of the task" });
+    else if (!w.trim() || w.length > 300) refused.push({ shown: `not_packages[${at}]`, reason: "refused: each must be one word of the task" });
     else words.push(w.trim());
   });
   return { words, refused };
@@ -326,6 +331,8 @@ const SEEN: Record<TaskWordSeen, ToConfirm["seen"]> = {
   command: "operand of an install command",
   runner: "operand of a runner command",
   manifest: "entry of a manifest snippet",
+  // Round 9 (docs lane 1): a D1(a) form in prose or a code span ("we pin zqxd2==1.2.3 there").
+  form: "a name with a version written in the task",
   prose: "word after an adding verb",
 };
 
