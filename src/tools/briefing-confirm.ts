@@ -212,7 +212,10 @@ function declarationProblem(item: unknown): string | null {
     // Exactly dependency_check's own validation of the item (a dist-tag other than latest is refused there, so here
     // too): what the check ledger records for a declared entry is what dependency_check would record for it.
     // Item 4c: the credential screen covers the whole entry: a version whose label has a credential shape is refused.
-    if (v && [v, ...v.split(/[-+]/)].some((part) => credentialShape(part))) return "`version` looks like a credential (it is not recorded either)";
+    // A label part that is a token prefix, or a long run mixing capitals, lower case and digits, is a secret's shape.
+    const label = v ? v.replace(/^[^-+]*[-+]?/, "") : "";
+    const secretish = (part: string) => credentialShape(part) || /^(?:gh[pousr]|github|glpat|sk|akia|xox[bpa]|npm|pat|token)$/i.test(part) || (part.length >= 16 && /[A-Z]/.test(part) && /[a-z]/.test(part) && /\d/.test(part));
+    if (v && [v, label, ...v.split(/[-+._]/)].some((part) => part && secretish(part))) return "`version` looks like a credential (it is not recorded either)";
     if (v) {
       try {
         validateItem({ ecosystem, package: ecosystem === "Go" ? goUnescaped(o.name.trim()) : o.name.trim(), to: ecosystem === "PyPI" ? (poetrySpec(v) ?? v) : v }, 0);
@@ -246,7 +249,8 @@ export function readNotPackages(raw: unknown): { words: string[]; refused: NotRe
  */
 export function forbiddenKey(name: string): string {
   // A Go module's major-version suffix names the same private path: example.com/zqx/lib/v2 is example.com/zqx/lib.
-  return name.trim().toLowerCase().replace(/!/g, "").replace(/^(.+\/.+)\/v\d+$/, "$1").replace(/[-_.]+/g, "-");
+  // An npm alias or an ecosystem prefix (`npm:x`) names the same package (fourth check, f-alias2).
+  return name.trim().toLowerCase().replace(/^(?:npm|jsr|pypi):/, "").replace(/!/g, "").replace(/^(.+\/.+)\/v\d+$/, "$1").replace(/[-_.]+/g, "-");
 }
 
 /** Whether two names are one edit apart: one character changed, added or dropped, or two neighbours swapped (lodahs, lodash). */
