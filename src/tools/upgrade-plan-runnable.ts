@@ -626,6 +626,29 @@ const YARN_DELETE = /^delete every yarn\.lock entry that resolves to /;
  * `npm pkg set "resolutions.<name>=<target>"`, then `yarn install`. It stays in package.json, which
  * the row says. Anything else (another line, a newer copy, an alias) keeps the hand step.
  */
+/**
+ * The release an exact Yarn classic resolution forces: the one a refresh of the parents'
+ * requirements resolves to (the newest clean release they admit, which the row's reason states),
+ * not the smallest fix, and never below a release another row's step sets for the package on that
+ * line. formik 2.2.9 (2026-11-26 replay): resolutions at the smallest fix (@babel/helpers 7.26.10),
+ * then `yarn workspace formik add` (Yarn 1 ignores the root's resolutions there) raised it to
+ * 7.29.15, and the root's next install forced it back down.
+ */
+function resolutionRelease(r: RunnableRow, rows: RunnableRow[], line: string | null): string {
+  const target = r.targetVersion!;
+  let pin = target;
+  const said = r.reasons.map((x) => /\(a refresh resolves it to ([^),\s]+)\)/.exec(x)?.[1]).find((v) => v !== undefined);
+  if (said && line !== null && lineOf(said) === line && compareVersions(said, pin, "npm") > 0) pin = said;
+  for (const o of rows) {
+    if (o.package !== r.package || o.ecosystem !== r.ecosystem) continue;
+    for (const c of o.upgradeCommands ?? []) {
+      const m = /@[=^~]?(\d[^\s"]*)"?(?: --\S+)*$/.exec(c.command);
+      if (m && line !== null && lineOf(m[1]) === line && compareVersions(m[1], pin, "npm") > 0) pin = m[1];
+    }
+  }
+  return pin;
+}
+
 export function withYarnClassicResolutions(rows: Array<RunnableRow & { action: string }>, projectRoot: string): void {
   for (const r of rows) {
     if (r.ecosystem !== "npm" || !r.currentVersion || !r.targetVersion) continue;
@@ -638,15 +661,16 @@ export function withYarnClassicResolutions(rows: Array<RunnableRow & { action: s
     const dirs = [...new Set(manual)];
     if (dirs.length === 0) continue;
     const line = lineOf(r.targetVersion);
+    const pin = resolutionRelease(r, rows, line);
     const ok = dirs.every((d) => {
       const held = yarnClassicVersions(path.join(path.resolve(projectRoot, d), "yarn.lock"), r.package);
-      return held !== null && held.length > 0 && line !== null && held.every((v) => lineOf(v) === line && compareVersions(v, r.targetVersion!, "npm") <= 0);
+      return held !== null && held.length > 0 && line !== null && held.every((v) => lineOf(v) === line && compareVersions(v, pin, "npm") <= 0);
     });
     if (!ok) continue;
-    recordOverrideCommands(r, dirs.map((dir) => ({ format: "yarn" as const, dir })), projectRoot, r.package, r.targetVersion, null);
+    recordOverrideCommands(r, dirs.map((dir) => ({ format: "yarn" as const, dir })), projectRoot, r.package, pin, null);
     const cmds = overrideCommandsOf(r);
     if (cmds.length === 0) continue;
-    const why = `Yarn classic has no command that refreshes one package's yarn.lock entries; every ${r.package} copy ${dirs.length === 1 && dirs[0] === "." ? "the lockfile" : `the lockfile in ${dirs.join(", ")}`} holds is on the ${line}.x line at or below ${r.targetVersion}, so an exact resolution moves them all there and nothing else: ${cmds.map((c) => `\`${c.command}\`${c.dir === "." ? "" : ` in ${c.dir}`}`).join(", then ")} (the resolution stays in package.json; remove it once every parent's own release holds ${r.targetVersion} or later)`;
+    const why = `Yarn classic has no command that refreshes one package's yarn.lock entries; every ${r.package} copy ${dirs.length === 1 && dirs[0] === "." ? "the lockfile" : `the lockfile in ${dirs.join(", ")}`} holds is on the ${line}.x line at or below ${pin}${pin === r.targetVersion ? "" : ` (the release a refresh resolves it to; ${r.targetVersion} is the smallest fix)`}, so an exact resolution moves them all there and nothing else: ${cmds.map((c) => `\`${c.command}\`${c.dir === "." ? "" : ` in ${c.dir}`}`).join(", then ")} (the resolution stays in package.json; remove it once every parent's own release holds ${pin} or later)`;
     if (!r.reasons.includes(why)) r.reasons.push(why);
   }
 }

@@ -63,20 +63,20 @@ describe("Yarn classic: an exact resolution and the upgrades on its lockfile", (
     const { result, step } = await h.plan();
     const mm = step("minimatch");
     expect(mm.commands).toEqual([
-      { dir: ".", run: 'npm pkg set "resolutions.minimatch=3.1.4"' },
+      { dir: ".", run: 'npm pkg set "resolutions.minimatch=3.1.5"' },
       { dir: ".", run: "yarn install" },
-      { dir: "website", run: 'npm pkg set "resolutions.minimatch=3.1.4"' },
+      { dir: "website", run: 'npm pkg set "resolutions.minimatch=3.1.5"' },
       { dir: "website", run: "yarn install" },
     ]);
     const steps = result.run_order as Step[];
     const at = (dir: string, run: string) => steps.findIndex((s) => s.dir === dir && s.run === run);
-    const websiteResolution = at("website", 'npm pkg set "resolutions.minimatch=3.1.4"');
+    const websiteResolution = at("website", 'npm pkg set "resolutions.minimatch=3.1.5"');
     const websiteUpgrade = steps.findIndex((s) => s.dir === "website" && /^yarn upgrade next@16\.0\.0$/.test(s.run));
     expect(websiteResolution).toBeGreaterThanOrEqual(0);
     expect(websiteUpgrade).toBeGreaterThanOrEqual(0);
     expect(websiteResolution).toBeLessThan(websiteUpgrade);
     // Each lockfile's install still follows its own resolution.
     expect(at("website", "yarn install")).toBeGreaterThan(websiteResolution);
-    expect(at(".", "yarn install")).toBeGreaterThan(at(".", 'npm pkg set "resolutions.minimatch=3.1.4"'));
+    expect(at(".", "yarn install")).toBeGreaterThan(at(".", 'npm pkg set "resolutions.minimatch=3.1.5"'));
   });
 });
