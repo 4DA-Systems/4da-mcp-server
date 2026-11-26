@@ -23,12 +23,19 @@ export interface WaitingWord {
   caution?: string;
 }
 
+const stripHint = (hint: string) =>
+  hint
+    .split("; ")
+    .filter((h) => !/^this project uses .+: declare it in each one you add it to$/.test(h))
+    .join("; ");
+
 export function waitingWords(r: unknown): WaitingWord[] | undefined {
   const list = ((r as { task_packages?: { to_confirm?: ToConfirmEntry[] } } | null)?.task_packages?.to_confirm ?? []).map((e) => ({
     word: e.name,
     read_as: e.ecosystems.join(" or "),
     ...(e.version ? { version: e.version } : {}),
-    ...(e.hint ? { hint: e.hint } : {}),
+    // The ecosystems hint of a prose candidate (round 4, K2) is left out here: a1128-confirm-contract tests it.
+    ...(e.hint && stripHint(e.hint) ? { hint: stripHint(e.hint) } : {}),
     ...(e.caution ? { caution: e.caution } : {}),
   }));
   return list.length > 0 ? list : undefined;

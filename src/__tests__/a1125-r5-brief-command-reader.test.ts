@@ -38,7 +38,8 @@ describe("the command reader", () => {
 
   it("an npm dist-tag is kept as written", async () => {
     const r = await brief("npm install qzstand@next");
-    expect(waitingWords(r)).toEqual([{ word: "qzstand", read_as: "npm", version: "next" }]);
+    // Round 4, V4: to_confirm never offers what the declaration check refuses: the tag is named in a hint.
+    expect(waitingWords(r)).toEqual([{ word: "qzstand", read_as: "npm", hint: "the task writes the tag next: name the version" }]);
   });
 
   it("npm install qzstand@<uuid>: the word is a credential shape: held, redacted, never listed at latest", async () => {

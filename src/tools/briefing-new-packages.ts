@@ -391,6 +391,7 @@ export function dependencyOf(deps: readonly ResolvedDependency[]): (name: string
 
 /** Verbs that start a new clause after "and" or a comma in a task ("and keep node-forge at 0.10.0"): never a list item. */
 const CLAUSE_START_VERBS = new Set([
+  "port", "fix", "update", "refactor", "migrate", "switch", "replace", "use", "set", "add",
   "keep", "expose", "point", "store", "branch", "publish", "published", "wire", "run", "deploy", "push", "mount", "serve", "return", "log",
   "send", "read", "write", "move", "check", "test", "make", "build", "render", "call", "configure", "enable", "disable", "document", "remove",
   "drop", "rename", "register", "load", "save", "handle", "validate", "parse", "cache", "mock", "expose", "commit", "open", "close", "start",
@@ -646,6 +647,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
   const endsList = (j: number) => j >= words.length || words[j] === "then" || CLAUSE_VERBS.has(words[j]) || IN_VERBS.has(words[j]) || ON_VERBS.has(words[j]);
 
   let truncated = false;
+  /** The list word right after a command's operands (F3): read as an install verb, the list goes on as prose. */
+  let listAfterCommand = -1;
   for (let i = 0; i < words.length; i++) {
     if (found.length >= MAX_READ_PACKAGES) {
       truncated = true;
@@ -813,10 +816,15 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         lastAdded = pkg;
         if (separatorAfter(j) === "clause") break;
       }
+      // F3: "npm install ky and fastifyy": the command's operands end at the connective, and what the list goes
+      // on to name is read as prose after an install verb, so it waits in to_confirm (never silently dropped).
+      if (lastAdded && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;
       i = j - 1;
       continue;
     }
     const installing = INSTALL_VERBS.has(word);
+    // F3: the list after a command's connective is read as prose after an adding verb (one name per item).
+    const continued = i === listAfterCommand;
     // "bring in ctx", "pull in left-pad", "depend on event-stream": the verb is the pair.
     const bringingIn =
       (IN_VERBS.has(word) && (words[i + 1] === "in" || words[i + 1] === "into")) || (ON_VERBS.has(word) && (words[i + 1] === "on" || words[i + 1] === "upon"));
@@ -844,7 +852,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       for (let o = c; o < end; o++) if (isVersionSpec(words[o])) ignored.push(span(o));
       swapped = true;
       i = end;
-    } else if (!installing && !bringingIn && !ADD_VERBS.has(word)) continue;
+    } else if (!installing && !bringingIn && !continued && !ADD_VERBS.has(word)) continue;
     // A number after a name is a release after add and install; after "use" or "need" it may be a count.
     const bareNumbers = installing || word.startsWith("add") || ON_VERBS.has(word);
     /** Past the articles and adjectives before an item: where its first word is, or null when the list ended. */
@@ -883,7 +891,9 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     };
     // The verb, then only articles and package words, then the list of items.
     let start = itemStart(i + 1);
-    let afterSeparator = false;
+    // F3: the words after a command's connective start a new item, as after a list separator: a verb that starts a
+    // clause there ("uv add litestar and port the flask routes") is no item.
+    let afterSeparator = continued;
     let proseSeen = false;
     /** This list's packages, and whether anything marked each as one. */
     const listed: Array<{ pkg: NewPackage; strong: boolean }> = [];
