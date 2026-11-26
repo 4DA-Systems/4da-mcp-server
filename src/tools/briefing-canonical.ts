@@ -58,13 +58,24 @@ const RUNNING: Record<Manager, ReadonlySet<string>> = {
   pipx: new Set(["run", "inject"]),
 };
 const RUNNER_WORDS = new Set(["npx", "pnpx", "bunx", "uvx", "deno"]);
+/**
+ * Round 10, G3: THE list of package-manager and runner names, for every rule that says "a package manager's name":
+ * the grammar's programs, its runners, the managers it names but does not read (K3), and the others below. One list.
+ */
+export const MANAGER_NAMES: readonly string[] = [
+  "npm", "pnpm", "yarn", "bun", "pip", "pip3", "pipx", "uv", "poetry", "cargo", "go",
+  "npx", "pnpx", "bunx", "uvx", "deno",
+  "pipenv", "pdm", "rye", "hatch", "conda", "mamba", "micromamba", "pixi",
+  "yarnpkg", "cargo-binstall", "easy_install", "gem", "bundle", "composer", "dotnet", "nuget", "brew", "apt", "apt-get",
+  "ni", "nci", "nr", "nlx", "corepack", "volta", "mise", "asdf",
+];
 /** npm's verbs that install the lockfile as it stands (round 9): named, never read whole. */
 const LOCKFILE_VERBS = new Set(["cit", "install-ci-test"]);
 /**
  * Package managers the grammar does not read (round 9, docs lane 6): a command of theirs is named, said as a tool this
  * briefing does not read, and nothing of its line is offered or looked up (K3).
  */
-const FOREIGN: Record<string, CheckEcosystem> = { pipenv: "PyPI", pdm: "PyPI", rye: "PyPI", hatch: "PyPI", conda: "PyPI", mamba: "PyPI", pixi: "PyPI" };
+const FOREIGN: Record<string, CheckEcosystem> = { pipenv: "PyPI", pdm: "PyPI", rye: "PyPI", hatch: "PyPI", conda: "PyPI", mamba: "PyPI", micromamba: "PyPI", pixi: "PyPI" };
 
 /** Switches that take no value (case-SENSITIVE). */
 const SWITCHES: Record<Manager, ReadonlySet<string>> = {

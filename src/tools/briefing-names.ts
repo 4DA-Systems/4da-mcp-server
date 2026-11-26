@@ -2,9 +2,13 @@
 /**
  * What a word in a task can and cannot be, as a package name (blind audit round 4): shared by the
  * briefing's readers of named versions (briefing-requested-versions.ts) and new packages
- * (briefing-new-packages.ts).
+ * (briefing-new-packages.ts). The forms that tie a version to a name are one list, in briefing-command-check.ts
+ * (strictEvidence): name@spec with the spec bare or in single or double quotes; `alias@npm:name@spec` (tied to name);
+ * name==spec and PEP 440's other operators, bare or spaced; `name = "spec"`; `"name": "spec"`; `"alias":
+ * "npm:name@spec"`. They are versions the briefing happens to read, never a complete reading.
  */
 
+import { mayScanWord } from "../call-budget.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
@@ -24,7 +28,20 @@ export function normalizePypiName(name: string): string {
  * and for anything else. Deterministic and offline (live/popular-pypi.ts). `colourama` is
  * colorama, `jeIlyfish` jellyfish, `python3-dateutil` python-dateutil.
  */
+const CLOSEST_PYPI = new Map<string, string | null>();
+/** Round 10, G4: once per distinct name (pure in the name), as closestPopularNpm. */
 export function closestPopularPypi(name: string): string | null {
+  const key = normalizePypiName(name);
+  const known = CLOSEST_PYPI.get(key);
+  if (known !== undefined) return known;
+  if (key.length >= 5 && !mayScanWord()) return null;
+  const found = closestPopularPypiUncached(name);
+  if (CLOSEST_PYPI.size >= 20_000) CLOSEST_PYPI.clear();
+  CLOSEST_PYPI.set(key, found);
+  return found;
+}
+
+function closestPopularPypiUncached(name: string): string | null {
   const n = normalizePypiName(name);
   if (n.length < 5 || POPULAR_PYPI_SET.has(n)) return null;
   const nearest = (max: number) => {

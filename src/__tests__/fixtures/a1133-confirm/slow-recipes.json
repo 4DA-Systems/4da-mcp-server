@@ -1,0 +1,68 @@
+[
+ {
+  "id": "r1-req-10000",
+  "unit": "require (",
+  "length": 10000
+ },
+ {
+  "id": "r1-req-25000",
+  "unit": "require (",
+  "length": 25000
+ },
+ {
+  "id": "r1-req-50000",
+  "unit": "require (",
+  "length": 50000
+ },
+ {
+  "id": "r1-req-gomod-50000",
+  "head": "go.mod:\n",
+  "unit": "require (\n",
+  "length": 50000
+ },
+ {
+  "id": "r1-caution-25000",
+  "unit": "add zqxw1 secret ",
+  "length": 25000
+ },
+ {
+  "id": "r1-caution-50000",
+  "unit": "add zqxw1 secret ",
+  "length": 50000
+ },
+ {
+  "id": "r1-addw-50000",
+  "unit": "add zqxw1 ",
+  "length": 50000
+ },
+ {
+  "id": "r1-adddistinct-50000",
+  "task": "add zqxw0 add zqxw1 add zqxw2 add zqxw3 add zqxw4 add zqxw5 add zqxw6 add zqxw7 add zqxw8 add zqxw9 add zqxw10 add zqxw11 add zqxw12 add zqxw13 add zqxw14 add zqxw15 add zqxw16 add zqxw17 add zqxw18 add zqxw19 add zqxw20 add zqxw21 add zqxw22 add zqxw23 add zqxw24 add zqxw25 add zqxw26 add zqxw27 add zqxw28 add zqxw29 add zqxw30 add zqxw31 add zqxw32 add zqxw33 add zqxw34 add zqxw35 add zqxw36 add zqxw37 add zqxw38 add zqxw39 add zqxw40 add zqxw41 add zqxw42 add zqxw43 add zqxw44 add zqxw45 add zqxw46 add zqxw47 add zqxw48 add zqxw49 add zqxw50 add zqxw51 add zqxw52 add zqxw53 add zqxw54 add zqxw55 add zqxw56 add zqxw57 add zqxw58 add zqxw59 add zqxw60 add zqxw61 add zqxw62 add zqxw63 add zqxw64 add zqxw65 add zqxw66 add zqxw67 add zqxw68 add zqxw69 add zqxw70 add zqxw71 add zqxw72 add zqxw73 add zqxw74 add zqxw75 add zqxw76 add zqxw77 add zqxw78 add zqxw79 add zqxw80 add zqxw81 add zqxw82 add zqxw83 add zqxw84 add zqxw85 add zqxw86 add zqxw87 add zqxw88 add zqxw89 add zqxw90 add zqxw9",
+  "note": "not repetitive"
+ },
+ {
+  "id": "e-pip-install",
+  "unit": "pip install ",
+  "length": 199000
+ },
+ {
+  "id": "e-deps-toml",
+  "unit": "[dependencies]\n",
+  "length": 199000
+ },
+ {
+  "id": "e-require",
+  "unit": "require (",
+  "length": 199000
+ },
+ {
+  "id": "e-add-verbs",
+  "unit": "add zqxw1 ",
+  "length": 199000
+ },
+ {
+  "id": "e-caution",
+  "unit": "add zqxw1 secret ",
+  "length": 199000
+ }
+]
