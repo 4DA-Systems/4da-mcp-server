@@ -252,6 +252,8 @@ export function strictEvidence(task: string): StrictEvidence {
   for (const m of text.matchAll(/(?<![\w@\/.-])([A-Za-z0-9][\w.-]*)(\s*\[[\w,. -]{0,80}\])?(\s*)((?:===?|~=|!=|>=|<=|<|>)\s*\d[\w.*+!-]*(?:\s*,\s*(?:===?|~=|!=|>=|<=|<|>)\s*\d[\w.*+!-]*)*)/g)) {
     if (m[3] === "" && !/\s/.test(m[2] ?? "") && !/\s/.test(m[4])) continue;
     if (/^\d[\d.]*$/.test(m[1])) continue;
+    // A blank-separated range goes on after it (npm's ">=1 <2", "1.x || 2.x"): no PEP 440 spec, no form here.
+    if (/^\s+(?:[<>=~^!]|\|\|)/.test(text.slice(m.index! + m[0].length))) continue;
     addForm(m[1], m[4].replace(/\s+/g, ""), null);
   }
   for (const m of text.matchAll(/(?<![\w."-])([A-Za-z0-9][\w.-]*)\s*=\s*"([^"\n]{1,60})"/g)) addForm(m[1], m[2], null);

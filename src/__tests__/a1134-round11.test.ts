@@ -92,6 +92,10 @@ describe("P2: everyday spellings (improvements, not promises)", () => {
     const r = await brief({ task, packages: atLatest(ecosystem, name) });
     expect(level(r)).not.toBe("safe_to_delegate");
   });
+  it("ledger equality: npm's blank-separated range is not cut into a PEP 440 spec (add lodash >=4.17.0 <4.17.21)", () => {
+    expect(strictEvidence("add lodash >=4.17.0 <4.17.21").formPairs).toEqual([]);
+    expect(strictEvidence("Add zqx-vuln-py >= 1.0, < 2 to the project.").formPairs.map((f) => f.spec)).toEqual([">=1.0,<2"]);
+  });
   it("#82: a one-line tail it cannot read says the snippet is not read whole", () => {
     expect(manifestPairs("Add to requirements.txt: the usual web stack, pinned").unreadable.length).toBeGreaterThan(0);
     expect(manifestPairs("Add to requirements.txt: zqx-vuln-py ~= 1.0 (we need the old API).").pairs.map((p) => `${p.name}${p.version}`)).toEqual(["zqx-vuln-py~=1.0"]);
