@@ -206,10 +206,10 @@ describe("Q4: a UNC path or a hosted file: URL follows the host rule", () => {
 describe("Q5: Cargo's build aliases get the advice line", () => {
   beforeEach(() => s.ledger([]));
   const post = (command: string) => s.run({ session_id: "s", cwd: s.project, hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: {} });
-  it.each(["cargo b", "cargo build", "cargo c", "cargo check", "cargo r", "cargo run", "cargo t", "cargo test", "cargo fetch"])("%s: advised", (command) => {
+  it.each(["cargo b", "cargo build", "cargo r", "cargo run", "cargo t", "cargo test", "cargo fetch"])("%s: advised", (command) => {
     expect(post(command).text).toContain("Run vulnerability_scan");
   });
-  it.each(["cargo fmt", "cargo clippy --version", "cargo --version"])("%s: none", (command) => {
+  it.each(["cargo fmt", "cargo check", "cargo c", "cargo clippy --version", "cargo --version"])("%s: none", (command) => {
     expect(post(command).text).toBe("");
   });
 });

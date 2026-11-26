@@ -69,7 +69,7 @@
  * manager then chooses is a limit. After a Bash or PowerShell command in which a package manager's
  * own program runs an install, add, update, sync or ci, package named or not (ADVICE_VERBS: `npm
  * ci`, `pnpm install --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`, `poetry
- * install`, `cargo fetch`, `build` (`b`), `check` (`c`), `run` (`r`) and `test` (`t`), which resolve and download what the manifest asks for, `go mod download`, npm / pnpm / Yarn / Bun `link`,
+ * install`, `cargo fetch`, `build` (`b`), `run` (`r`) and `test` (`t`), which resolve and download what the manifest asks for (`check` is not on the list), `go mod download`, npm / pnpm / Yarn / Bun `link`,
  * also run by npx, bunx or pnpx, with or without a version on the manager (`npx pnpm@9 install`);
  * not text that only mentions one),
  * where a ledger exists and the guard is on or advising, the hook adds one line of advice at
@@ -6660,7 +6660,7 @@ const INSTALL_ADVICE = "The package manager decides the releases actually instal
 /**
  * Round 17 (L6): the words after which a manager has installed or may have installed releases,
  * package named or not: an install, add, update, sync or ci (`npm ci`, `pnpm install
- * --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`), and Cargo's fetch, build, check, run and test (and b, c, r, t), which
+ * --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`), and Cargo's fetch, build, run and test (and b, r, t), which
  * fetch what a changed manifest asks for. npm's words are read through its own abbreviations.
  */
 const ADVICE_VERBS = new Map([
@@ -6670,7 +6670,7 @@ const ADVICE_VERBS = new Map([
   ["pip", new Set(["install"])],
   ["uv", new Set(["add", "sync", "install"])],
   ["poetry", new Set(["add", "install", "update", "sync"])],
-  ["cargo", new Set(["add", "install", "update", "fetch", "build", "b", "check", "c", "run", "r", "test", "t"])],
+  ["cargo", new Set(["add", "install", "update", "fetch", "build", "b", "run", "r", "test", "t"])],
   ["go", new Set(["get", "install", "download"])],
 ]);
 const NPM_ADVICE_COMMANDS = new Set(["install", "install-test", "ci", "install-ci-test", "update", "link"]);
