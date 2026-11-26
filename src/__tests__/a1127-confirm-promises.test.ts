@@ -182,7 +182,7 @@ describe("P3: nothing in the answer is shaped as tool arguments", () => {
   });
 });
 
-describe("P4: never safe_to_delegate while a name waits", () => {
+describe("P4: never safe_to_delegate while a name waits, nor on a call that declared nothing", () => {
   it.each([...ORDINARY, ...SECRET_CASES.map((c) => c.task)])("%s", async (task) => {
     const r = await brief(task);
     if (r.task_packages.to_confirm.length > 0) {
@@ -190,9 +190,15 @@ describe("P4: never safe_to_delegate while a name waits", () => {
       expect(r.task_packages.status).toBe("confirmation_needed");
       expect(r.task_packages.next_step).toContain("a name left out stays in to_confirm");
     } else {
-      expect(r.task_packages.status).toBe("complete");
-      expect(r.task_packages.next_step).toBeUndefined();
+      // A bare call never ends complete: it asks for a declaration (wave 2, change A).
+      expect(r.task_packages.status).toBe("confirmation_needed");
+      expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+      expect(r.task_packages.next_step).toContain("This call declared no packages.");
     }
+    // With the declaration that the task changes no package, the names it read still wait.
+    const declared = await brief(task, { packages: [] });
+    if (declared.task_packages.to_confirm.length > 0) expect(declared.delegation_assessment.level).not.toBe("safe_to_delegate");
+    else expect(declared.task_packages.status).toBe("complete");
   });
 
   it("a name left out of the answer stays waiting: omission is never dismissal", async () => {

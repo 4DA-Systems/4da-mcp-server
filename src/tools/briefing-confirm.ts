@@ -85,8 +85,6 @@ export interface TaskPackages {
   not_read: NotRead[];
   dismissed: string[];
   next_step?: string;
-  /** Present when the call declared no package and nothing waits: UNDECLARED_NOTE. */
-  note?: string;
 }
 
 /**
@@ -97,11 +95,19 @@ export const NEXT_STEP =
   "Call what_should_i_know again with the same task and `packages`: one entry for each name in to_confirm that is a package this task adds or changes: `public: true` if it is on the public registry (it is checked in that call), `public: false` if it comes from a private registry, git, a path or the workspace (it is never sent). Put a name that is not a package in `not_packages`. Every name in to_confirm needs one of these three answers: a name left out stays in to_confirm. Nothing about a name is sent until you mark it public. You may add packages the task changes that are not listed.";
 
 /**
- * Said when a call declared no package and nothing waits: the reader finds names in the task's plain forms
- * only, so a pin, bump or swap it did not read is the caller's to declare (fixed wording).
+ * What the agent does when its call declared no packages and nothing waits (fixed wording). A bare call never
+ * ends complete: the reader is a net under the agent's statement, and no promise rests on what it reads.
  */
-export const UNDECLARED_NOTE =
-  "No package was declared for this task. If it adds, pins, bumps, downgrades or swaps in a package this section does not list, call again with packages: this briefing reads names from the task text only in the plain forms (install commands, manifest entries, add <name>).";
+export const DECLARE_STEP =
+  "This call declared no packages. Call what_should_i_know again with the same task and `packages`: one entry for each package the task adds, pins, bumps, downgrades or swaps in, or `packages: []` if it adds or changes none. The level follows from that.";
+
+/** The delegation reason of a bare call with nothing waiting. */
+export const DECLARE_REASON = "This call declared no packages: do task_packages.next_step; the level follows from your answer.";
+
+/** What a level reached after a declaration rests on, in one clause. */
+export function declaredClause(count: number): string {
+  return count === 0 ? "You declared that the task adds or changes no package." : `You declared ${count} package${count === 1 ? "" : "s"}.`;
+}
 
 /** The delegation reason while names wait and nothing known already makes the task human_only. */
 export function confirmationReason(waiting: number): string {

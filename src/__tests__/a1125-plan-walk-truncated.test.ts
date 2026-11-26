@@ -48,12 +48,12 @@ function live(truncation: "none" | "dirs" | "time"): LiveIntelligence {
 
 describe("what_should_i_know after a truncated walk", () => {
   it("the control (whole tree read) is safe_to_delegate for a package the project does not have", async () => {
-    const out = await executeWhatShouldIKnow(null, { task: "review how the CLI parser uses minimist" }, live("none"));
+    const out = await executeWhatShouldIKnow(null, { packages: [], task: "review how the CLI parser uses minimist" }, live("none"));
     expect(out.delegation_assessment.level).toBe("safe_to_delegate");
   });
 
   it.each(["dirs", "time"] as const)("never safe_to_delegate, and the summary leads with what was not read (%s)", async (how) => {
-    const out = await executeWhatShouldIKnow(null, { task: "review how the CLI parser uses minimist" }, live(how));
+    const out = await executeWhatShouldIKnow(null, { packages: [], task: "review how the CLI parser uses minimist" }, live(how));
     expect(out.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(out.summary).toMatch(/^NOT CHECKED: the directory walk stopped/);
     expect(out.summary).not.toMatch(/No dependency of this project is named in the task/);
@@ -62,7 +62,7 @@ describe("what_should_i_know after a truncated walk", () => {
   });
 
   it("a task naming a package that was read still says the walk first", async () => {
-    const out = await executeWhatShouldIKnow(null, { task: "review how the CLI parser uses lodash" }, live("dirs"));
+    const out = await executeWhatShouldIKnow(null, { packages: [], task: "review how the CLI parser uses lodash" }, live("dirs"));
     expect(out.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(out.summary).toMatch(/^NOT CHECKED: the directory walk stopped/);
   });

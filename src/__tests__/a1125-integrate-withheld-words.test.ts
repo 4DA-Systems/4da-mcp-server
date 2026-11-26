@@ -31,24 +31,28 @@ afterEach(() => {
 });
 
 async function brief(task: string): Promise<Record<string, any>> {
-  return (await executeWhatShouldIKnow(null, { task, project_path: h.dir }, await h.live())) as Record<string, any>;
+  return (await executeWhatShouldIKnow(null, { packages: [], task, project_path: h.dir }, await h.live())) as Record<string, any>;
 }
 
 describe("words withheld from the task", () => {
   it.each([
-    ["Add ghp_ZQXTOK0123456789abcdefABCDEF012345 as the GH_TOKEN secret", "ghp_... (38 characters)", /credential/],
-    ["Run npm install --registry https://npm.zqxcorp.internal zqx-cli-tool", "zqx-cli-tool", /not looked up/],
-    ["cargo add zqx-cargo-path --path ../zqx-cargo-path", "zqx-cargo-path", /not looked up/],
-    [`add ${"a".repeat(400)} to the deps`, "a word of 400 characters", /longer than any package name/],
-  ])("%s: its own field and sentence, never 'more packages'", async (task, shown, reason) => {
+    // Wave 2, change B: only a word that stands where a package stands (an install command's operand, a package
+    // the task takes from elsewhere) weighs on the level; one in prose is listed and weighs nothing.
+    ["Add ghp_ZQXTOK0123456789abcdefABCDEF012345 as the GH_TOKEN secret", "ghp_... (38 characters)", /credential/, false],
+    ["Run npm install --registry https://npm.zqxcorp.internal zqx-cli-tool", "zqx-cli-tool", /not looked up/, true],
+    ["cargo add zqx-cargo-path --path ../zqx-cargo-path", "zqx-cargo-path", /not looked up/, true],
+    [`add ${"a".repeat(400)} to the deps`, "a word of 400 characters", /longer than any package name/, false],
+  ])("%s: its own field and sentence, never 'more packages'", async (task, shown, reason, weighs) => {
     const r = await brief(task);
     expect(notReadWords(r)).toEqual(expect.arrayContaining([expect.objectContaining({ shown, reason: expect.stringMatching(reason) })]));
     expect(r.summary).toMatch(/NOT CHECKED: \d+ words? in the task (was|were) not looked up \(/);
     expect(r.summary).toMatch(/nothing about (it|them) was sent\./);
     expect(r.summary).toContain(shown);
     expect(r.summary).not.toMatch(/more packages? named in the task/);
-    expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toMatch(/not looked up/);
+    if (weighs) {
+      expect(r.delegation_assessment.level).toBe("review_needed");
+      expect(r.delegation_assessment.reason).toMatch(/not looked up/);
+    } else expect(r.delegation_assessment.reason).not.toContain(shown);
   });
 
   it("a plain task has no task_packages.not_read", async () => {

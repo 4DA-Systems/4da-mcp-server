@@ -102,7 +102,7 @@ afterEach(() => {
   else process.env.FOURDA_OFFLINE = priorOffline;
 });
 
-const brief = (task: string, deps: ResolvedDependency[] = NPM) => executeWhatShouldIKnow(db, { task }, stubIntel(deps, {}, readyScan()));
+const brief = (task: string, deps: ResolvedDependency[] = NPM) => executeWhatShouldIKnow(db, { packages: [], task }, stubIntel(deps, {}, readyScan()));
 /** The OSV.dev requests that name `pkg`. */
 const osvAsks = (pkg: string) => stub.asked.filter((u) => u.startsWith("https://api.osv.dev/v1/query") && u.includes(`"name":"${pkg}"`));
 

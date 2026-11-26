@@ -50,7 +50,7 @@ describe("zip 8.6.0 under docx-rs: the signals and the briefing give the scan's 
     }
 
     // The briefing for a task naming zip says the same.
-    const briefing = await executeWhatShouldIKnow(appDb().db, { task: "bump the zip crate" }, li);
+    const briefing = await executeWhatShouldIKnow(appDb().db, { packages: [], task: "bump the zip crate" }, li);
     const zipAdvisory = briefing.advisories.find((a) => a.scope === "task" && a.title.startsWith("zip 8.6.0"));
     expect(zipAdvisory?.action).toBe(line);
   });
@@ -62,7 +62,7 @@ describe("zip 8.6.0 under docx-rs: the signals and the briefing give the scan's 
     stubNetwork(net);
     const li = await liveFor(dir);
 
-    const briefing = await executeWhatShouldIKnow(appDb().db, { task: "update the minimist package" }, li);
+    const briefing = await executeWhatShouldIKnow(appDb().db, { packages: [], task: "update the minimist package" }, li);
     const scan = (await executeVulnerabilityScan(null, {}, li)) as { recommendations: string[] };
     const line = scan.recommendations.find((r) => r.includes("minimist 1.2.5"))!;
     expect(line).toMatch(/^Upgrade minimist 1\.2\.5 → 1\.2\.6/);
@@ -78,7 +78,7 @@ describe("zip 8.6.0 under docx-rs: the signals and the briefing give the scan's 
     stubNetwork(net);
     const li = await liveFor(dir);
 
-    const briefing = await executeWhatShouldIKnow(appDb().db, { task: "update the minimist package" }, li);
+    const briefing = await executeWhatShouldIKnow(appDb().db, { packages: [], task: "update the minimist package" }, li);
     const dep = briefing.task_dependencies.find((d) => d.package === "minimist")!;
     expect(dep.vulnerabilities[0]).toMatchObject({ fixed_version: null, fixed_version_note: expect.stringMatching(/^NOT CHECKED: 1\.2\.6/) });
     expect(briefing.delegation_assessment.level).toBe("review_needed");

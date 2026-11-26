@@ -389,6 +389,16 @@ export function dependencyOf(deps: readonly ResolvedDependency[]): (name: string
   return (name) => names.has(name.toLowerCase().replace(/[-_.]+/g, "-"));
 }
 
+/** Verbs that start a new clause after "and" or a comma in a task ("and keep node-forge at 0.10.0"): never a list item. */
+const CLAUSE_START_VERBS = new Set([
+  "keep", "expose", "point", "store", "branch", "publish", "published", "wire", "run", "deploy", "push", "mount", "serve", "return", "log",
+  "send", "read", "write", "move", "check", "test", "make", "build", "render", "call", "configure", "enable", "disable", "document", "remove",
+  "drop", "rename", "register", "load", "save", "handle", "validate", "parse", "cache", "mock", "expose", "commit", "open", "close", "start",
+  "stop", "restart", "retry", "schedule", "map", "route", "protect", "sign", "verify", "encrypt", "hash", "fetch", "post", "print", "show",
+]);
+/** Words after which the one before is a verb starting a clause ("point it", "store the", "branch name"), not a list item. */
+const CLAUSE_OBJECTS = new Set(["it", "them", "this", "that", "these", "those", "the", "a", "an", "its", "their", "our", "my", "your", "only", "name", "everything", "all"]);
+
 /** How a name was read from the task: an install command's operand, a manifest snippet's entry, or a word after an adding verb. */
 export type TaskWordSeen = "command" | "manifest" | "prose";
 
@@ -931,7 +941,13 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
         // A word before an English noun, after an article, names the thing, not a package: "install the
         // git hooks" judged npm's `git` (avoid) (r8).
         const modifier = skipped > 0 && separatorAfter(k) === null && ENGLISH.has(words[k + 1] ?? "") && !PACKAGE_WORDS.has(words[k + 1] ?? "");
-        const prose = english(name, !installing) || (proseSeen && ENGLISH_TASK_WORDS.has(name)) || modifier || (!installing && !afterSeparator && skipped > 0 && !NAME_SHAPED.test(name));
+        // After "and" or a comma, a verb that starts a new clause is no list item: "add litestar and expose
+        // /health with it", "and point it at the staging redis", "and store the signing secret". Help-list
+        // quality only (to_confirm noise cost the agent a second call; wave 2, change C): a word read from an
+        // install command or a manifest entry never comes here.
+        const clauseStart =
+          afterSeparator && (CLAUSE_START_VERBS.has(name.toLowerCase()) || CLAUSE_OBJECTS.has(words[k + 1] ?? "") || /^[^\S\n]*[/.]/.test(task.slice(span(k).end, k + 1 < raw.length ? starts[k + 1] + 1 : task.length)));
+        const prose = clauseStart || english(name, !installing) || (proseSeen && ENGLISH_TASK_WORDS.has(name)) || modifier || (!installing && !afterSeparator && skipped > 0 && !NAME_SHAPED.test(name));
         if (prose) {
           proseSeen = true;
           skip();

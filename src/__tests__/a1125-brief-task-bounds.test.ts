@@ -47,7 +47,7 @@ describe("a task token of unbounded length", () => {
     ["brackets", `add x${"[".repeat(150_000)}`],
   ])("%s answers within 2 s of CPU", async (_label, task) => {
     const live = await h.live();
-    const cpu = await cpuOf(() => executeWhatShouldIKnow(null, { task, project_path: h.dir }, live));
+    const cpu = await cpuOf(() => executeWhatShouldIKnow(null, { packages: [], task, project_path: h.dir }, live));
     expect(cpu).toBeLessThan(LIMIT_CPU_MS);
   });
 
@@ -63,7 +63,7 @@ describe("a task token of unbounded length", () => {
 
   it("a long word sends nothing", async () => {
     const live = await h.live();
-    await executeWhatShouldIKnow(null, { task: `add ${"zq".repeat(400)}x`, project_path: h.dir }, live);
+    await executeWhatShouldIKnow(null, { packages: [], task: `add ${"zq".repeat(400)}x`, project_path: h.dir }, live);
     expect(h.requests.filter((u) => u.includes("zqzq"))).toEqual([]);
   });
 });
