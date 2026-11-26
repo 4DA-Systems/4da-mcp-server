@@ -247,3 +247,16 @@ describe("7: advise mode and no ledger read the file as block mode does", () => 
     expect(advised.text).toContain("1.0.0");
   });
 });
+
+describe("8: option values", () => {
+  it.each([
+    ["cargo install ripgrep --bin rg", { ecosystem: "crates.io", package: "ripgrep", to: "latest" }],
+    ["cargo install --bin rg ripgrep@14.1.1", { ecosystem: "crates.io", package: "ripgrep", to: "14.1.1" }],
+    ["cargo install --example demo ripgrep@14.1.1", { ecosystem: "crates.io", package: "ripgrep", to: "14.1.1" }],
+    ["pnpm add --trust-policy no-downgrade lodash@4.17.20", { ecosystem: "npm", package: "lodash", to: "4.17.20" }],
+  ])("%s: the value is no operand", (command, item) => {
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items).toEqual([item]);
+  });
+});
