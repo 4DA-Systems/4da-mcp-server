@@ -153,9 +153,72 @@ export function stepProtocol(root: string, dir: string, run: string): StepProtoc
   return null;
 }
 
-/** Lane plan-js fills this for npm, pnpm, Yarn and Bun steps; null until then. */
-export function jsStepProtocol(_root: string, _dir: string, _run: string): StepProtocol | null {
-  return null;
+/**
+ * npm, pnpm, Yarn and Bun steps (lane plan-js): the manifest and the lockfile each command writes,
+ * and for a command that writes package.json, how to put back the entry the plan read there.
+ *
+ * - `npm pkg set "<key>=<v>"` writes package.json at once, and the plan names one only where the
+ *   key is absent (upgrade-plan-overrides.ts), so a failure of it, or of the install after it, is
+ *   undone by removing that key.
+ * - A version-setting command (`npm install x@v`, `pnpm up`, `pnpm add`, `yarn upgrade|up|add`,
+ *   `yarn workspace <m> add`) writes the declaration of x in package.json: the entry the plan read
+ *   (section and spec) is quoted when it is a plain range, else the words say to restore it.
+ * - An in-range refresh with `--no-save`, `npm update`, `yarn up -R` and a reinstall write the
+ *   lockfile only; pnpm's `update` without `--no-save` rewrites package.json ranges too (measured
+ *   2026-11-26: `pnpm update -r minimist --depth Infinity` rewrote ^1.2.0 to ^1.2.8).
+ */
+export function jsStepProtocol(root: string, dir: string, run: string): StepProtocol | null {
+  const tool = run.split(" ")[0];
+  const LOCKS: Record<string, string[]> = {
+    npm: ["package-lock.json", "npm-shrinkwrap.json"],
+    pnpm: ["pnpm-lock.yaml"],
+    yarn: ["yarn.lock"],
+    bun: ["bun.lock", "bun.lockb"],
+  };
+  if (!LOCKS[tool]) return null;
+  const manifest = joinRel(dir, "package.json");
+  const lockOf = (): string => {
+    for (const d of upTo(root, path.resolve(root, dir))) for (const f of LOCKS[tool]) if (fs.existsSync(path.join(d, f))) return rel(root, path.join(d, f));
+    return joinRel(dir, LOCKS[tool][0]);
+  };
+  const lock = lockOf();
+  const where = isShellSafeDir(manifest) ? manifest : "the package.json of this step's directory";
+
+  // An override or resolution: the plan writes one only where the key is absent.
+  const pkgSet = /^npm pkg set "([^"=]+)=[^"]*"$/.exec(run);
+  if (pkgSet) {
+    const key = pkgSet[1];
+    const plainKey = /^[A-Za-z0-9@/._>*-]{1,256}$/.test(key);
+    return {
+      changes: [manifest],
+      if_it_fails: `npm pkg set writes ${where} at once: if this step fails, or the install after it does, remove ${plainKey ? `the "${key}" entry` : "the entry this step added"} from ${where} again (it was not there when the plan was made)`,
+    };
+  }
+  if (/^(?:npm ci|npm install|pnpm install|yarn install|yarn|bun install)$/.test(run)) return { changes: [lock] };
+  if (/^npm update \S+$/.test(run) || /^yarn up -R \S+$/.test(run) || /^pnpm update (?:-r )?\S+ (?:--depth Infinity )?--no-save$/.test(run)) return { changes: [lock] };
+  if (/^pnpm update (?:-r )?\S+ --depth Infinity$/.test(run) || /^yarn upgrade \S+$/.test(run)) return { changes: [manifest, lock] };
+
+  // A version-setting command: the declaration of the package it names.
+  const set =
+    /^(?:npm install|pnpm up|pnpm add(?: -D| -O)?|yarn upgrade|yarn up|yarn add|yarn workspace \S+ add) "?((?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+)@[^"\s]+"?(?: --save-exact| --dev| --optional)?$/.exec(run);
+  if (!set) return { changes: [manifest, lock] };
+  const name = set[1];
+  let was: { section: string; spec: string } | null = null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(root, dir, "package.json"), "utf8")) as Record<string, Record<string, unknown> | undefined>;
+    const found = ["dependencies", "devDependencies", "optionalDependencies"].flatMap((s) => (typeof pkg?.[s]?.[name] === "string" ? [{ section: s, spec: pkg[s]![name] as string }] : []));
+    was = found.length === 1 ? found[0] : null;
+  } catch {
+    was = null;
+  }
+  const plainSpec = was !== null && /^[0-9A-Za-z.^~=<>|*+ -]{1,64}$/.test(was.spec);
+  return {
+    changes: [manifest, lock],
+    if_it_fails:
+      was && plainSpec
+        ? `if this command fails, check ${where}: set ${was.section}.${name} back to "${was.spec}" if it changed`
+        : `if this command fails, check ${where}: put the ${name} entry back as it was before this step (this plan could not quote it exactly)`,
+  };
 }
 
 /** The protocol fields of any run_order step: non-JavaScript here, JavaScript from jsStepProtocol. */

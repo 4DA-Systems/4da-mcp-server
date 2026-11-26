@@ -28,7 +28,16 @@ describe("(a) one command per package per directory", () => {
     expect(step("a").commands).toEqual([{ dir: ".", run: "npm install lev@2.0.0 --save-exact" }]);
     expect(step("b").commands).toEqual([{ dir: ".", run: "npm install lev@3.0.0 --save-exact" }]);
     const lev = result.run_order.filter((s: { run: string }) => /^npm install lev@/.test(s.run));
-    expect(lev).toEqual([{ n: lev[0].n, dir: ".", run: "npm install lev@3.0.0 --save-exact", fixes: ["npm:a", "npm:b"] }]);
+    expect(lev).toEqual([
+      {
+        n: lev[0].n,
+        dir: ".",
+        run: "npm install lev@3.0.0 --save-exact",
+        changes: ["package.json", "package-lock.json"],
+        if_it_fails: 'if this command fails, check package.json: set dependencies.lev back to "1.0.0" if it changed',
+        fixes: ["npm:a", "npm:b"],
+      },
+    ]);
     expect(result.run_order_note).toMatch(/lev is set once in the project root, at 3\.0\.0, for rows that named 2\.0\.0 and 3\.0\.0/);
     expect(result.run_order_note).toMatch(/that it also brings in the fix of a 1\.0\.0, whose row named a lower release, was not confirmed/);
   });

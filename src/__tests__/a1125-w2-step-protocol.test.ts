@@ -70,7 +70,7 @@ describe("Go, uv, Poetry, compiled requirements", () => {
 
   it("JavaScript steps are lane plan-js's: nothing is said for them here", () => {
     expect(stepProtocol(root, ".", "npm install lodash@4.17.21 --save-exact")).toBeNull();
-    expect(protocolOf(root, ".", "npm update qs")).toEqual({});
+    expect(protocolOf(root, ".", "npm update qs")).toEqual({ changes: ["package-lock.json"] });
   });
 });
 
