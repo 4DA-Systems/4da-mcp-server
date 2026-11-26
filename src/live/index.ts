@@ -837,6 +837,16 @@ export class LiveIntelligence {
     return false;
   }
 
+  /**
+   * Q3 (round 20 of the hook lane): where a private record applies. The user's own list
+   * (FOURDA_PRIVATE_PACKAGES) is "listed" and applies in every project; any other private rule (a
+   * registry, index, scope or proxy of this project) applies only inside this project's root.
+   */
+  privateRecordScope(ecosystem: string, name: string): { rule: "listed" | "project"; root: string | null } {
+    for (const form of nameForms(name)) if (this.privateRules.listedCovers(ecosystem, form)) return { rule: "listed", root: null };
+    return { rule: "project", root: this.projectRoot ?? this.groupResults[0]?.group.dir ?? null };
+  }
+
   lookupPrivateReason(ecosystem: string, name: string): string | null {
     return this.privateReason(ecosystem, name) ?? this.ecosystemPrivate(ecosystem, name);
   }

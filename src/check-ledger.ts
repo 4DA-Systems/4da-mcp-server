@@ -62,7 +62,18 @@ export interface LedgerEntry {
   not_checked?: string;
   /** For "unreadable_lockfile": the lockfile or manifest that could not be read. */
   unreadable_file?: string;
+  /**
+   * For "private" (round 20 of the hook lane, Q3): "listed" when the user's own FOURDA_PRIVATE_PACKAGES
+   * covers the name (the hook honours it in every project), "project" for any other private rule (a
+   * registry, index, scope or proxy of the project): the hook honours it only inside `project_root`.
+   */
+  private_rule?: "listed" | "project";
+  /** For private_rule "project": the root of the project whose rules made the name private. */
+  project_root?: string;
 }
+
+/** Where a private record applies (LiveIntelligence.privateRecordScope). */
+export type PrivateScope = (ecosystem: string, name: string) => { rule: "listed" | "project"; root: string | null };
 
 /** The fields of a dependency_check result item the ledger keeps. */
 export interface CheckedItem {
@@ -111,7 +122,7 @@ function oneLine(text: string, max: number): string {
 }
 
 /** The ledger lines for one answer's items. Items without a name, version or verdict are left out. */
-export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date(), privateRule: PrivateRule | null = null): LedgerEntry[] {
+export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date(), privateRule: PrivateRule | null = null, privateScope: PrivateScope | null = null): LedgerEntry[] {
   const t = at.toISOString();
   const out: LedgerEntry[] = [];
   for (const item of items) {
@@ -132,13 +143,28 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
       ...(unread
         ? { not_checked: "unreadable_lockfile", unreadable_file: unread }
         : withheld
-          ? { not_checked: withheld }
+          ? { not_checked: withheld, ...(withheld === "private" ? scopeFields(item, privateScope) : {}) }
           : typeof item.not_checked === "string"
             ? { not_checked: oneLine(item.not_checked, 40) }
             : {}),
     });
   }
   return out;
+}
+
+/**
+ * Q3: a private record's scope. With no scope known (no project, or the call failed), the record is
+ * "project" with no root, which the hook honours nowhere: never a release in every project by default.
+ */
+function scopeFields(item: { ecosystem: string; package: string }, scope: PrivateScope | null): Pick<LedgerEntry, "private_rule" | "project_root"> {
+  try {
+    const s = scope ? scope(item.ecosystem, item.package) : null;
+    if (s?.rule === "listed") return { private_rule: "listed" };
+    const root = s ? pathField(s.root) : null;
+    return root ? { private_rule: "project", project_root: root } : { private_rule: "project" };
+  } catch {
+    return { private_rule: "project" };
+  }
 }
 
 /** Append `text` to the ledger in `dir`, moving a full ledger aside first. */
@@ -173,11 +199,11 @@ let queue: Promise<void> = Promise.resolve();
  * Record each item's final verdict in the ledger of `dir` (the data folder by default). The
  * returned promise never rejects: a ledger that cannot be written is skipped.
  */
-export function recordVerdicts(items: readonly CheckedItem[], options: { now?: Date; dir?: string; privateRule?: PrivateRule | null } = {}): Promise<void> {
+export function recordVerdicts(items: readonly CheckedItem[], options: { now?: Date; dir?: string; privateRule?: PrivateRule | null; privateScope?: PrivateScope | null } = {}): Promise<void> {
   let entries: LedgerEntry[];
   let dir: string;
   try {
-    entries = ledgerEntries(items, options.now, options.privateRule ?? null);
+    entries = ledgerEntries(items, options.now, options.privateRule ?? null, options.privateScope ?? null);
     dir = options.dir ?? serverDataDir();
   } catch {
     return queue;

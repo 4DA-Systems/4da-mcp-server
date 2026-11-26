@@ -28,7 +28,7 @@ const run = (command: string, tool = "Bash", env: Record<string, string> = {}) =
 
 /** Ledger lines exactly as the server writes them for these dependency_check answers. */
 function answer(items: Array<Record<string, string>>, privateRule: ((eco: string, name: string) => boolean) | null = null): void {
-  const lines = ledgerEntries(items as never, new Date(Date.now() - 60_000), privateRule).map((e) => ({ ...e }) as Record<string, string>);
+  const lines = ledgerEntries(items as never, new Date(Date.now() - 60_000), privateRule, privateRule ? () => ({ rule: "listed", root: null }) : null).map((e) => ({ ...e }) as Record<string, string>);
   record(s, lines.map(({ t: _t, ...rest }) => rest));
 }
 
@@ -115,7 +115,7 @@ describe("what releases it, and what does not", () => {
 
   it("a name a private rule covers (the server's private record) goes ahead at any version, bare included", () => {
     s.ledger([]);
-    answer([{ ecosystem: "npm", package: "@acme/internal", to: "latest", verdict: "unknown", not_checked: "private" }], () => true);
+    answer([{ ecosystem: "npm", package: "@acme/internal", to: "latest", verdict: "unknown", not_checked: "private", private_rule: "listed" }], () => true);
     expect(run("npm install @acme/internal").decision).toBe("allow");
     expect(run("npm install @acme/internal@2.0.0").decision).toBe("allow");
   });
@@ -151,7 +151,7 @@ describe("a dist-tag other than latest", () => {
 describe("a workspace member: the local_source hold names three ways that release it", () => {
   it("the denial wording, and each of the three", () => {
     s.ledger([]);
-    answer([{ ecosystem: "npm", package: "shared", to: "latest", verdict: "unknown", not_checked: "private", reason: "the project takes shared from its workspace" }], () => false);
+    answer([{ ecosystem: "npm", package: "shared", to: "latest", verdict: "unknown", not_checked: "private", private_rule: "listed", reason: "the project takes shared from its workspace" }], () => false);
     const held = run("pnpm add shared");
     expect(held.decision).toBe("deny");
     expect(held.text).toContain('install it as "shared@workspace:*"');
@@ -164,7 +164,7 @@ describe("a workspace member: the local_source hold names three ways that releas
     const file = s.file("package.json", '{\n  "name": "web",\n  "dependencies": {}\n}\n');
     expect(s.edit(file, '"dependencies": {}', '"dependencies": { "shared": "file:../shared" }').decision).toBe("allow");
     // 2. Marked private by the server's rule (FOURDA_PRIVATE_PACKAGES=shared), the next call records it private: it passes.
-    answer([{ ecosystem: "npm", package: "shared", to: "latest", verdict: "unknown", not_checked: "private" }], (_e, n) => n === "shared");
+    answer([{ ecosystem: "npm", package: "shared", to: "latest", verdict: "unknown", not_checked: "private", private_rule: "listed" }], (_e, n) => n === "shared");
     expect(run("pnpm add shared").decision).toBe("allow");
   });
 });

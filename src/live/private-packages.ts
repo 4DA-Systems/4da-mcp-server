@@ -1216,6 +1216,11 @@ export class PrivatePackageRules {
    * repository text (a spec, a folder name) that can spell any rule's wording (round 3 of the hook
    * review, item 2).
    */
+  /** Q3: whether the user's own list (FOURDA_PRIVATE_PACKAGES) covers this name: private in every project. */
+  listedCovers(ecosystem: string, name: string): boolean {
+    return this.listed.some((l) => (l.ecosystem === null || l.ecosystem === ecosystem) && (ecosystem === "PyPI" ? l.rePypi.test(pep503(name)) : ecosystem === "crates.io" ? l.reCrates.test(normName("crates.io", name)) : l.re.test(name)));
+  }
+
   registryRuleCovers(ecosystem: string, name: string): boolean {
     for (const l of this.listed) {
       if (l.ecosystem !== null && l.ecosystem !== ecosystem) continue;

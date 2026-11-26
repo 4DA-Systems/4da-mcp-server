@@ -34,7 +34,14 @@ export function answerDenial(s: Sandbox, run: HookRun, verdict = "proceed"): Arr
   const items = run.items ?? [];
   record(
     s,
-    items.map((i) => ({ ecosystem: i.ecosystem, package: i.package, version: i.to, verdict, ...(/^v?\d+(\.\d+)*$/.test(i.to.replace(/^=+/, "")) ? {} : { requested: i.to }) })),
+    // As the server records it (round 20, Q1): a crates.io bare `1.2.3` is the caret range, recorded
+    // with `requested: "1.2.3"`; `=1.2.3` is the release, recorded as `1.2.3` with no `requested`.
+    items.map((i) => {
+      const exactCrate = i.ecosystem === "crates.io" && /^=\d/.test(i.to);
+      const bareCrate = i.ecosystem === "crates.io" && /^v?\d+\.\d+\.\d+/.test(i.to);
+      const plain = /^v?\d+(\.\d+)*$/.test(i.to.replace(/^=+/, ""));
+      return { ecosystem: i.ecosystem, package: i.package, version: exactCrate ? i.to.replace(/^=+/, "") : i.to, verdict, ...(bareCrate || !plain ? { requested: i.to } : {}) };
+    }),
   );
   return items;
 }

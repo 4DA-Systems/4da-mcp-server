@@ -258,8 +258,8 @@ describe("7: advise mode and no ledger read the file as block mode does", () => 
 describe("8: option values", () => {
   it.each([
     ["cargo install ripgrep --bin rg", { ecosystem: "crates.io", package: "ripgrep", to: "latest" }],
-    ["cargo install --bin rg ripgrep@14.1.1", { ecosystem: "crates.io", package: "ripgrep", to: "14.1.1" }],
-    ["cargo install --example demo ripgrep@14.1.1", { ecosystem: "crates.io", package: "ripgrep", to: "14.1.1" }],
+    ["cargo install --bin rg ripgrep@14.1.1", { ecosystem: "crates.io", package: "ripgrep", to: "=14.1.1" }], // round 20, Q1: exact for cargo install
+    ["cargo install --example demo ripgrep@14.1.1", { ecosystem: "crates.io", package: "ripgrep", to: "=14.1.1" }], // round 20, Q1: exact for cargo install
   ])("%s: the value is no operand", (command, item) => {
     const r = run(command);
     expect(r.decision, r.text).toBe("deny");

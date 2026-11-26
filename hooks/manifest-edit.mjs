@@ -4,7 +4,15 @@
  * The 4DA guard: a Claude Code plugin hook (PreToolUse on Edit, MultiEdit, Write, NotebookEdit,
  * Bash and PowerShell; PostToolUse for advice) that stops a dependency version from being written
  * or installed before `dependency_check` has judged it, against the check ledger the server writes
- * in its data folder (src/check-ledger.ts), entries of the last 24 hours only. A guard-rail against
+ * in its data folder (src/check-ledger.ts), entries of the last 24 hours only (1 hour for a verdict
+ * for `latest`, LATEST_WINDOW_MS). Each entry counts only for the reading the server judged: an exact
+ * version only by an answer for that one release (no `requested`, or `latest` for that release), a
+ * range only by an answer whose `requested` is that range; a crates.io bare `1.2.3` is the caret
+ * range ^1.2.3 (needs the answer for `1.2.3`, which the server records as the caret reading), only
+ * `=1.2.3` is the release (and an avoid or wait for the release 1.2.3 holds the bare form too, as a
+ * Cargo.lock that holds it keeps it); `cargo install x@1.2.3` installs exactly 1.2.3 and is read as
+ * `=1.2.3`; npm `1.2.3` is exact and `1.2` / `1` are ranges; PyPI `==1.2` is the release 1.2.0. A
+ * guard-rail against
  * an agent's mistakes and shortcuts, not a sandbox. No network, no dependencies, plain Node; it
  * always exits 0.
  *
@@ -35,7 +43,7 @@
  *   uvx, poetry run, pipenv / pdm / rye / pixi / hatch run and corepack are read as the command they
  *   run, at most MAX_WRAPS deep); beside a named package only the options on that manager's allow
  *   list (NAMED_OPTIONS: placement, output, scripts off, a dry run, each with its reason); and every
- *   operand one of: a public name with an exact version (on `proceed` or `review`), with a range in
+ *   operand one of: a public name with an exact version (on `proceed` or `review` for that reading), with a range in
  *   its registry's grammar (on a verdict for that constraint, or for exactly the release its
  *   inclusive ceiling names; held by the guard below as a name alone is), `@latest` with npm, pnpm, Yarn or Bun (on a verdict for `latest`), or
  *   alone (judged at the registry's newest release, on a verdict for `latest`; `bun update x` is
@@ -51,8 +59,9 @@
  *   loopback address, an IP literal in 10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7 or
  *   fe80::/10, a single-label host, or a name under .internal, .local, .lan, .corp, .home.arpa,
  *   .test, .example, .invalid or .localhost) and nothing else naming a source: goes ahead unjudged,
- *   as the project's own source; --no-index with every --find-links a local path, a file: URL or a host
- *   private by its shape: goes ahead (no index is read, measured with pip); in every other case the named
+ *   as the project's own source; --no-index with every --find-links a local path, a file: URL with no host
+ *   (or localhost), or a UNC path (`//host/share`, `\\host\share`) or file: URL whose host is private
+ *   by its shape: goes ahead (no index is read, measured with pip); in every other case the named
  *   packages are judged on the ledger (a proceed or review for the release named, or a private
  *   record, lets it through), and a denial for a missing verdict says how a private name is released
  *   (FOURDA_PRIVATE_PACKAGES or the registry's configuration, so the server records it private).
@@ -60,7 +69,7 @@
  * manager then chooses is a limit. After a Bash or PowerShell command in which a package manager's
  * own program runs an install, add, update, sync or ci, package named or not (ADVICE_VERBS: `npm
  * ci`, `pnpm install --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`, `poetry
- * install`, `cargo fetch` and `cargo build`, `go mod download`, npm / pnpm / Yarn / Bun `link`,
+ * install`, `cargo fetch`, `build` (`b`), `run` (`r`) and `test` (`t`), which resolve and download what the manifest asks for (`check` is not on the list), `go mod download`, npm / pnpm / Yarn / Bun `link`,
  * also run by npx, bunx or pnpx, with or without a version on the manager (`npx pnpm@9 install`);
  * not text that only mentions one),
  * where a ledger exists and the guard is on or advising, the hook adds one line of advice at
@@ -95,8 +104,12 @@
  * is plain (a `key:` header, a `- 'entry'` item, or `key: value` with a plain or simply quoted
  * value), and a change under a top-level key that is neither read (catalog, catalogs, overrides,
  * packageExtensions, configDependencies) nor on PNPM_INERT_LIST (settings known to put no registry
- * release into node_modules or the lockfile, each with its reason) is held. A package a private-registry
- * rule covers goes ahead at any version unless an avoid or wait for that version came first.
+ * release into node_modules or the lockfile, each with its reason) is held. A package the server
+ * recorded private goes ahead at any version unless an avoid or wait for that version came first, and
+ * only where the record applies: one the user's own FOURDA_PRIVATE_PACKAGES made (`private_rule:
+ * "listed"`) in every project; one a project's own registry, index, scope or proxy made (`private_rule:
+ * "project"`, with `project_root`) only for a call whose folder is that root or inside it (12 levels);
+ * a private line with neither (an older server's) nowhere.
  *
  * WHAT IS HELD
  *
@@ -189,7 +202,8 @@
  * - Overrides, resolutions, catalogs, [patch] and workspace pins in the project can make the
  *   manager install another release than the one a command names with a version; the hook judges
  *   those entries when they are edited, not when a command meets them.
- * - A name alone judged at the newest may install another release: the newest that fits this
+ * - A name alone judged at the newest may install another release: one published after the verdict
+ *   was recorded (within the hour a latest verdict is honoured) is not checked; the newest that fits this
  *   Node, Python or Rust (`engines`, `requires-python`, `rust-version`), the release the `latest` tag
  *   names when it is not the highest, and the copy pip finds installed (`pip install x` keeps it,
  *   measured). Measured in rounds 15 and 16: npm, pnpm, Yarn 1 and Bun did not keep a release only
@@ -249,6 +263,14 @@ const MAX_ACCOUNT_CHARS = 2 * 1024 * 1024;
 const SELF_LIMIT_MS = 8000;
 /** How long a dependency_check verdict counts. */
 const LEDGER_WINDOW_MS = 24 * 60 * 60 * 1000;
+/**
+ * Round 20 (Q2): a verdict for `latest` (what a name alone and every unbounded spec ask for) is
+ * honoured for 1 hour, not 24: a release published after it was recorded is not what it judged.
+ * Exact versions and bounded ranges keep the 24 hours.
+ */
+const LATEST_WINDOW_MS = 60 * 60 * 1000;
+/** The clock the ledger was read at (readLedger). */
+let ledgerReadAt = Date.now();
 /** The ledger files the server writes (src/check-ledger.ts): the previous one is read first. */
 const LEDGER_FILES = ["check-ledger.1.jsonl", "check-ledger.jsonl"];
 /** A ledger file larger than this is not read (the server keeps each under 512 KB). */
@@ -1432,7 +1454,8 @@ function npmDeclared(name, value) {
 function urlDependency(name, url, eco) {
   const file = registryFile(url);
   if (file && file.ecosystem === eco) return { name: file.name, spec: file.spec };
-  if (/^(?:git\+|file:)/i.test(url) || sourceKind(url) === "private") return null;
+  // Q4: a file: URL that names a host follows the host rule.
+  if (/^git\+/i.test(url) || (/^file:/i.test(url) && isLocalLocation(url)) || sourceKind(url) === "private") return null;
   if (!name) return refuse(`${JSON.stringify(url.slice(0, 120))}, a URL on a host that is not private by its shape, which this hook does not read`);
   return { name, spec: url.slice(0, 400) };
 }
@@ -2045,6 +2068,14 @@ export function poetryToPep440(spec) {
 
 /** The `to` of the dependency_check call for a specifier: its exact version, else the constraint as dependency_check reads it. */
 function callTarget(ecosystem, spec) {
+  // Q1: crates.io's own spellings are kept: `=1.2.3` is the release, a bare `1.2.3` the caret range
+  // the server judges (and records as `requested`), so the call asks for the reading the edit makes.
+  if (ecosystem === "crates.io") {
+    const s = String(spec).trim();
+    const exact = exactFor(ecosystem, s);
+    if (exact && /^=/.test(s)) return `=${exact}`;
+    if (exact) return exact;
+  }
   const exactVersion = exactFor(ecosystem, spec);
   if (exactVersion) return exactVersion;
   const s = String(spec).trim();
@@ -2630,8 +2661,15 @@ function sourcePairs(args, flags, clusters) {
   }
   return pairs;
 }
-// N3: a path, or a file: URL (it has no host), is local.
-const isLocalLocation = (v) => typeof v === "string" && (!/^[a-z][\w+.-]*:\/\//i.test(v) || /^file:/i.test(v));
+// N3 + Q4: a path, or a file: URL with no host (or localhost), is local. A UNC path (`//host/share`,
+// `\\host\share`) or a file: URL that names another host is that host: local only when it is
+// private by its shape.
+function isLocalLocation(v) {
+  if (typeof v !== "string") return false;
+  const unc = /^(?:\/\/|\\\\)([^/\\]+)/.exec(v) ?? /^file:\/\/([^/\\]+)/i.exec(v);
+  if (unc) return unc[1].toLowerCase() === "localhost" || privateHost(unc[1].toLowerCase());
+  return !/^[a-z][\w+.-]*:\/\//i.test(v) || /^file:/i.test(v);
+}
 function sourceVerdict(pairs, replacing) {
   if (pairs.length === 0) return "none";
   const clean = (v) => String(v ?? "").replace(/^[\w-]+=(?=[a-z][\w+.-]*:)/i, "");
@@ -2639,7 +2677,7 @@ function sourceVerdict(pairs, replacing) {
     const links = pairs.filter(([f]) => f === "-f" || f === "--find-links").map(([, v]) => clean(v));
     return links.every((v) => isLocalLocation(v) || sourceKind(v) === "private") ? "unjudged" : "held";
   }
-  if (pairs.length === 1 && replacing.has(pairs[0][0]) && (sourceKind(clean(pairs[0][1])) === "private" || /^file:/i.test(clean(pairs[0][1])))) return "unjudged";
+  if (pairs.length === 1 && replacing.has(pairs[0][0]) && (sourceKind(clean(pairs[0][1])) === "private" || (/^file:/i.test(clean(pairs[0][1])) && isLocalLocation(clean(pairs[0][1]))))) return "unjudged";
   return "judged";
 }
 
@@ -3385,7 +3423,10 @@ function cargoInstall(rest, crates) {
     if (!name) return [];
     const spec = m ? m[2].trim() : typeof version === "string" ? version.trim() : LATEST;
     if (spec !== LATEST && specTooLong(spec)) return refuse(specTooLong(spec)) ?? [];
-    return spec === LATEST || exactFor("crates.io", spec) || specText(spec) === spec ? [{ ecosystem: "crates.io", name, spec }] : [];
+    // Q1: `cargo install x@1.2.3` installs exactly 1.2.3 (cargo help install: a version with no
+    // operator must be MAJOR.MINOR.PATCH and installs exactly that version), so it is read as `=1.2.3`.
+    const read = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/.test(spec) ? `=${spec.replace(/^v/, "")}` : spec;
+    return read === LATEST || exactFor("crates.io", read) || specText(read) === read ? [{ ecosystem: "crates.io", name, spec: read }] : [];
   });
 }
 
@@ -3878,7 +3919,8 @@ function jsOperand(word) {
 function jsUrlOperand(url) {
   const at = registryFile(url);
   if (at && at.ecosystem === "npm") return { name: at.name };
-  if (/^(?:git\+|git:|file:)/i.test(url)) return "local";
+  if (/^(?:git\+|git:)/i.test(url) || (/^file:/i.test(url) && isLocalLocation(url))) return "local";
+  if (/^file:/i.test(url)) return null;
   return /^https?:/i.test(url) && sourceKind(url) === "private" ? "local" : null;
 }
 
@@ -4792,6 +4834,7 @@ function workspaceRoot(start, eco) {
 /** N2: the names the reader reads with a range (not an exact version, not latest, not a tag). */
 function rangedNames(reader, eco) {
   return quietly(() => reader())
+    // (A crates.io bare `1.2.3` is not held here: its verdict, for ^1.2.3, judges the release a Cargo.lock keeps and the fresh resolve.)
     .filter((r) => r.ecosystem === eco && !r.tag && r.spec !== LATEST && !exactFor(eco, r.spec))
     .map((r) => r.name);
 }
@@ -5660,6 +5703,7 @@ function ledgerSnapshot(dir) {
 
 function readLedger(dir, now) {
   fault("ledger-read");
+  ledgerReadAt = typeof now === "number" ? now : Date.now();
   if (!existsSync(dir) || !ledgerStarted(dir)) return null;
   const entries = [];
   // D10: a line that does not parse but names a package (an avoid cut short), or one stamped past
@@ -5841,6 +5885,28 @@ const isWithheld = (e) => e.not_checked === "private" || e.not_checked === "loca
 const isUnreadable = (e) => e.not_checked === "unreadable_lockfile" || (e.not_checked === "private" && typeof e.unreadable_file === "string" && e.unreadable_file !== "");
 /** A private-registry answer, which lets the name through as it did in 6.5.0. */
 const isPrivateRule = (e) => e.not_checked === "private" && !isUnreadable(e);
+/** Q3: the folder of the call being judged (judgeCall). */
+let callFolder = process.cwd();
+/**
+ * Q3 (round 20): whether a private record applies to this call. "listed" (the user's own
+ * FOURDA_PRIVATE_PACKAGES) applies everywhere; "project" only when the call's folder is that
+ * project's root or inside it (the same PROJECT_DEPTH ancestor walk); a record with neither (an
+ * older server's line, or one whose project was not known) applies nowhere.
+ */
+function privateApplies(e) {
+  if (e.private_rule === "listed") return true;
+  if (e.private_rule !== "project" || typeof e.project_root !== "string" || !e.project_root) return false;
+  const same = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const root = resolve(e.project_root);
+  let dir = callFolder;
+  for (let level = 0; level <= PROJECT_DEPTH; level++) {
+    if (same(dir, root)) return true;
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return false;
+}
 
 /**
  * What the ledger says about one introduced version: "allow", { deny: entry } (an avoid or wait
@@ -5858,19 +5924,46 @@ const isPrivateRule = (e) => e.not_checked === "private" && !isUnreadable(e);
  * from elsewhere is dependency confusion (round 3 of the hook review: `"acme-utils":
  * "github:acme/acme-utils"`, then `npm i acme-utils@9.9.9`).
  */
+/**
+ * Round 20 (Q1): the single release a spec names, read as its registry reads it, or null when it is
+ * a range. A crates.io bare `1.2.3` is the caret range ^1.2.3 (Cargo.toml and `cargo add`), and only
+ * `=1.2.3` names the release; npm `1.2.3` is exact and `1.2` / `1` are ranges; PyPI `==1.2` is the one
+ * release 1.2 (= 1.2.0); Go has no ranges.
+ */
+function exactReading(eco, spec) {
+  const s = String(spec ?? "").trim();
+  if (eco === "crates.io" && /^v?\d/.test(s)) return null;
+  return exactFor(eco, s);
+}
+
 function judge(index, c) {
   const eco = c.ecosystem;
   const forPackage = index.get(`${eco}\0${nameKey(eco, c.name)}`) ?? [];
-  const exactVersion = exactFor(eco, c.spec);
+  const exactVersion = exactReading(eco, c.spec);
   const constraint = exactVersion ? null : callTarget(eco, c.spec).replace(/\s+/g, "");
   const want = exactVersion ? versionKey(eco, exactVersion) : null;
   // An answer for a constraint records it as `requested` (its pick as `version`); one that could
   // not resolve it records the constraint itself as `version`, with no pick.
   // (byPackage keys each entry once: `vk` its version, `ak` its constraint.)
-  const answers = forPackage.filter((e) => !isWithheld(e) && (exactVersion ? e.vk === want : e.ak === constraint));
+  // Q1: an entry is matched on the reading the server judged, never on the bare version string: an
+  // exact spec only by an entry for that one release (no `requested`, or a requested reading that
+  // names the same single release), a range only by an entry whose `requested` is that range.
+  // (A `latest` answer judged exactly the one release it records, so it counts for that release.)
+  const exactEntry = (e) => typeof e.requested !== "string" || e.ak.toLowerCase() === LATEST || (exactReading(eco, e.requested) !== null && versionKey(eco, exactReading(eco, e.requested)) === e.vk);
+  const fresh = (e) => constraint !== LATEST || Date.parse(e.t) >= ledgerReadAt - LATEST_WINDOW_MS;
+  const matching = forPackage.filter((e) => !isWithheld(e) && (exactVersion ? e.vk === want && exactEntry(e) : e.ak === constraint));
+  const answers = matching.filter(fresh);
+  const stale = matching.length > answers.length ? matching.at(-1) : null;
   const last = answers.at(-1);
   // The last decisive answer decides, whatever unknown answers came after it: an avoid or wait
   // holds until a later proceed or review (re-check of 0d30b40, S2: avoid, unknown, private went ahead).
+  // Q1: a crates.io bare `1.2.3` (^1.2.3) installs 1.2.3 itself where a Cargo.lock holds it, so an
+  // avoid or wait for the exact release 1.2.3 holds it too; only an answer for ^1.2.3 releases it.
+  if (eco === "crates.io" && !exactVersion && /^v?\d+\.\d+\.\d+/.test(String(c.spec).trim())) {
+    const base = versionKey(eco, String(c.spec).trim().replace(/^v/, ""));
+    const exactHold = forPackage.filter((e) => !isWithheld(e) && e.vk === base && exactEntry(e) && (HOLDS.has(e.verdict) || PASSES.has(e.verdict))).at(-1);
+    if (exactHold && HOLDS.has(exactHold.verdict)) return { deny: exactHold };
+  }
   const decisive = answers.filter((e) => HOLDS.has(e.verdict) || PASSES.has(e.verdict)).at(-1);
   if (decisive && HOLDS.has(decisive.verdict)) return { deny: decisive };
   if (decisive && PASSES.has(decisive.verdict)) return "allow";
@@ -5878,16 +5971,16 @@ function judge(index, c) {
   const top = exactVersion ? null : rangeCeiling(eco, c.spec);
   if (top) {
     const k = versionKey(eco, top);
-    const atTop = forPackage.filter((e) => !isWithheld(e) && e.vk === k && e.verdict !== "unknown").at(-1);
+    const atTop = forPackage.filter((e) => !isWithheld(e) && e.vk === k && exactEntry(e) && e.verdict !== "unknown").at(-1);
     if (atTop && HOLDS.has(atTop.verdict)) return { deny: atTop };
     if (atTop && PASSES.has(atTop.verdict)) return "allow";
   }
   const withheld = forPackage.filter(isWithheld).at(-1);
   if (withheld && (!last || forPackage.indexOf(withheld) > forPackage.indexOf(last))) {
-    if (isPrivateRule(withheld)) return "allow";
+    if (isPrivateRule(withheld)) return privateApplies(withheld) ? "allow" : { check: last ?? null, foreignPrivate: withheld };
     return isUnreadable(withheld) ? { unreadable: withheld } : { localSource: withheld };
   }
-  return { check: last ?? null };
+  return { check: last ?? null, ...(stale && !last ? { stale } : {}) };
 }
 
 /** Server text repeated in a denial: one line, capped. */
@@ -5940,7 +6033,7 @@ function denialFor(introduced, ledger, dir, what) {
     else if (verdict.localSource) local.push({ c, entry: verdict.localSource });
     else if (c.url) urls.push({ c });
     else if (c.tag) tagged.push({ c });
-    else unchecked.push({ c, last: verdict.check });
+    else unchecked.push({ c, last: verdict.check, stale: verdict.stale ?? null });
   }
   if (held.length === 0 && unreadable.length === 0 && local.length === 0 && unchecked.length === 0 && tagged.length === 0 && urls.length === 0) return null;
   const lines = [`4DA guard: this ${what} was stopped before it ran.`];
@@ -5969,7 +6062,8 @@ function denialFor(introduced, ledger, dir, what) {
       `- ${quotedChange(c)}: a dist-tag or branch, not a version. dependency_check reads exact versions, ranges and latest, so no call clears a tag: name the version the tag points to, check that version with dependency_check, and run the ${what} with that version.`,
     );
   }
-  for (const { c, last } of unchecked.slice(0, 10)) {
+  for (const { c, last, stale } of unchecked.slice(0, 10)) {
+    if (stale) lines.push(`- ${quotedChange(c)}: the verdict for latest is older than 1 hour (it was ${stale.verdict} at ${when(stale)}): a release published since is not what it judged, so check it again.`);
     if (last) lines.push(`- ${quotedChange(c)}: the last dependency_check answer was unknown at ${when(last)}, recorded reason ${last.reason ? quoted(serverText(last.reason, 240), 260) : "(none)"}.`);
   }
   // The names are the agent's to judge before anything is sent: the hook has no registry and no
@@ -6257,6 +6351,10 @@ function preToolUse(input, env, now, readBudgetMs = READ_BUDGET_MS) {
 
 /** preToolUse's work: the versions the call introduces, against the ledger. */
 function judgeCall(input, env, now) {
+  // Q3: the folder of the call (a command's cwd, an edit's file folder), for a private record's project scope.
+  const cwd = resolve(typeof input?.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd());
+  const file = typeof input?.tool_input?.file_path === "string" ? input.tool_input.file_path : null;
+  callFolder = file && input.tool_name !== "Bash" && input.tool_name !== "PowerShell" ? dirname(resolve(cwd, file)) : cwd;
   if (overBudget()) {
     // Already past the budget before reading (a slow start or stdin): read nothing more.
   }
@@ -6562,7 +6660,7 @@ const INSTALL_ADVICE = "The package manager decides the releases actually instal
 /**
  * Round 17 (L6): the words after which a manager has installed or may have installed releases,
  * package named or not: an install, add, update, sync or ci (`npm ci`, `pnpm install
- * --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`), and Cargo's fetch and build, which
+ * --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`), and Cargo's fetch, build, run and test (and b, r, t), which
  * fetch what a changed manifest asks for. npm's words are read through its own abbreviations.
  */
 const ADVICE_VERBS = new Map([
@@ -6572,7 +6670,7 @@ const ADVICE_VERBS = new Map([
   ["pip", new Set(["install"])],
   ["uv", new Set(["add", "sync", "install"])],
   ["poetry", new Set(["add", "install", "update", "sync"])],
-  ["cargo", new Set(["add", "install", "update", "fetch", "build"])],
+  ["cargo", new Set(["add", "install", "update", "fetch", "build", "b", "run", "r", "test", "t"])],
   ["go", new Set(["get", "install", "download"])],
 ]);
 const NPM_ADVICE_COMMANDS = new Set(["install", "install-test", "ci", "install-ci-test", "update", "link"]);

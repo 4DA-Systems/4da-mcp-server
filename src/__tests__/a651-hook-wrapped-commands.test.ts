@@ -86,7 +86,7 @@ describe("commands run through a shell or a runner are read", () => {
 
   // Round 8: a tool installed from the registry is the same question as an add, and is read as one.
   it.each([
-    ["cargo install ripgrep@14.1.1", { ecosystem: "crates.io", name: "ripgrep", spec: "14.1.1" }],
+    ["cargo install ripgrep@14.1.1", { ecosystem: "crates.io", name: "ripgrep", spec: "=14.1.1" }], // round 20, Q1: cargo install installs exactly the version named
     ["yarn global add typescript@5.6.3", { ecosystem: "npm", name: "typescript", spec: "5.6.3" }],
     ["go install golang.org/x/tools/gopls@v0.16.2", { ecosystem: "Go", name: "golang.org/x/tools/gopls", spec: "v0.16.2" }],
   ])("a global tool from the registry is read: %s", (command, item) => {

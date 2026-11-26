@@ -154,7 +154,7 @@ describe("J3: an index is the project's own only when private by shape; any othe
     expect(run("npm install http://localhost:8080/acme-widget-1.0.0.tgz").decision).toBe("allow");
   });
   it("a private record releases a name judged from another host", () => {
-    s.ledger([{ ecosystem: "npm", package: "acme-widget", version: "1.0.0", verdict: "unknown", not_checked: "private", reason: "a private-registry rule covers it" }]);
+    s.ledger([{ ecosystem: "npm", package: "acme-widget", version: "1.0.0", verdict: "unknown", not_checked: "private", private_rule: "listed", reason: "a private-registry rule covers it" }]);
     expect(run("npm install --registry https://npm.mycorp.com acme-widget@1.0.0").decision).toBe("allow");
   });
 });
