@@ -260,3 +260,18 @@ describe("8: option values", () => {
     expect(r.items).toEqual([item]);
   });
 });
+
+describe("6 (follow-up): the tenth check's three ordinary holds release through the remedy they print", () => {
+  it.each([
+    ["bun update typescript@5.6.3", "Bash"],
+    ["docker run --rm -v $PWD:/app -w /app node:22 pnpm install", "Bash"],
+    ["if (Test-Path node_modules) { npm ci } else { npm install }", "PowerShell"],
+  ])("%s", (command, tool) => {
+    const r = run(command, tool);
+    expect(r.decision).toBe("deny");
+    const remedy = /plain command of its own: `([^`]+)`/.exec(r.text)?.[1];
+    expect(remedy, r.text).toBeDefined();
+    releases(remedy as string);
+    expect(run(remedy as string).decision).toBe("allow");
+  });
+});

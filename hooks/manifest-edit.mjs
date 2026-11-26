@@ -3470,7 +3470,11 @@ function accountLine(line, dialect, depth = 0) {
   const redirects = [];
   const links = [];
   const commands = quietly(() => simpleCommands(line, dialect, redirects, dropped, MAX_ACCOUNT_CHARS, links));
-  if (!commands) return dialect === "bash" && line.includes("<<") ? dataHeredoc(line) : "a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)";
+  if (!commands) {
+    if (dialect === "bash" && line.includes("<<")) return dataHeredoc(line);
+    accountRemedy = unparsedRemedy(line);
+    return "a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)";
+  }
   // A PowerShell command with a comma or --%: each of its two readings is accounted for.
   for (const { text, readings } of dropped) {
     if (!detectsInstall(text)) continue;
@@ -4260,6 +4264,17 @@ function remedyOperand(manager, word) {
     return name && !name.includes("...") ? name : null;
   }
   return null;
+}
+
+/**
+ * The remedy for a line this hook cannot take apart: write the values out, or run the install as
+ * the plain command built from the line's own words (`docker run -v $PWD:/app ... pnpm install`:
+ * the path instead of $PWD, or `pnpm install`).
+ */
+function unparsedRemedy(line) {
+  const command = remedyCommand(String(line).slice(0, 4096).split(/[\s;&|(){}]+/).filter(Boolean));
+  const plain = command ? `Run it as a plain command of its own: \`${command}\` (no other options)` : "Run it as a plain command of its own: `<manager> <verb> <name>@<exact version>` (no other options)";
+  return `${plain}, or write the values out in full (a path instead of $PWD, a version instead of a variable, single quotes instead of a substitution): it passes once dependency_check answers proceed or review for each version it installs. If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
 }
 
 /** The not-read remedy for the command that was not read: a concrete command when one can be built. */
