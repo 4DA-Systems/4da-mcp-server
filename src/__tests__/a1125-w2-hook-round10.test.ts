@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
-import { answerDenial } from "./helpers/a1125-hook-run.js";
+import { followRemedy, answerDenial } from "./helpers/a1125-hook-run.js";
 
 let s: Sandbox;
 beforeEach(() => {
@@ -55,8 +55,8 @@ describe("S2: a constraints or overrides file beside a named package", () => {
   it.each(["pip install requests -c c.txt", "uv pip install requests --overrides o.txt", "uv add requests --constraints c.txt", "pip install requests==2.32.3 --constraint c.txt"])("%s: held, name the version", (command) => {
     const r = run(command);
     expect(r.decision).toBe("deny");
-    expect(r.text).toContain("name the version on the command line");
-    heldThenReleased("pip install requests==2.32.3", { ecosystem: "PyPI", package: "requests", to: "2.32.3" });
+    // Round 13: the remedy names the file option; removed, the named package is judged on its own.
+    expect(followRemedy(command, r.text)).toBe(command.replace(/\s+(?:-c|--constraints?|--overrides?)\s+\S+/, ""));
   });
 
   it.each(["pip install -r requirements.txt -c constraints.txt", "uv pip install -r requirements.txt --overrides o.txt", "pip install -c constraints.txt -e ."])("%s: a file-driven install goes ahead", (command) => {

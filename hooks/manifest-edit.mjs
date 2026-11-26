@@ -2425,7 +2425,7 @@ const JS_VALUES = {
 // change no manifest version this hook can name, and are read as nothing). npm's are resolved with
 // npm's own table (npmCommand); bun's from `bun --help`: `install` (alias `i`) with a package adds
 // it, as `add` (alias `a`) does.
-const JS_SUBCOMMANDS = { npm: new Set(["install", "install-test"]), pnpm: new Set(["add", "install", "i", "up", "update", "upgrade"]), yarn: new Set(["add", "up", "upgrade"]), bun: new Set(["add", "a", "install", "i"]) };
+const JS_SUBCOMMANDS = { npm: new Set(["install", "install-test", "link"]), pnpm: new Set(["add", "install", "i", "up", "update", "upgrade", "link", "ln"]), yarn: new Set(["add", "up", "upgrade", "link"]), bun: new Set(["add", "a", "install", "i", "update", "link"]) };
 /** Package-manager subcommands that run another command or package: what they run is read as a command. */
 // `bun run` and `yarn run` run a script, a binary or (Bun, classic Yarn) a command: what they run is read too.
 const JS_RUNNERS = { npm: new Set(["exec"]), pnpm: new Set(["dlx", "exec"]), yarn: new Set(["dlx", "exec", "run"]), bun: new Set(["x", "run", "exec"]) };
@@ -2606,9 +2606,9 @@ function jsInstalls(manager, args) {
   const latestFlag = args.includes("-L") || args.includes("--latest");
   const writesNewest =
     manager === "npm" ||
-    (manager === "pnpm" && (["add", "install", "i"].includes(sub) || latestFlag)) ||
-    (manager === "yarn" && (sub === "add" || sub === "up" || (sub === "upgrade" && latestFlag))) ||
-    (manager === "bun" && ["add", "a", "install", "i"].includes(sub));
+    (manager === "pnpm" && (["add", "install", "i", "link", "ln"].includes(sub) || latestFlag)) ||
+    (manager === "yarn" && (sub === "add" || sub === "up" || sub === "link" || (sub === "upgrade" && latestFlag))) ||
+    (manager === "bun" && ["add", "a", "install", "i", "link"].includes(sub));
   const out = [];
   for (const word of all.slice(1)) {
     const file = registryFile(word);
@@ -3052,14 +3052,17 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     });
   }
   if (/^pip(?:\d+(?:\.\d+)*)?$/.test(program)) return pipInstalls(args);
-  if (/^python(?:\d+(?:\.\d+)*)?$/.test(program) || program === "py") {
+  if (/^(?:python|pythonw|py)(?:\d+(?:\.\d+)*)?w?$/.test(program)) {
     // The interpreter's own options before `-m pip` (`python -u -m pip`, `python3 -X utf8 -m pip`,
     // `py -3.12 -m pip`); `-c` code, a script or stdin is not read.
     for (let j = 0; j < args.length; j++) {
       const a = args[j];
       // `python -m piptools compile ... --upgrade-package "x==v"` is pip-compile.
-      if (a === "-m" && args[j + 1] === "piptools") return args[j + 2] === "compile" ? upgradePackages(args.slice(j + 3)) : [];
-      if (a === "-m") {
+      // `-m`, glued to its module (`-mpip`) or after other one-letter options (`-Im pip`, `-Impip`).
+      const glued = /^-[uBOsSEIbdqvRP]*m(pip\d*(?:\.\d+)?)?$/.exec(a);
+      if (glued?.[1]) return pipInstalls(args.slice(j + 1));
+      if (glued && args[j + 1] === "piptools") return args[j + 2] === "compile" ? upgradePackages(args.slice(j + 3)) : [];
+      if (glued) {
         const module = args[j + 1] ?? "";
         if (/^pip(?:\d+(?:\.\d+)*)?$/.test(module)) return pipInstalls(args.slice(j + 2));
         // `python -m uv add x`, `python -m poetry add x`: the manager the module is.
@@ -3196,7 +3199,7 @@ const GH_DATA_VERBS = new Set(["create", "edit", "comment", "review", "view", "l
 /** Public registry and index hosts (an index naming one installs the public package). */
 const PUBLIC_INDEX_HOSTS = new Set(["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com", "registry.npmmirror.com", "pypi.org", "pypi.python.org", "files.pythonhosted.org", "index.crates.io", "crates.io", "static.crates.io", "proxy.golang.org", "sum.golang.org"]);
 const ACCOUNT_REMEDY =
-  "Run it as a plain command of its own: <manager> <verb> <name>@<exact version> (pip: <name>==<version>), or the name alone, with no other options: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs. If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.";
+  "Run the install as a plain command of its own, with its own options as you wrote them, not inside a wrapper, a heredoc, a variable or a substitution: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs (if it is held for a verdict, its denial names the call). If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.";
 
 /** The verbs, by package manager, that can add or move a dependency (npm's through npmCommand). */
 const DETECT_VERBS = new Map([
@@ -3303,12 +3306,24 @@ function sourceKind(value) {
  * the subcommand's). `mode`: "npm" (npm's own names and abbreviations), "go" (single-dash names,
  * `--x` read as `-x`, no clusters), or "" (long names, and one-letter clusters as getopt reads them).
  */
+/**
+ * Round 13: options a table leaves out (they are held) that take a value, by table: the remedy names
+ * the option with its value (`-c x.toml`), so removing what it names leaves the operands as written.
+ */
+const HELD_WITH_VALUE = new Map();
+function heldWithValue() {
+  if (HELD_WITH_VALUE.size > 0) return;
+  const uv = ["--prerelease", "--resolution", "--exclude-newer", "--exclude-newer-package", "--fork-strategy"];
+  for (const [k, v] of [["bun", ["-c", "--config"]], ["pnpm", ["--resolution-mode", "--config"]], ["yarn", ["--tag"]], ["uvadd", uv], ["uvpip", uv], ["uvtool", uv], ["poetry", ["--source"]]]) HELD_WITH_VALUE.set(ACCOUNT_TABLES[k], v);
+}
+
 function readOptions(args, table, mode = "", stop = false) {
+  heldWithValue();
   const positional = [];
   const values = new Map();
   let at = -1;
   const add = (name, value) => (values.get(name) ?? values.set(name, []).get(name)).push(value);
-  const done = (bad) => ({ positional, values, at, bad });
+  const done = (bad, badToken = bad) => ({ positional, values, at, bad, badToken });
   for (let i = 0; i < args.length; i++) {
     tick();
     let a = args[i];
@@ -3326,6 +3341,7 @@ function readOptions(args, table, mode = "", stop = false) {
       positional.push(a);
       continue;
     }
+    const raw = a;
     if (mode === "go" && a.startsWith("--")) a = a.slice(1);
     const eq = a.indexOf("=");
     const name = eq > 0 ? a.slice(0, eq) : a;
@@ -3334,7 +3350,7 @@ function readOptions(args, table, mode = "", stop = false) {
       // npm's long shorthands (`--silent` is `--loglevel=silent`): switches.
       if (eq < 0 && NPM_LONG_SHORTHANDS.has(name.slice(2))) continue;
       const resolved = npmOptionName(name.slice(negated ? 5 : 2));
-      if (resolved === null || NPM_RESOLVING.has(resolved)) return done(a);
+      if (resolved === null || NPM_RESOLVING.has(resolved)) return done(a, NPM_RESOLVING.has(resolved) && eq < 0 && i + 1 < args.length ? `${a} ${args[i + 1]}` : a);
       if (eq > 0 || negated || !NPM_VALUE_OPTIONS.has(resolved)) {
         // A switch: npm also takes a following `true` / `false` as its value.
         if (eq < 0 && (args[i + 1] === "true" || args[i + 1] === "false")) i++;
@@ -3388,7 +3404,8 @@ function readOptions(args, table, mode = "", stop = false) {
       }
       if (ok) continue;
     }
-    return done(a);
+    // An option left out of the table that is known to take a value: named with it, so leaving both out is one step.
+    return done(a, eq < 0 && i + 1 < args.length && HELD_WITH_VALUE.get(table)?.includes(name) ? `${raw} ${args[i + 1]}` : raw);
   }
   return done(null);
 }
@@ -3462,10 +3479,16 @@ function accountLine(line, dialect, depth = 0) {
   if (dialect === "powershell") {
     const env = psEnvAssignments(line);
     const managed = env.names.find((n) => MANAGER_SETTING.test(n));
-    if (managed) return `the setting ${managed} made earlier in this call`;
+    if (managed) {
+      const statement = env.values[env.names.indexOf(managed)].replace(/^[;\n\r\s]+/, "").trim();
+      // The statement with the `;` that ends it, so leaving it out leaves the rest of the line as written.
+      const token = new RegExp(`${statement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*;`).exec(line)?.[0] ?? statement;
+      return notReadAt(`the setting ${managed} made earlier in this call`, token, settingForm(managed, statement.slice(statement.indexOf("=") + 1)));
+    }
     dataSetting = env.names.some((n) => !INERT_SETTING.test(n));
     // A setting whose value is itself an install (`$env:GIT_EDITOR='npm i x'`) runs when a program reads it: not read.
-    if (env.values.some((v) => detectsInstall(v))) return "a setting whose value names an install";
+    const named = env.values.find((v) => detectsInstall(v));
+    if (named) return notReadAt("a setting whose value names an install", named.replace(/^[;\n\r\s]+/, "").trim());
     line = env.line;
   }
   const dropped = [];
@@ -3474,8 +3497,8 @@ function accountLine(line, dialect, depth = 0) {
   const commands = quietly(() => simpleCommands(line, dialect, redirects, dropped, MAX_ACCOUNT_CHARS, links));
   if (!commands) {
     if (dialect === "bash" && line.includes("<<")) return dataHeredoc(line);
-    accountRemedy = unparsedRemedy(line);
-    return "a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)";
+    const span = /\$\([^()]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`/.exec(line)?.[0];
+    return notReadAt("a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)", span ?? null, span ? "its value written out in single quotes, not a variable or substitution" : null);
   }
   // A PowerShell command with a comma or --%: each of its two readings is accounted for.
   for (const { text, readings } of dropped) {
@@ -3487,7 +3510,7 @@ function accountLine(line, dialect, depth = 0) {
   }
   for (const words of commands) {
     const set = managerSettingIn(words);
-    if (set) return `the setting ${set} made earlier in this call`;
+    if (set) return notReadAt(`the setting ${set} made earlier in this call`, words.join(" "));
     if (settingNamesIn(words).some((n) => !INERT_SETTING.test(n))) dataSetting = true;
   }
   // J1 (b): a data program's text is text only when it goes nowhere that runs it: no write to a
@@ -3504,7 +3527,13 @@ function accountLine(line, dialect, depth = 0) {
     const exempt = !writesManifest && !dataSetting && safeAfter[k];
     const why = accountCommand(commands[k], dialect, depth, exempt);
     if (why) {
-      accountFailed ??= commands[k];
+      if (!exempt && dataCommand(commands[k])) {
+        // The data program would be text; what made it none is the part not read.
+        const setting = dataSetting ? settingPart(commands, k) : null;
+        const pipe = !safeAfter[k] ? unsafeStage(commands, links, k) : null;
+        const write = writesManifest ? redirects.find((r) => r.write && manifestFile(r.target)) : null;
+        accountToken = setting ? { token: setting, form: null } : pipe ? { token: `| ${pipe}`, form: null } : write ? { token: `> ${write.target}`, form: null } : accountToken;
+      }
       return why;
     }
   }
@@ -3531,6 +3560,22 @@ function settingNamesIn(words) {
   if (["export", "declare", "typeset", "local", "readonly"].includes(program)) return words.slice(1).filter((w) => !w.startsWith("-")).map((w) => w.split("=")[0]);
   if (["set-item", "si", "new-item", "ni", "set-content", "sc", "add-content", "ac"].includes(programName(program))) return words.slice(1).flatMap((w) => /^env:([A-Za-z_][A-Za-z0-9_]*)/i.exec(w)?.slice(1) ?? []);
   return [];
+}
+
+/** The setting (not on the inert list) made for a data program: its prefix word, or the earlier command that sets it. */
+function settingPart(commands, k) {
+  const words = commands[k];
+  const start = Math.max(0, commandStart(words));
+  const prefix = words.slice(0, start).find((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !INERT_SETTING.test(settingName(w)));
+  if (prefix) return prefix;
+  for (let j = 0; j < k; j++) if (settingNamesIn(commands[j]).some((n) => !INERT_SETTING.test(n))) return commands[j].join(" ");
+  return null;
+}
+
+/** The first later stage of command k's pipeline that may run what it is given. */
+function unsafeStage(commands, links, k) {
+  for (let j = k; links[j] === "|" && j + 1 < commands.length; j++) if (!sinkCommand(commands[j + 1])) return commands[j + 1].join(" ");
+  return null;
 }
 
 /**
@@ -3789,6 +3834,7 @@ let accountTop = null;
 /** R8-2 for one simple command that holds a detector hit: null when read whole, else the part not read. */
 function accountCommand(words, dialect, depth, exempt = true) {
   tick();
+  accountWords = words;
   // Past the reader's own depth the command is not read (a runner chain of any length is held, never followed).
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // A command with no hit has nothing to account for; one whose program takes the words as data neither.
@@ -3800,12 +3846,12 @@ function accountCommand(words, dialect, depth, exempt = true) {
   const reader = accountTop;
   for (const w of words) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) break;
-    if (MANAGER_SETTING.test(w)) return `the setting ${w.slice(0, w.indexOf("="))}`;
+    if (MANAGER_SETTING.test(w)) return notReadAt(`the setting ${w.slice(0, w.indexOf("="))}`, w, settingForm(w.slice(0, w.indexOf("=")), w.slice(w.indexOf("=") + 1)));
   }
   const start = commandStart(words);
   if (start < 0) return "a prefix or keyword this hook does not read";
   if (start >= words.length) return null;
-  for (const w of words.slice(0, start)) if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && MANAGER_SETTING.test(w)) return `the setting ${w.slice(0, w.indexOf("="))}`;
+  for (const w of words.slice(0, start)) if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && MANAGER_SETTING.test(w)) return notReadAt(`the setting ${w.slice(0, w.indexOf("="))}`, w, settingForm(w.slice(0, w.indexOf("=")), w.slice(w.indexOf("=") + 1)));
   // J2: xargs adds operands read from its input, which this hook cannot see.
   if (words.slice(0, start).some((w) => programName(w) === "xargs")) return "operands xargs reads from its input";
   let program = programName(words[start]);
@@ -3853,21 +3899,31 @@ function accountCommand(words, dialect, depth, exempt = true) {
   if (program === "poetry") return accountPoetry(args, dialect, depth, reader);
   if (program === "cargo") return accountCargo(args, reader);
   if (program === "go") return accountGo(args, reader);
-  return `${program}, which this hook does not read`;
+  // The words before the package manager they run (`stdbuf -oL npm i x`: `stdbuf -oL`).
+  const managerAt = words.findIndex((w, i) => i > start && managerWord(programName(w.replace(/['"]/g, "")).toLowerCase().replace(/@[^@/\\]*$/, "")) !== null);
+  // A manager's other name (`yarnpkg`): that word, written as the name this hook reads.
+  if (managerAt < 0 && MANAGER_ALIASES[program]) return notReadAt(`${program}, which this hook does not read`, words[start], MANAGER_ALIASES[program]);
+  const closes = program === "find" && [";", "+"].includes(words.at(-1) ?? "") ? "the ; or + that ends -exec" : null;
+  return notReadAt(`${program}, which this hook does not read`, managerAt > start ? words.slice(start, managerAt).join(" ") : null, null, closes);
 }
 
 /** Each package the account named must be one the reader judges (the two read the same command). */
 function judgedByReader(names, reader, ecosystem) {
   if (names.length === 0) return null;
   const read = new Set(reader().map((r) => nameKey(r.ecosystem, r.name)));
-  for (const n of names) if (!read.has(nameKey(ecosystem, n))) return `${n}, which this hook did not read as a version to check`;
+  for (const n of names) {
+    if (read.has(nameKey(ecosystem, n))) continue;
+    const lower = n.toLowerCase();
+    const written = accountWords.find((w) => w.replace(/^['"]|['"]$/g, "").toLowerCase().startsWith(lower) && w.replace(/^['"]|['"]$/g, "").length > n.length);
+    return notReadAt(`${n}, which this hook did not read as a version to check`, written ?? null, "the name alone");
+  }
   return null;
 }
 
 /** `uvx` / `uv tool run`: the command it runs, read again, its options read with uv tool install's table. */
 function accountToolRun(args, dialect, depth) {
   const read = readOptions(args, ACCOUNT_TABLES.uvtool, "", true);
-  if (read.bad) return `the option ${read.bad}`;
+  if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   return read.at < 0 ? null : accountCommand(args.slice(read.at), dialect, depth + 1);
 }
 
@@ -3929,7 +3985,7 @@ function accountJs(manager, args, dialect, depth, reader) {
   const table = manager === "npm" ? null : ACCOUNT_TABLES[manager];
   const mode = manager === "npm" ? "npm" : "";
   const head = subcommand(args, table, mode);
-  if (head.bad) return `the option ${head.bad}`;
+  if (head.bad) return notReadAt(`the option ${head.bad}`, head.badToken);
   const { sub, rest } = head;
   if (sub === undefined) return null;
   if (manager === "yarn" && sub === "workspace") return rest.length > 1 ? accountJs("yarn", rest.slice(1), dialect, depth, reader) : null;
@@ -3944,18 +4000,19 @@ function accountJs(manager, args, dialect, depth, reader) {
   if (manager === "yarn" && sub === "global") return rest[0] === "add" ? accountJs("yarn", rest, dialect, depth, reader) : null;
   if (!adds.includes(verb) && !moves.includes(verb) && !links.includes(verb) && !(manager === "yarn" && sub === "install")) return null;
   const read = readOptions(rest, table, mode);
-  if (read.bad) return `the option ${read.bad}`;
+  if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   const values = new Map([...head.values, ...read.values]);
   const registries = values.get("--registry") ?? [];
-  for (const v of registries) if (sourceKind(v) === "unknown") return `the registry ${v}`;
+  for (const v of registries) if (sourceKind(v) === "unknown") return notReadAt(`the registry ${v}`, optionToken("--registry"));
   if (manager === "yarn" && sub === "install") return read.positional.length === 0 ? null : "yarn install with a package, which this hook does not read";
-  if (links.includes(verb)) return read.positional.every((o) => jsOperand(o) === "local") ? null : `${manager} ${sub} of a registry package, which this hook does not read`;
+  // Round 13: a link of a registry name fetches (npm) or names it: read as that name at its newest release.
+  if (links.includes(verb) && read.positional.every((o) => jsOperand(o) === "local")) return null;
   if (registries.length > 0 && registries.every((v) => sourceKind(v) === "private")) return null;
-  const toNewest = adds.includes(verb) || values.has("-L") || values.has("--latest") || (manager === "yarn" && verb === "up");
+  const toNewest = adds.includes(verb) || links.includes(verb) || values.has("-L") || values.has("--latest") || (manager === "yarn" && verb === "up");
   const names = [];
   for (const o of read.positional) {
     const kind = jsOperand(o);
-    if (kind === null) return `${o}, which this hook does not read as a version to check`;
+    if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     if (kind === "local") continue;
     // A name alone moved inside the manifest's range (`npm update x`, `pnpm up x`) installs nothing new.
     if (!toNewest && npmBareName(o)) continue;
@@ -3984,14 +4041,14 @@ function accountNpmPkg(rest) {
 
 function accountPip(args, table, reader) {
   const head = subcommand(args, table);
-  if (head.bad) return `the option ${head.bad}`;
+  if (head.bad) return notReadAt(`the option ${head.bad}`, head.badToken);
   if (head.sub !== "install") return null;
   const read = readOptions(head.rest, table);
-  if (read.bad) return `the option ${read.bad}`;
+  if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   const values = new Map([...head.values, ...read.values]);
   // J2: a requirements or constraints file read from stdin is not one this hook can read.
   for (const k of ["-r", "--requirement", "--requirements", "-c", "--constraint", "--constraints"]) {
-    for (const v of values.get(k) ?? []) if (v === "-" || /^(?:\/dev\/(?:stdin|fd\/\d+)|con)$/i.test(v)) return `${k} ${v}, a file read from the command's input`;
+    for (const v of values.get(k) ?? []) if (v === "-" || /^(?:\/dev\/(?:stdin|fd\/\d+)|con)$/i.test(v)) return notReadAt(`${k} ${v}, a file read from the command's input`, optionToken(k), "a file name");
   }
   const index = ["-i", "--index-url", "--index", "--default-index"].flatMap((k) => values.get(k) ?? []);
   for (const v of index) if (sourceKind(v) === "unknown") return `the index ${v}`;
@@ -3999,7 +4056,7 @@ function accountPip(args, table, reader) {
   const names = [];
   for (const o of read.positional) {
     const kind = pyOperandKind(o);
-    if (kind === null) return `${o}, which this hook does not read as a version to check`;
+    if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     if (kind !== "local") names.push(kind.name);
   }
   return judgePyNames(names, reader, values, table === ACCOUNT_TABLES.uvpip ? "uv" : "pip");
@@ -4007,8 +4064,6 @@ function accountPip(args, table, reader) {
 
 /** Options naming a file that decides the release of the packages named beside it. */
 const CONSTRAINT_OPTIONS = ["-c", "--constraint", "--constraints", "--overrides", "--override", "--build-constraints", "-b"];
-const CONSTRAINT_REMEDY =
-  "A constraints or overrides file decides the release of a package named beside it, and this hook does not read that file: name the version on the command line instead (pip install <name>==<version>, uv add <name>==<version>), without the file, and call dependency_check on it: it passes once dependency_check answers proceed or review. Installing from -r <file> alone (no package named) goes ahead.";
 
 /**
  * Round 11: the one place a PyPI reader with named operands judges them: S2 first (a constraints or
@@ -4038,7 +4093,7 @@ const NAMED_HELD = {
 function namedHeld(manager, values, names) {
   if (names.length === 0) return null;
   const option = (NAMED_HELD[manager] ?? []).find((o) => values.has(o));
-  return option ? `the option ${option} beside the named package ${names[0]}, which can change the release installed` : null;
+  return option ? notReadAt(`the option ${option} beside the named package ${names[0]}, which can change the release installed`, optionToken(option)) : null;
 }
 
 /** S2: a constraints or overrides file beside a named package: held, with "name the version". */
@@ -4046,8 +4101,7 @@ function constraintsBeside(values, names) {
   if (names.length === 0) return null;
   const option = CONSTRAINT_OPTIONS.find((k) => (values.get(k) ?? []).length > 0);
   if (!option) return null;
-  accountRemedy = CONSTRAINT_REMEDY;
-  return `${option} ${values.get(option)[0]}, a file that decides the release of ${names[0]}`;
+  return notReadAt(`${option} ${values.get(option)[0]}, a file that decides the release of ${names[0]}`, optionToken(option));
 }
 
 /** `-P` / `--upgrade-package` values: each a requirement the reader reads. */
@@ -4058,7 +4112,7 @@ function upgradeValues(values) {
 
 function accountUv(args, dialect, depth, reader) {
   const head = subcommand(args, ACCOUNT_TABLES.uvadd);
-  if (head.bad) return `the option ${head.bad}`;
+  if (head.bad) return notReadAt(`the option ${head.bad}`, head.badToken);
   const { sub, rest } = head;
   if (sub === "pip") {
     if (rest[0] === "compile") {
@@ -4069,28 +4123,28 @@ function accountUv(args, dialect, depth, reader) {
   }
   if (sub === "run") {
     const inner = readOptions(rest, ACCOUNT_TABLES.uvadd, "", true);
-    if (inner.bad) return `the option ${inner.bad}`;
+    if (inner.bad) return notReadAt(`the option ${inner.bad}`, inner.badToken);
     return inner.at < 0 ? null : accountCommand(rest.slice(inner.at), dialect, depth + 1);
   }
   if (sub === "tool") {
     if (rest[0] === "run") return accountToolRun(rest.slice(1), dialect, depth);
     if (rest[0] !== "install") return null;
     const tool = readOptions(rest.slice(1), ACCOUNT_TABLES.uvtool);
-    if (tool.bad) return `the option ${tool.bad}`;
+    if (tool.bad) return notReadAt(`the option ${tool.bad}`, tool.badToken);
     const index = ["-i", "--index-url", "--index", "--default-index"].flatMap((k) => tool.values.get(k) ?? []);
     for (const v of [...index, ...(tool.values.get("--extra-index-url") ?? [])]) if (sourceKind(v) === "unknown") return `the index ${v}`;
     if (tool.values.has("--no-index") || (index.length > 0 && index.every((v) => sourceKind(v) === "private"))) return null;
     const names = [];
     for (const o of [...tool.positional.slice(0, 1), ...(tool.values.get("--with") ?? [])]) {
       const kind = pyOperandKind(o);
-      if (kind === null) return `${o}, which this hook does not read as a version to check`;
+      if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
       if (kind !== "local") names.push(kind.name);
     }
     return judgePyNames(names, reader, tool.values, "uv");
   }
   if (sub !== "add" && sub !== "sync" && sub !== "lock") return null;
   const read = readOptions(rest, ACCOUNT_TABLES.uvadd);
-  if (read.bad) return `the option ${read.bad}`;
+  if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   const values = new Map([...head.values, ...read.values]);
   const upgrade = upgradeValues(values);
   if (upgrade) return upgrade;
@@ -4101,7 +4155,7 @@ function accountUv(args, dialect, depth, reader) {
   const names = [];
   for (const o of read.positional) {
     const kind = pyOperandKind(o);
-    if (kind === null) return `${o}, which this hook does not read as a version to check`;
+    if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     if (kind !== "local") names.push(kind.name);
   }
   return judgePyNames(names, reader, values, "uv");
@@ -4109,22 +4163,26 @@ function accountUv(args, dialect, depth, reader) {
 
 function accountPoetry(args, dialect, depth, reader) {
   const first = subcommand(args, ACCOUNT_TABLES.poetry);
-  if (first.bad) return `the option ${first.bad}`;
+  if (first.bad) return notReadAt(`the option ${first.bad}`, first.badToken);
   // S4: `poetry self add x==v` is an add.
   const head = first.sub === "self" ? subcommand(first.rest, ACCOUNT_TABLES.poetry) : first;
-  if (head.bad) return `the option ${head.bad}`;
+  if (head.bad) return notReadAt(`the option ${head.bad}`, head.badToken);
   const { sub, rest } = head;
   if (sub === "run") return rest.length > 0 ? accountCommand(rest, dialect, depth + 1) : null;
   if (sub !== "add" && sub !== "install" && sub !== "update" && sub !== "lock") return null;
   const read = readOptions(rest, ACCOUNT_TABLES.poetry);
-  if (read.bad) return `the option ${read.bad}`;
+  if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   if (sub !== "add") return null;
   if ((read.values.get("--source") ?? []).some((v) => !/^pypi$/i.test(v))) return null;
+  // Poetry 2 reads the word after a bare --optional as an extra's name (Poetry 1: a switch): which
+  // word is the package is not known. Named, with the spelling both read alike.
+  if ((read.values.get("--optional") ?? []).includes("") && read.positional.length > 0 && !rest.some((w) => w.startsWith("--optional=")))
+    return notReadAt("the option --optional before a package (Poetry 2 reads the word after it as an extra's name)", "--optional", "`--optional=<extra name>`");
   const names = [];
   for (const o of read.positional) {
     if (pyOperandKind(o) === "local") continue;
     const r = quietly(() => poetrySpec(o));
-    if (!r) return `${o}, which this hook does not read as a version to check`;
+    if (!r) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     names.push(r.name);
   }
   return judgePyNames(names, reader, read.values, "poetry");
@@ -4132,11 +4190,11 @@ function accountPoetry(args, dialect, depth, reader) {
 
 function accountCargo(args, reader) {
   const head = subcommand(args[0]?.startsWith("+") ? args.slice(1) : args, ACCOUNT_TABLES.cargo);
-  if (head.bad) return `the option ${head.bad}`;
+  if (head.bad) return notReadAt(`the option ${head.bad}`, head.badToken);
   const { sub, rest } = head;
   if (sub !== "add" && sub !== "install" && sub !== "update") return null;
   const read = readOptions(rest, ACCOUNT_TABLES.cargo);
-  if (read.bad) return `the option ${read.bad}`;
+  if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   const values = new Map([...head.values, ...read.values]);
   for (const v of values.get("--index") ?? []) if (sourceKind(v) === "unknown") return `the index ${v}`;
   const nonPublic = values.has("--path") || values.has("--git") || (values.get("--registry") ?? []).some((v) => v !== "crates-io") || (values.get("--index") ?? []).some((v) => sourceKind(v) === "private");
@@ -4149,18 +4207,18 @@ function accountCargo(args, reader) {
     const m = CARGO_SPEC.exec(o);
     if (/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(o)) names.push(o);
     else if (m) names.push(m[1]);
-    else return `${o}, which this hook does not read as a version to check`;
+    else return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
   }
   return (sub === "add" ? namedHeld("cargo", values, names) : null) ?? judgedByReader(names, reader, "crates.io");
 }
 
 function accountGo(args, reader) {
   const head = subcommand(args, ACCOUNT_TABLES.go, "go");
-  if (head.bad) return `the option ${head.bad}`;
+  if (head.bad) return notReadAt(`the option ${head.bad}`, head.badToken);
   const { sub, rest } = head;
   if ((sub === "mod" || sub === "work") && rest[0] === "edit") {
     const edit = readOptions(rest.slice(1), ACCOUNT_TABLES.gomodedit, "go");
-    if (edit.bad) return `the option ${edit.bad}`;
+    if (edit.bad) return notReadAt(`the option ${edit.bad}`, edit.badToken);
     for (const v of edit.values.get("-require") ?? []) {
       const m = GO_SPEC.exec(v);
       if (!m || !GO_EXACT.test(m[2])) return `-require=${v}, which this hook does not read as a version to check`;
@@ -4174,13 +4232,13 @@ function accountGo(args, reader) {
   }
   if (sub !== "get" && sub !== "install") return null;
   const read = readOptions(rest, ACCOUNT_TABLES.go, "go");
-  if (read.bad) return `the option ${read.bad}`;
+  if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   if (sub === "install") {
     const names = [];
     for (const o of read.positional) {
       if (!o.includes("@")) continue;
       const m = GO_SPEC.exec(o);
-      if (o.includes("...") || !m || !(m[2] === "latest" || GO_EXACT.test(m[2]) || /^v\d+(?:\.\d+)?$/.test(m[2]) || isDistTag(m[2]))) return `${o}, which this hook does not read as a version to check`;
+      if (o.includes("...") || !m || !(m[2] === "latest" || GO_EXACT.test(m[2]) || /^v\d+(?:\.\d+)?$/.test(m[2]) || isDistTag(m[2]))) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
       names.push(m[1]);
     }
     return namedHeld("go", read.values, names) ?? judgedByReader(names, reader, "Go");
@@ -4188,13 +4246,13 @@ function accountGo(args, reader) {
   const names = [];
   for (const o of read.positional) {
     if (GO_LOCAL_PATH.test(o) && !o.includes("@")) continue;
-    if (o.includes("...")) return `${o}, a package pattern this hook does not read`;
+    if (o.includes("...")) return notReadAt(`${o}, a package pattern this hook does not read`, o, "one module path, without /...");
     const m = GO_SPEC.exec(o);
     if (m && m[2] === "none") continue;
     const bare = /^[A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*$/.test(o);
     if (bare) names.push(o);
     else if (m && (m[2] === "latest" || GO_EXACT.test(m[2]) || /^v\d+(?:\.\d+)?$/.test(m[2]) || isDistTag(m[2]))) names.push(m[1]);
-    else return `${o}, which this hook does not read as a version to check`;
+    else return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
   }
   return namedHeld("go", read.values, names) ?? judgedByReader(names, reader, "Go");
 }
@@ -4207,118 +4265,11 @@ function accountGo(args, reader) {
 const SED_AWK_REMEDY =
   "sed and awk can run a command from their script, and this hook does not read their scripts: to search for that text use grep, rg or Select-String; to write it into a file use the Write tool.";
 
-/**
- * Round 12 (tenth independent check, S28): the plain command the not-read remedy names, built from
- * a form this hook reads and releases, or null. The manager is found anywhere in the held command
- * (after prefixes, wrappers, `python -m pip`); a verb with a named version becomes that manager's
- * add or install (`bun update x@1` -> `bun add x@1`); each operand keeps its exact version when it
- * has one this hook reads, and is the name alone otherwise; options are left out.
- */
-const REMEDY_ADD = { npm: "install", pnpm: "add", yarn: "add", bun: "add", pip: "install", uv: "add", poetry: "add", cargo: "add", go: "get" };
-function remedyCommand(words) {
-  let at = -1;
-  let manager = null;
-  for (let i = 0; i < words.length && manager === null; i++) {
-    const w = words[i].replace(/['"]/g, "");
-    if ((w === "-m" || /^-[A-Za-z]+m$/.test(w)) && /^pip\d*$/.test(words[i + 1] ?? "")) {
-      manager = "pip";
-      at = i + 1;
-      break;
-    }
-    const m = managerWord(programName(w).toLowerCase().replace(/@[^@/\\]*$/, ""));
-    if (m) {
-      manager = m;
-      at = i;
-    }
-  }
-  if (manager === null) return null;
-  const rest = words.slice(at + 1);
-  const uvPip = manager === "uv" && rest.includes("pip");
-  const verbAt = rest.findIndex((w) => !w.startsWith("-") && (isManagerVerb(manager, w.toLowerCase()) || (manager === "go" && w === "mod")));
-  if (verbAt < 0) return null;
-  let verb = rest[verbAt].toLowerCase();
-  if (manager === "go" && verb === "mod") verb = "edit";
-  const after = rest.slice(verbAt + 1);
-  // Operands: the words that are not options, an option that takes a value taking its value with it.
-  const values = manager === "go" ? GO_VALUES : manager === "cargo" ? CARGO_VALUES : manager === "pip" || manager === "uv" ? PIP_VALUES : manager === "poetry" ? POETRY_VALUES : JS_VALUES[manager] ?? new Set();
-  const operands = [];
-  const required = [];
-  for (let i = 0; i < after.length; i++) {
-    const a = after[i];
-    if (a.startsWith("-")) {
-      const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
-      if (manager === "go" && (name === "-require" || name === "--require")) required.push(a.includes("=") ? a.slice(a.indexOf("=") + 1) : (after[++i] ?? ""));
-      else if (!a.includes("=") && (values.has(name) || (manager === "npm" && NPM_VALUE_OPTIONS.has(name.replace(/^--/, ""))))) i++;
-      continue;
-    }
-    operands.push(a);
-  }
-  if (manager === "go" && verb === "edit") {
-    operands.push(...required);
-    verb = "get";
-  }
-  const names = operands.map((o) => remedyOperand(manager, o)).filter(Boolean);
-  if (names.length === 0) {
-    // No package named: the command as typed, without options (the lockfile, or the manifest's ranges).
-    // pip needs a requirement (a bare `pip install` is refused by pip itself): the general remedy then.
-    if ((manager === "go" && verb !== "get") || manager === "pip" || uvPip) return null;
-    return `${manager} ${verb}`;
-  }
-  const install = manager === "cargo" && verb === "install" ? "install" : manager === "go" && verb === "install" ? "install" : REMEDY_ADD[manager];
-  return `${manager === "uv" && uvPip ? "uv pip install" : `${manager} ${install}`} ${names.join(" ")}`;
-}
-
-/** One operand as the remedy names it: its exact version when this hook reads one, else the name alone; null for none. */
-function remedyOperand(manager, word) {
-  const w = word.replace(/['"]/g, "");
-  if (PACKAGE_MANAGERS.has(manager)) {
-    const file = registryFile(w);
-    if (file && file.ecosystem === "npm") return `${file.name}@${file.spec}`;
-    if (npmBareName(w)) return w;
-    const m = NPM_SPEC.exec(w);
-    if (!m) return null;
-    const exact = FULL_SEMVER.exec(m[2].trim());
-    return exact ? `${m[1]}@${exact[1]}` : m[1];
-  }
-  if (manager === "pip" || manager === "uv" || manager === "poetry") {
-    const file = registryFile(w);
-    if (file && file.ecosystem === "PyPI") return `${file.name}${file.spec}`;
-    const r = quietly(() => pep508(w));
-    if (r && /^==\d[\w.!+]*$/.test(r.spec)) return `${r.name}${r.spec}`;
-    const name = r?.name ?? pyBareName(w) ?? /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})/.exec(w)?.[1] ?? null;
-    return name && !/\.(?:txt|in|cfg|toml|lock|json|ya?ml|ini|md|whl|gz|zip)$/i.test(name) ? name : null;
-  }
-  if (manager === "cargo") {
-    const m = CARGO_SPEC.exec(w);
-    if (m && FULL_SEMVER.test(m[2].trim())) return `${m[1]}@${m[2].trim().replace(/^=/, "")}`;
-    const name = m ? m[1] : /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(w) ? w : null;
-    return name;
-  }
-  if (manager === "go") {
-    const m = GO_SPEC.exec(w);
-    if (m && GO_EXACT.test(m[2])) return `${m[1]}@${m[2]}`;
-    const name = m ? m[1] : /^[A-Za-z0-9][A-Za-z0-9._~-]*\.[A-Za-z]{2,}(?:\/[A-Za-z0-9._~+-]+)*$/.test(w) ? w : null;
-    return name && !name.includes("...") ? name : null;
-  }
-  return null;
-}
-
-/**
- * The remedy for a line this hook cannot take apart: write the values out, or run the install as
- * the plain command built from the line's own words (`docker run -v $PWD:/app ... pnpm install`:
- * the path instead of $PWD, or `pnpm install`).
- */
-function unparsedRemedy(line) {
-  const command = remedyCommand(String(line).slice(0, 4096).split(/[\s;&|(){}]+/).filter(Boolean));
-  const plain = command ? `Run it as a plain command of its own: \`${command}\` (no other options)` : "Run it as a plain command of its own: `<manager> <verb> <name>@<exact version>` (no other options)";
-  return `${plain}, or write the values out in full (a path instead of $PWD, a version instead of a variable, single quotes instead of a substitution): it passes once dependency_check answers proceed or review for each version it installs. If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
-}
-
-/** The not-read remedy for the command that was not read: a concrete command when one can be built. */
-function remedyText(words) {
-  const command = words ? remedyCommand(words) : null;
-  if (!command) return ACCOUNT_REMEDY;
-  return `Run it as a plain command of its own: \`${command}\` (no other options): the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs. If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
+/** The not-read remedy: the part not read, named, and what to do with it in the user's own command. */
+function remedyText(part) {
+  if (!part) return ACCOUNT_REMEDY;
+  const change = part.form ? `with \`${part.token}\` written as ${part.form}` : `without \`${part.token}\`${part.also ? ` and ${part.also}` : ""}`;
+  return `Run the same command ${change}: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs (if it is held for a verdict, its denial names the call). If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
 }
 
 /** Round 13: make runs what its variables, --eval and SHELL say; this hook reads none of them. */
@@ -4327,13 +4278,49 @@ const MAKE_REMEDY =
 
 /** A remedy other than ACCOUNT_REMEDY for the part accountCall returns (set by the part's reader). */
 let accountRemedy = null;
-/** The simple command that was not read (its remedy is built from it). */
-let accountFailed = null;
+/**
+ * Round 13 (eleventh independent check, remedies): the first part of the line the account did not
+ * read, as the user wrote it: { token, form } (form: what to write it as; null: leave it out). The
+ * remedy names it and nothing else: "run the same command without <token>" or "with <token> written
+ * as <form>"; it never prints a command the user did not write.
+ */
+let accountToken = null;
+/** The words of the simple command being accounted for (optionToken finds an option's spelling in them). */
+let accountWords = [];
+const OPERAND_FORM = "an exact version (name@1.2.3, pip: name==1.2.3) or the name alone";
+/** Other names of a package manager, and the name this hook reads. */
+const MANAGER_ALIASES = { yarnpkg: "yarn" };
+/**
+ * An npm setting that only places the install (npm_config_save_dev): the option it stands for, so
+ * leaving the setting out keeps the placement. Null for any other setting (it is left out).
+ */
+function settingForm(name, value) {
+  const m = /^npm_config_(.+)$/i.exec(name);
+  if (!m) return null;
+  const resolved = npmOptionName(m[1].toLowerCase().replace(/_/g, "-"));
+  if (resolved === null || NPM_RESOLVING.has(resolved) || ["registry", "userconfig", "globalconfig"].includes(resolved)) return null;
+  return "`--" + resolved + "=" + value.trim().replace(/^['"]|['"]$/g, "") + "` on the package manager's command";
+}
+/** Records the first part not read and returns the reason. */
+function notReadAt(reason, token, form = null, also = null) {
+  if (accountToken === null && typeof token === "string" && token !== "") accountToken = { token, form, also };
+  return reason;
+}
+/** An option as it stands in the command: `--opt value`, `--opt=value` or `-xvalue`. */
+function optionToken(option) {
+  const w = accountWords;
+  for (let i = 0; i < w.length; i++) {
+    if (w[i] === option) return w[i + 1] !== undefined && !w[i + 1].startsWith("-") ? `${w[i]} ${w[i + 1]}` : w[i];
+    if (w[i].startsWith(`${option}=`)) return w[i];
+    if (/^-[A-Za-z]$/.test(option) && w[i].startsWith(option) && w[i].length > 2 && !w[i].startsWith("--")) return w[i];
+  }
+  return option;
+}
 
 function accountCall(command, dialect) {
   fault("account");
   accountRemedy = null;
-  accountFailed = null;
+  accountToken = null;
   if (!detectsInstall(command)) return null;
   if (command.length > MAX_ACCOUNT_CHARS) return `a command over ${MAX_ACCOUNT_CHARS / 1024 / 1024} MB that names an install`;
   return accountLine(command, dialect);
@@ -5005,7 +4992,7 @@ function judgeCall(input, env, now) {
     const part = accountCall(input.tool_input.command, input.tool_name === "PowerShell" ? "powershell" : "bash");
     if (part !== null) {
       // The reader's own part, when it already found one (a bound it passed), is the one named.
-      refuse(part, accountRemedy ?? remedyText(accountFailed));
+      refuse(part, accountRemedy ?? remedyText(accountToken));
       unreadInstalls = true;
     }
   }

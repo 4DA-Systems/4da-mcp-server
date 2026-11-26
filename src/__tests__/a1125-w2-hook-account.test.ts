@@ -13,9 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { detectsInstall } from "../../hooks/manifest-edit.mjs";
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
-import { answerDenial, timedWithin } from "./helpers/a1125-hook-run.js";
+import { answerDenial, followRemedy, timedWithin } from "./helpers/a1125-hook-run.js";
 
-const REMEDY = "Run it as a plain command of its own";
+const GENERIC = "Run the install as a plain command of its own";
 const AVOID_LATEST = [
   { ecosystem: "npm", package: "lodash", version: "9.9.9", requested: "latest", verdict: "avoid", reason: "test avoid" },
   { ecosystem: "PyPI", package: "requests", version: "9.9.9", requested: "latest", verdict: "avoid", reason: "test avoid" },
@@ -63,16 +63,14 @@ describe("R8-1: the detector", () => {
 });
 
 /**
- * Each command held as not read, beside the command its remedy tells the user to run
- * (`<manager> <verb> <name>@<exact version>`, or the name alone, no other options). NO HOLD WITHOUT
- * A WAY THROUGH: the remedy is run, the dependency_check call its denial names (if any) is answered
- * proceed, and it goes ahead.
+ * Each command held as not read, beside the command its remedy gives when followed mechanically
+ * (round 13: the remedy names the part not read; it is removed, or written in the form named, and
+ * nothing else changes). NO HOLD WITHOUT A WAY THROUGH: that command is run, the dependency_check
+ * call its denial names (if any) is answered proceed, and it goes ahead. A null: the generic remedy
+ * (a heredoc), which names no single part.
  */
-const NOT_READ: [string, string][] = [
-  // spellings the reader does not read
-  ["python -mpip install requests", "pip install requests"],
-  ["pythonw -m pip install requests", "pip install requests"],
-  ["python -Im pip install requests", "pip install requests"],
+const NOT_READ: [string, string | null][] = [
+  // wrappers and other names the reader does not read
   ["stdbuf -oL npm i lodash", "npm i lodash"],
   ["winpty npm i lodash", "npm i lodash"],
   ["cross-env A=1 npm i lodash", "npm i lodash"],
@@ -81,28 +79,28 @@ const NOT_READ: [string, string][] = [
   ["watch -n1 npm i lodash", "npm i lodash"],
   ["yarnpkg add lodash", "yarn add lodash"],
   // options that change what a name resolves to, and settings before the manager
-  ["npm i --tag next lodash", "npm i lodash@4.17.21"],
-  ["npm i --before 2020-01-01 lodash", "npm i lodash@4.17.21"],
+  ["npm i --tag next lodash", "npm i lodash"],
+  ["npm i --before 2020-01-01 lodash", "npm i lodash"],
   ["npm_config_tag=next npm i lodash", "npm i lodash"],
   ["PIP_INDEX_URL=https://example.invalid/simple pip install requests", "pip install requests"],
   ["UV_PRERELEASE=allow uv add requests", "uv add requests"],
   ["bun add -c x.toml lodash", "bun add lodash"],
-  ["bun update --latest lodash", "bun add lodash@4.17.21"],
-  ["pip install --pre requests", "pip install requests==2.32.3"],
-  ["uv add --prerelease allow requests", "uv add requests==2.32.3"],
-  ["uv lock --upgrade", "uv lock --upgrade-package requests==2.32.3"],
+  ["bun update --latest lodash", "bun update lodash"],
+  ["pip install --pre requests", "pip install requests"],
+  ["uv add --prerelease allow requests", "uv add requests"],
+  ["uv lock --upgrade", "uv lock"],
   ["npm install --frozen-lockfile", "npm install"],
   // operands not read as a version
   ["npm i lodash@x", "npm i lodash"],
-  ["pip install 'requests '", "pip install requests"],
+  ["pip install 'requests '", "pip install 'requests'"],
   ["go get rsc.io/quote/...", "go get rsc.io/quote"],
   // a registry this hook cannot classify
   ["npm i --registry registry lodash", "npm i lodash"],
   // lines this hook cannot take apart
   ["npm install $PKG", "npm install lodash"],
   ["npm i $(cat pkgs.txt)", "npm i lodash"],
-  ["bash <<'EOF'\nnpm i lodash\nEOF", "npm i lodash"],
-  ["cat <<EOF\n$(npm i lodash)\nEOF", "npm i lodash"],
+  ["bash <<'EOF'\nnpm i lodash\nEOF", null],
+  ["cat <<EOF\n$(npm i lodash)\nEOF", null],
 ];
 
 /** Runs `command`; when held for a verdict, answers the call its denial names (proceed) and runs it again. */
@@ -121,9 +119,11 @@ describe("R8-2: a detected command not read whole is held as not read, with one 
     const r = run(command);
     expect(r.decision, r.text).toBe("deny");
     expect(r.text).toContain("could not be read");
-    expect(r.text).toContain(REMEDY);
+    expect(followRemedy(command, r.text), r.text).toBe(remedy);
+    if (remedy === null) expect(r.text).toContain(GENERIC);
     s.ledger([]);
-    releases(remedy);
+    // The generic remedy: the install run as a plain command of its own.
+    releases(remedy ?? "npm i lodash");
   });
 });
 
@@ -305,16 +305,18 @@ describe("R8-3: data programs go ahead", () => {
 });
 
 describe("the remedy releases", () => {
-  it("python -mpip install requests: held as not read; run as the remedy says, it is judged and goes ahead on a proceed", () => {
-    s.ledger([{ ecosystem: "PyPI", package: "requests", version: "2.32.3", requested: "latest", verdict: "proceed" }]);
-    expect(run("python -mpip install requests").text).toContain(REMEDY);
-    expect(run("pip install requests").decision).toBe("allow");
+  it.each(["python -mpip install requests", "pythonw -m pip install requests", "python -Im pip install requests"])("%s is read (round 13): judged on its verdict, released by the call its denial names", (command) => {
+    s.ledger([]);
+    const r = run(command);
+    expect(r.text).not.toContain("could not be read");
+    releases(command);
   });
 
-  it("npm i --tag next lodash: held; npm i lodash@4.17.21 with a proceed goes ahead", () => {
-    s.ledger([{ ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "proceed" }]);
-    expect(run("npm i --tag next lodash").text).toContain(REMEDY);
-    expect(run("npm i lodash@4.17.21").decision).toBe("allow");
+  it("npm i --tag next lodash: held; the remedy removes `--tag next` and nothing else", () => {
+    s.ledger([{ ecosystem: "npm", package: "lodash", version: "9.9.9", requested: "latest", verdict: "proceed" }]);
+    const r = run("npm i --tag next lodash");
+    expect(r.text).toContain("Run the same command without `--tag next`");
+    expect(run(followRemedy("npm i --tag next lodash", r.text) ?? "").decision).toBe("allow");
   });
 
   it("no remedy names a file as a package", () => {
