@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { manifestPairs, pep508, unreadCommandLines, wordsAfterManager } from "../tools/briefing-command-check.js";
 import { MANAGER_NAMES } from "../tools/briefing-canonical.js";
+import { callBudgetMs, runWithCallBudget, WORD_SCAN_CAP } from "../call-budget.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 
 let h: Harness;
@@ -114,6 +115,21 @@ describe("G3: one list of manager names", () => {
 });
 
 describe("G4: CPU is bounded", () => {
+  const many = "add " + Array.from({ length: WORD_SCAN_CAP + 500 }, (_, i) => `zq${i.toString(36).padStart(4, "q")}lib`).join(". add ");
+  it("(b) past the cap of distinct words: review_needed at least, and the reason says split the task", async () => {
+    npm();
+    live ??= await h.live();
+    const r = (await runWithCallBudget(Date.now(), () => executeWhatShouldIKnow(null, { task: many, project_path: h.dir, packages: [] } as never, live!))) as Record<string, any>;
+    expect(level(r)).not.toBe("safe_to_delegate");
+    expect(r.delegation_assessment.reason).toContain("split the task");
+  }, 120_000);
+  it("(c) past the deadline the word scans stop and the answer says it did not finish", async () => {
+    npm();
+    live ??= await h.live();
+    const r = (await runWithCallBudget(Date.now() - callBudgetMs() + 1_000, () => executeWhatShouldIKnow(null, { task: "add zqxnearmissy", project_path: h.dir, packages: [] } as never, live!))) as Record<string, any>;
+    expect(level(r)).not.toBe("safe_to_delegate");
+    expect(r.delegation_assessment.reason).toContain("did not finish reading the task within its time budget");
+  }, 120_000);
   const dist = path.resolve(__dirname, "../../dist/tools/what-should-i-know.js");
   // His slow inputs (e8, e8b), stored as the unit each repeats and the length (a 199 KB string is not vendored).
   const recipes = JSON.parse(readFileSync(path.join(__dirname, "fixtures", "a1133-confirm", "slow-recipes.json"), "utf8")) as Array<{ id: string; unit?: string; head?: string; length?: number }>;

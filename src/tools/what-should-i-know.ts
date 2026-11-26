@@ -74,6 +74,7 @@
  * accepted 10). They no longer decide anything here.
  */
 
+import { WORD_SCAN_CAP, wordScanCut } from "../call-budget.js";
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersion, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import {
@@ -1157,6 +1158,16 @@ export async function executeWhatShouldIKnow(
         assessed.level = "confirmation_needed";
         assessed.reason = `${confirmationReason(waiting.length)}${before}`;
       }
+    }
+    // Round 10, G4: past the call's cap of distinct words or its deadline the near-miss check stopped: the task was
+    // not read in full.
+    const cut = wordScanCut();
+    if (cut) {
+      const said = cut === "cap" ? `This task holds more distinct words than one call reads in full (${WORD_SCAN_CAP}): split the task and ask for each part.` : "This briefing did not finish reading the task within its time budget: split the task and ask for each part.";
+      if (assessed.level === "safe_to_delegate") {
+        assessed.level = "review_needed";
+        assessed.reason = said;
+      } else if (assessed.level !== "human_only") assessed.reason = `${assessed.reason} ${said}`;
     }
     // Round 10 (docs lane B): a command of a tool this briefing does not read, on the raw text (`xargs npm install`,
     // `gem install x`, `composer require x`): said as such, review_needed at most.

@@ -23,6 +23,7 @@
  * counting 1, over the bundled popular-npm.ts list), when there is one: "did you mean lodash?".
  */
 
+import { mayScanWord } from "../call-budget.js";
 import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
@@ -118,6 +119,8 @@ export function closestPopularNpm(name: string): string | null {
   const n = name.trim().toLowerCase();
   const known = CLOSEST.get(n);
   if (known !== undefined) return known;
+  // Past the call's word cap or deadline the scan is not run (the call is marked; call-budget.ts mayScanWord).
+  if (n.length >= 4 && !mayScanWord()) return null;
   const found = closestPopularNpmUncached(n);
   if (CLOSEST.size >= 20_000) CLOSEST.clear();
   CLOSEST.set(n, found);

@@ -8,6 +8,7 @@
  * "npm:name@spec"`. They are versions the briefing happens to read, never a complete reading.
  */
 
+import { mayScanWord } from "../call-budget.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
@@ -33,6 +34,7 @@ export function closestPopularPypi(name: string): string | null {
   const key = normalizePypiName(name);
   const known = CLOSEST_PYPI.get(key);
   if (known !== undefined) return known;
+  if (key.length >= 5 && !mayScanWord()) return null;
   const found = closestPopularPypiUncached(name);
   if (CLOSEST_PYPI.size >= 20_000) CLOSEST_PYPI.clear();
   CLOSEST_PYPI.set(key, found);

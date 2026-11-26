@@ -138,6 +138,33 @@ export function runWithCallBudget<T>(startedAt: number, work: () => Promise<T>):
  * facts a call reads as one snapshot, such as whether a lockfile changed: a scan stat-ed the same
  * lockfile thousands of times, a sixth of a fully cached scan (blind audit round 6).
  */
+/**
+ * Round 10, G4: the per-word scans of one call (the near-miss check) are bounded. A call runs at most
+ * WORD_SCAN_CAP of them on distinct words not seen before, and none once its synchronous budget is spent
+ * (WORD_SCAN_RESERVE_MS before the deadline). Past either, the scan is not run and the call is marked: the briefing
+ * then says the task was not read in full ("split the task") and holds review_needed. Outside a call: no bound.
+ */
+export const WORD_SCAN_CAP = 4_000;
+const WORD_SCAN_RESERVE_MS = 4_000;
+const scans = new WeakMap<object, { n: number; cut: "cap" | "deadline" | null }>();
+export function mayScanWord(): boolean {
+  const budget = current.getStore();
+  if (!budget) return true;
+  let s = scans.get(budget);
+  if (!s) scans.set(budget, (s = { n: 0, cut: null }));
+  if (s.cut) return false;
+  if (s.n >= WORD_SCAN_CAP) s.cut = "cap";
+  else if (budget.deadline - Date.now() < WORD_SCAN_RESERVE_MS) s.cut = "deadline";
+  if (s.cut) return false;
+  s.n++;
+  return true;
+}
+/** Why the running call stopped scanning words (mayScanWord), or null when it did not. */
+export function wordScanCut(): "cap" | "deadline" | null {
+  const budget = current.getStore();
+  return budget ? (scans.get(budget)?.cut ?? null) : null;
+}
+
 export function callMemo<T>(key: string, compute: () => T): T {
   const memo = current.getStore()?.memo;
   if (!memo) return compute();
