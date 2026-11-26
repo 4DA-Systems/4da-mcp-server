@@ -3175,16 +3175,20 @@ function ledgerCall(input, env) {
   }
   const path = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.notebook_path === "string" ? toolInput.notebook_path : null;
   if (path === null) return null;
-  if (namesLedgerText(path, marks)) return "edit";
+  const inFolder = (p) => {
+    const t = normaliseLedgerText(p);
+    return marks.some((m) => t.includes(m));
+  };
+  if (inFolder(path)) return "edit";
   // Another spelling of the folder (an 8.3 name, a junction): the file's folder, resolved.
   try {
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
     const folder = realpathSync.native(dirname(resolve(cwd, path)));
-    if (namesLedgerText(folder, marks)) return "edit";
+    if (inFolder(folder)) return "edit";
   } catch {
     // The folder does not exist: not the data folder.
   }
-  return null;
+  return LEDGER_MENTION.test(normaliseLedgerText(path)) ? "name" : null;
 }
 
 /** The denial for a call that names the ledger. */
@@ -3192,6 +3196,8 @@ function ledgerDenial(what, dir) {
   // The path as both shells read it as written: forward slashes, in single quotes (no escapes).
   const plain = `${dir.replace(/\\/g, "/").replace(/\/+$/, "")}/check-ledger.jsonl`;
   const file = plain.includes("'") ? plain : `'${plain}'`;
+  if (what === "name")
+    return `4DA guard: this edit was stopped before it ran: this call names the 4da check ledger's file name (check-ledger), and only the 4da server writes the ledger (${file}): it records each dependency_check verdict there, and this guard reads it to decide what may be installed. If this file is not the ledger, give it a name without "check-ledger", or tell the user. To change a verdict, call dependency_check again. FOURDA_GUARD is the user's setting, not yours to change.`;
   return what === "command"
     ? `4DA guard: this command was stopped before it ran: it names the 4da check ledger (${file}). Only the 4da server writes it: it records each dependency_check verdict there, and this guard reads it to decide what may be installed. To read it, run cat ${file} (or Get-Content ${file}) as a command of its own, with nothing else on the line (no pipe, redirection or second command). To change a verdict, call dependency_check again. If the user wants the file changed, tell the user; FOURDA_GUARD is the user's setting, not yours to change.`
     : `4DA guard: this edit was stopped before it ran: it writes in the 4da data folder (${quoted(dir, 300)}), where the check ledger is. Only the 4da server writes there: it records each dependency_check verdict, and this guard reads it to decide what may be installed. To change a verdict, call dependency_check again. To read the ledger, run cat ${file} as a command of its own. If the user wants it changed, tell the user; FOURDA_GUARD is the user's setting, not yours to change.`;
@@ -3590,10 +3596,12 @@ function oversized(head) {
     path = null;
   }
   const input = { tool_name: tool, tool_input: { file_path: path ?? undefined, command } };
-  // The ledger, named anywhere in the first part as it arrives (JSON-escaped: a backslash doubled).
+  // The ledger, named anywhere in the first part as it arrives (JSON-escaped backslashes are runs of `/` once normalised).
   const marks = ledgerFolderMarks(process.env);
-  if (tool && namesLedgerText(head, [...marks, ...marks.map((m) => m.replace(/\\/g, "\\\\"))])) {
-    return denyJson(ledgerDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", resolve(dataDir(process.env))));
+  if (tool && namesLedgerText(head, marks)) {
+    const normal = normaliseLedgerText(head);
+    const what = tool === "Bash" || tool === "PowerShell" ? "command" : marks.some((m) => normal.includes(m)) ? "edit" : "name";
+    return denyJson(ledgerDenial(what, resolve(dataDir(process.env))));
   }
   if (!tool || !mayInstall(input) || !readLedgerExists(dataDir(process.env))) return "";
   return denyJson(notReadDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));

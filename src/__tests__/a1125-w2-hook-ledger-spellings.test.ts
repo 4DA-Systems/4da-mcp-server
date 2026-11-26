@@ -53,6 +53,28 @@ describe("the data folder in another spelling is held", () => {
   });
 });
 
+describe("R8-7: the edit denial says what is true", () => {
+  it("an unrelated project's docs/check-ledger.md: held for the file name, not said to be in the data folder", () => {
+    const r = write(`${s.project.replace(/\\/g, "/")}/docs/check-ledger.md`);
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("this call names the 4da check ledger's file name");
+    expect(r.text).not.toContain("it writes in the 4da data folder");
+  });
+
+  it("a write in the data folder says so", () => {
+    const r = write(`${H}/notes.json`);
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("it writes in the 4da data folder");
+  });
+
+  it("an oversized Write of docs/check-ledger.md: the same truthful text", () => {
+    const payload = { session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "docs/check-ledger.md", content: "x".repeat(9 * 1024 * 1024) } };
+    const r = s.run(payload);
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("this call names the 4da check ledger's file name");
+  });
+});
+
 describe("ordinary paths still go ahead", () => {
   it.each([
     ["a relative write", "echo hi > docs/notes.txt"],
