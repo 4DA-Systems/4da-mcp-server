@@ -10,9 +10,6 @@
 
 import type { FourDADatabase } from "../db.js";
 import { rankRowsByRecall, type RankedRecall, type RecallField } from "./recall.js";
-import { semanticScores, type EmbeddingConfig } from "../embeddings.js";
-import { decisionEmbedText } from "./decision-recall.js";
-import { memoryEmbedText } from "./agent-memory.js";
 
 export interface WisdomEntry {
   type: string;
@@ -59,8 +56,6 @@ const WISDOM_MEMORY_FIELDS: RecallField<WisdomMemoryRow>[] = [
 ];
 
 const WISDOM_LIMIT = 6;
-/** Blend weight for semantic cosine vs normalized lexical score in hybrid wisdom. */
-const WISDOM_BLEND = 0.65;
 
 function loadWisdomDecisions(rawDb: ReturnType<FourDADatabase["getRawDb"]>): WisdomDecisionRow[] {
   try {
@@ -140,97 +135,3 @@ export function getRelevantWisdom(db: FourDADatabase, task: string, files: strin
     .map(toWisdomEntry);
 }
 
-/**
- * Hybrid wisdom retrieval: blends alias-aware lexical scoring with embedding
- * cosine similarity (per table, since each is normalized independently), so a
- * paraphrased prior decision or memory surfaces in the briefing even with no
- * shared words. Falls back to pure lexical (and reports it) when nothing embeds.
- */
-export async function getRelevantWisdomHybrid(
-  db: FourDADatabase,
-  task: string,
-  files: string[],
-  config: EmbeddingConfig,
-  /** The text sent to the embedding provider: the screened task, never the task as written (sixth blind check, item 4). */
-  embedText?: string,
-): Promise<{ wisdom: WisdomEntry[]; recall_mode: WisdomRecallMode; recall_note?: string }> {
-  const rawDb = db.getRawDb();
-  // The lexical ranking runs here and may use the file paths; the embedding provider gets the
-  // task text only. README says "no file paths" leave the machine, and a configured OpenAI
-  // embedder is off the machine (audit 2026-11-11 W1 M2-3: `[task, ...files]` was embedded).
-  const query = [task, ...files].join(" ");
-  // The task as the screen leaves it: credentials, settings' values, URL user info and option values blanked,
-  // so the briefing's "nothing about it was sent" holds for the embedding provider too (sixth blind check, item 4).
-  const embedQuery = (embedText ?? task).replace(/\s+/g, " ").trim();
-  const decisions = loadWisdomDecisions(rawDb);
-  const memories = loadWisdomMemories(rawDb);
-
-  // Lexical baselines over ALL rows, per table, for normalization + fallback.
-  const decLex = rankRowsByRecall(decisions, query, WISDOM_DECISION_FIELDS, decisions.length);
-  const memLex = rankRowsByRecall(memories, query, WISDOM_MEMORY_FIELDS, memories.length);
-  const decLexById = new Map<number, number>(decLex.map((i) => [i.row.id, i.score]));
-  const memLexById = new Map<number, number>(memLex.map((i) => [i.row.id, i.score]));
-  const decMax = decLex.length ? decLex[0].score : 0;
-  const memMax = memLex.length ? memLex[0].score : 0;
-
-  const decSem = decisions.length
-    ? await semanticScores(
-        db,
-        "developer_decisions",
-        embedQuery,
-        decisions.map((d) => ({ id: d.id, text: decisionEmbedText(d) })),
-        config,
-      )
-    : null;
-  const memSem = memories.length
-    ? await semanticScores(
-        db,
-        "agent_memory",
-        embedQuery,
-        memories.map((m) => ({ id: m.id, text: memoryEmbedText(m) })),
-        config,
-      )
-    : null;
-
-  // Said when text that names a private package was kept from the embedding provider (embeddings.ts).
-  const withheld = decSem?.privateWithheld ?? memSem?.privateWithheld;
-  const note = withheld ? { recall_note: withheld.note } : {};
-  const anySemantic = (decSem?.embeddedCount ?? 0) > 0 || (memSem?.embeddedCount ?? 0) > 0;
-  if (!anySemantic) {
-    // Provider unreachable / nothing embedded -> behave exactly like lexical.
-    const entries = [
-      ...decLex.slice(0, WISDOM_LIMIT).map((i) => ({ ...i, type: "decision" as const })),
-      ...memLex.slice(0, WISDOM_LIMIT).map((i) => ({ ...i, type: "memory" as const })),
-    ];
-    return {
-      wisdom: entries.sort((a, b) => b.score - a.score).slice(0, WISDOM_LIMIT).map(toWisdomEntry),
-      recall_mode: "ranked_lexical",
-      ...note,
-    };
-  }
-
-  const scored: Array<{
-    type: "decision" | "memory";
-    row: WisdomDecisionRow | WisdomMemoryRow;
-    score: number;
-  }> = [];
-
-  for (const d of decisions) {
-    const semantic = Math.max(0, decSem?.semanticById.get(d.id) ?? 0);
-    const lexNorm = decMax > 0 ? (decLexById.get(d.id) ?? 0) / decMax : 0;
-    const score = WISDOM_BLEND * semantic + (1 - WISDOM_BLEND) * lexNorm;
-    if (score > 0) scored.push({ type: "decision", row: d, score });
-  }
-  for (const m of memories) {
-    const semantic = Math.max(0, memSem?.semanticById.get(m.id) ?? 0);
-    const lexNorm = memMax > 0 ? (memLexById.get(m.id) ?? 0) / memMax : 0;
-    const score = WISDOM_BLEND * semantic + (1 - WISDOM_BLEND) * lexNorm;
-    if (score > 0) scored.push({ type: "memory", row: m, score });
-  }
-
-  return {
-    wisdom: scored.sort((a, b) => b.score - a.score).slice(0, WISDOM_LIMIT).map(toWisdomEntry),
-    recall_mode: "hybrid",
-    ...note,
-  };
-}

@@ -1129,7 +1129,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
    * One dependency_check run within the budget. A constraint goes in the form dependency_check reads
    * for that ecosystem: npm's `>=1.2.0 <1.2.6` for the task's `>= 1.2.0, < 1.2.6` (checkableSpec; round 10, W3).
    */
-  const run = (list: NewPackage[]) =>
+  const runOnce = (list: NewPackage[]) =>
     inBudget(
       executeDependencyCheck(
         null,
@@ -1142,10 +1142,19 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
         return answer;
       }),
     );
+  /** In chunks of at most 25, in parallel, each within the budget: a chunk the budget did not reach leaves only its items unanswered (C4). */
+  const run = async (list: NewPackage[]) => {
+    const chunks: NewPackage[][] = [];
+    for (let k = 0; k < list.length; k += 25) chunks.push(list.slice(k, k + 25));
+    const answers = await Promise.all(chunks.map((c) => runOnce(c)));
+    const first = answers.find((a) => a !== null);
+    if (!first) return null;
+    return { ...first, results: answers.flatMap((a, k) => (a ? a.results : chunks[k].map(() => undefined))) as typeof first.results };
+  };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (pkg: NewPackage, r: Answer["results"][number] | undefined): NewPackageFinding => {
     const { alternatives: _alternatives, weak: _weak, guessed: _guessed, loose: _loose, closed: _closed, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, versionUnread: _versionUnread, ...p } = pkg;
-    if (!r) return unchecked(p, "no answer");
+    if (!r) return unchecked(p, "the lookups did not finish in time");
     const advisories = r.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: { did_you_mean?: string | null } } | null | undefined;
     const nameCheck = r.signals.find((s) => s.id === "name_check");
     const nearMiss = (nameCheck?.value as { near_miss_of?: string } | undefined)?.near_miss_of;
