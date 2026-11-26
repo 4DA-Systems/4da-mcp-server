@@ -163,7 +163,7 @@ describe("pipenv, pdm, rye, pixi, hatch and conda installs are not read (a state
 describe("D5: a manager word in the arguments of a program known to take text as data goes ahead", () => {
   it.each([
     "make PIP=pip3 install",
-    "sed -i 's/npm install/npm ci/' README.md",
+    "sed 's/npm install/npm ci/' README.md",
     "awk '/pip install/ {print}' docs/setup.md",
     "node -e \"console.log('npm install')\"",
     "python -c \"print('pip install requests')\"",
@@ -454,5 +454,55 @@ describe("D7: a public-registry URL operand", () => {
 describe("D8: pip install .[dev]", () => {
   it.each(["pip install .[dev]", 'pip install ".[dev,test]"', "pip install -e .[dev]", "pip install ./pkg[test]", "uv pip install -e '.[dev]'", "python -m pip install '.[all]'"])("%s goes ahead", (command) => {
     expect(run(command).decision).toBe("allow");
+  });
+});
+
+/** J1-J3 (eighth independent check): a data program's text is text only when its options are known and its output runs nowhere. */
+describe("J1: data program options and pipelines", () => {
+  it.each([
+    ['echo "npm i lodash@4.17.20" | sh', "Bash"],
+    ['echo "npm i lodash@4.17.20" | bash -s', "Bash"],
+    ['echo "npm i lodash@4.17.20" | pwsh -NoProfile -', "PowerShell"],
+    ['echo "npm i lodash@4.17.20" | cmd', "PowerShell"],
+    ["printf 'npm i lodash@4.17.20\n' | python", "Bash"],
+    ["git grep -O'npm i lodash@4.17.20 #' a", "Bash"],
+    ["git -c core.pager='npm i lodash@4.17.20' log", "Bash"],
+    ["sed -i 's/x/npm i lodash@4.17.20/' notes.md", "Bash"],
+    ["sed 's/x/npm i lodash@4.17.20/e' notes.md", "Bash"],
+    ["awk 'BEGIN { system(\"npm i lodash@4.17.20\") }'", "Bash"],
+    ["make -f - <<'EOF'\nall:\n\tnpm i lodash@4.17.20\nEOF", "Bash"],
+    ["echo 'npm i lodash@4.17.20' > package.json", "Bash"],
+  ])("%s: held; the plain command the remedy names releases", (command, tool) => {
+    expect(run(command, tool).decision).toBe("deny");
+    s.ledger([]);
+    releases("npm i lodash@4.17.20");
+  });
+
+  it.each([
+    ["grep -rn 'npm install' docs | head -5", "Bash"],
+    ["git log --oneline --grep 'npm install' | wc -l", "Bash"],
+    ["rg 'pip install' -g '*.md' | sort | uniq -c", "Bash"],
+    ["echo 'npm install lodash' | tee notes.txt", "Bash"],
+    ["Get-Content README.md | Select-String 'pip install' | Select-Object -First 3", "PowerShell"],
+    ["echo 'run npm install' > notes.txt", "Bash"],
+  ])("%s: goes ahead", (command, tool) => {
+    expect(run(command, tool).decision).toBe("allow");
+  });
+});
+
+describe("J2: operands from somewhere the hook cannot read", () => {
+  it.each(["echo lodash@4.17.20 | xargs npm i", "echo requests==2.5.0 | xargs pip install", "cat pkgs.txt | pip install -r -", "pip install -r /dev/stdin", "npm i $(cat pkgs.txt)"])("%s: held as not read; the plain command releases", (command) => {
+    expect(run(command).text).toContain("could not be read");
+    s.ledger([]);
+    releases(command.includes("pip") ? "pip install requests==2.5.0" : "npm i lodash@4.17.20");
+  });
+});
+
+describe("J3: a PowerShell backtick continuation is one line", () => {
+  it("npm `<newline> i lodash@4.17.20: held", () => {
+    expect(run("npm `\ni lodash@4.17.20", "PowerShell").decision).toBe("deny");
+  });
+  it("bash: npm \<newline> i lodash@4.17.20: held", () => {
+    expect(run("npm \\\ni lodash@4.17.20").decision).toBe("deny");
   });
 });

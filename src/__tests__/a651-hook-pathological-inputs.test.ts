@@ -159,9 +159,9 @@ function expectWithin(r: Run, limit: number): void {
 describe("a call that could not be read in time is held, never let through", () => {
   it("over the read budget, an install command or a manifest edit is denied as not read", () => {
     const out = respond(bash("npm i left-pad"), { FOURDA_MCP_HOME: home }, Date.now(), -1);
-    expect(out).toContain("could not be read (reading it took over 2 s)");
+    expect(out).toContain("could not be read (reading it did not finish inside the hook's time budget)");
     const edit = respond(write("package.json", '{"dependencies":{}}'), { FOURDA_MCP_HOME: home }, Date.now(), -1);
-    expect(edit).toContain("could not be read (reading it took over 2 s)");
+    expect(edit).toContain("could not be read (reading it did not finish inside the hook's time budget)");
   });
 
   it("a command that names no package manager is not held for being slow", () => {
