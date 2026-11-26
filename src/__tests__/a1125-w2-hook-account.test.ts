@@ -252,7 +252,7 @@ describe("R8-2: what is read whole goes ahead on its verdict, or installs nothin
     expect(r.decision, r.text).toBe("allow");
   });
 
-  it.each(["npm i lodash", "pip install requests", "pip install -U requests", "python -m pip install requests", "uv pip install requests", "uv add --dev requests", "npm i -D --save-exact lodash", "pnpm add -w lodash"])(
+  it.each(["npm i lodash", "pip install requests", "pip install -U requests", "python -m pip install requests", "uv pip install requests", "uv add --dev requests", "npm i -D --save-exact lodash", "pnpm add -D lodash"])(
     "%s: read, and judged on the latest verdict (an avoid on record)",
     (command) => {
       const r = run(command);
