@@ -27,7 +27,8 @@
  *     can declare (m7), and a task longer than one call reads (too many snippets or distinct words, or the time
  *     budget spent: "split the task"). "A package manager's name" is one of the names of briefing-canonical.ts
  *     MANAGER_NAMES. A public entry without `version` leaves the declaration incomplete: never safe_to_delegate:
- *     confirmation_needed, or a stricter or equal level another rule sets (round 9, E1; round 12, #14). `public: true` says the name is on the public registry, and it is sent
+ *     confirmation_needed, or a stricter or equal level another rule sets (round 9, E1; round 12, #14): a refused
+ *     entry holds review_needed on its own, and with a versionless public entry the answer is confirmation_needed. `public: true` says the name is on the public registry, and it is sent
  *     there; `public: false` is for anything from a private registry, an index of its own, git or a path.
  *     `to_confirm` is what this briefing noticed, a prompt, never a complete reading. A safe_to_delegate reason ends
  *     "This rests on your declaration: a package you did not declare was not checked."; in a call that declared at
@@ -412,7 +413,7 @@ export const whatShouldIKnowTool = {
         type: "array",
         maxItems: 100,
         description:
-          "Packages this task adds or changes, at most 100, each with the `version` the task writes (or \"latest\"): the level rests on this, and without it the answer is never safe_to_delegate. Versions it happens to read in the task (e.g. name@1.2.3) are checked too, best effort: a spelling it does not read is not checked.",
+          "Packages this task adds or changes, at most 100, each with the `version` the task writes (or \"latest\"): the level rests on this. Without it the answer is never safe_to_delegate: confirmation_needed, or a stricter or equal level another rule sets (a refused entry holds review_needed). Versions it happens to read in the task are checked too, best effort.",
         items: {
           type: "object",
           properties: {
@@ -519,14 +520,16 @@ export async function executeWhatShouldIKnow(
         }
       })
     : [];
-  pushAll(evidence.pairs, fromRequirements);
-  // Round 11, #72: a line of the file it cannot read (or a direct reference) makes the file not read whole.
+  // Round 11, #72: a line of the file it cannot read (or a direct reference) makes the file not read whole. Round 12b:
+  // a file not read whole offers none of its entries (as a snippet not read whole: round 7c, F4).
   const requirementsRead = fromRequirements as { notWhole?: boolean; outside?: boolean; unreadable?: boolean };
+  const fileEntries = requirementsRead.notWhole ? [] : fromRequirements;
+  pushAll(evidence.pairs, fileEntries);
   if (requirementsRead.notWhole) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "a line of a requirements file it cannot read" });
   // Round 12, R5: a file outside the project, or one that could not be read, is said and holds review_needed.
   if (requirementsRead.outside) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "a requirements file outside the project is not read" });
   if (requirementsRead.unreadable) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "the requirements file it names could not be read" });
-  const depsText = fromRequirements.length > 0 ? `${task}\n${fromRequirements.map((p) => p.name).join(" ")}` : task;
+  const depsText = fileEntries.length > 0 ? `${task}\n${fileEntries.map((p) => p.name).join(" ")}` : task;
   // ── 0. The vulnerability scan — awaited, bounded, never assumed ───────
   // Round 7c, F1: a word the grammar consumed (`npm`, `install`, `-D`, an option's value) is no package of the task for
   // any reader: not a dependency it names, not a bundled-list lookup, not a candidate.

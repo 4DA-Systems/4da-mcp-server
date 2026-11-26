@@ -363,7 +363,14 @@ export function readSnippets(task: string): SnippetRead {
 
   /** The quoted entries of a pyproject array (PEP 621, optional groups, PEP 735 groups). */
   function arrayEntries(body: string, groups: boolean): void {
-    const inner = body.slice(body.indexOf("[") + 1, body.lastIndexOf("]") >= 0 ? body.lastIndexOf("]") : body.length);
+    let inner = body.slice(body.indexOf("[") + 1, body.lastIndexOf("]") >= 0 ? body.lastIndexOf("]") : body.length);
+    // PEP 735: `{ include-group = "x" }` names another group, no package: taken out before the entries are read,
+    // and its group name is offered by no reader (round 12b).
+    if (groups)
+      inner = inner.replace(/\{[ \t]*include-group[ \t]*=[ \t]*(?:"([^"\n]{0,100})"|'([^'\n]{0,100})')[ \t]*\}/g, (_m: string, a?: string, b?: string) => {
+        consumed.add((a ?? b ?? "").toLowerCase());
+        return "";
+      });
     let leftover = inner;
     for (const e of inner.matchAll(/"([^"\n]{0,300})"|'([^'\n]{0,300})'/g)) {
       const d = pep508(e[1] ?? e[2]);
@@ -373,8 +380,6 @@ export function readSnippets(task: string): SnippetRead {
       } else notWhole("PyPI", "an entry it cannot read", e[1] ?? e[2]);
     }
     leftover = leftover.replace(/"[^"\n]{0,300}"|'[^'\n]{0,300}'/g, "");
-    // PEP 735: `{ include-group = "x" }` names another group, no package.
-    if (groups) leftover = leftover.replace(/\{\s*include-group\s*=\s*\}/g, "");
     if (leftover.replace(/[\s,]/g, "") !== "") notWhole("PyPI", "an entry it cannot read", inner.slice(0, 300));
     if (!arrayClosed(body)) notWhole("PyPI", "an entry it cannot read", inner.slice(0, 300));
   }

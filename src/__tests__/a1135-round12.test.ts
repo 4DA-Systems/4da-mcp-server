@@ -164,3 +164,33 @@ describe("R2: single characters repeated to 199,990: under 3 s of child CPU each
     }
   }, 900_000);
 });
+
+describe("Round 12b: the docs lane's proof run", () => {
+  it("a requirements file not read whole offers none of its entries", async () => {
+    h.write("requirements.txt", "flask==3.0.3\n");
+    h.write("cred.txt", `zqxok==1.0\n${["ghp", "_abcdefghijklmnopqrstuvwxyz0123456789"].join("")}==1.0\n`);
+    const r = await brief({ task: "pip install -r cred.txt", packages: [] });
+    expect(JSON.stringify(r.task_packages.to_confirm ?? [])).not.toContain("zqxok");
+    expect(JSON.stringify(r.task_packages.checked ?? [])).not.toContain("zqxok");
+    expect(r.delegation_assessment.reason).toContain("a line of a requirements file it cannot read");
+    expect(level(r)).not.toBe("safe_to_delegate");
+  });
+  it("an include-group table is no entry: its group name is not offered", async () => {
+    npm();
+    const r = await brief({ task: 'pyproject.toml:\n```toml\n[dependency-groups]\ndev = ["zqxdg==2", {include-group = "cli"}]\n```', packages: [] });
+    const names = ((r.task_packages.to_confirm ?? []) as Array<{ name: string }>).map((x) => x.name);
+    expect(names).not.toContain("cli");
+    expect(names).toContain("zqxdg");
+  });
+  it("a refused entry: with a versionless public entry confirmation_needed; with `version` given never safe (the refused entry alone: helpers/a1135-review10-runner.ts)", async () => {
+    npm();
+    const a = await brief({ task: "add zqxv2", packages: [{ ecosystem: "npm", name: "zqxv2", public: true }, { ecosystem: "npm", name: "zqxbad", public: "yes" }] });
+    expect(level(a)).toBe("confirmation_needed");
+    const b = await brief({ task: "add zqxv2", packages: [{ ecosystem: "npm", name: "zqxv2", version: "1.0.0", public: true }, { ecosystem: "npm", name: "zqxbad", public: "yes" }] });
+    expect(["review_needed", "human_only", "unknown"]).toContain(level(b));
+    expect(level(b)).not.toBe("safe_to_delegate");
+    expect(level(b)).not.toBe("confirmation_needed");
+    const src = fs.readFileSync(path.join(__dirname, "..", "tools", "what-should-i-know.ts"), "utf8");
+    expect(src).toContain("never safe_to_delegate: confirmation_needed, or a stricter or equal level another rule sets (a refused entry holds review_needed)");
+  });
+});
