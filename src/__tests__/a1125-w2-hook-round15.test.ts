@@ -242,3 +242,20 @@ describe("H8a: a quoted heredoc as a command's argument is read as its text", ()
     expect(run(command).decision, command).toBe("deny");
   });
 });
+
+describe("check 13's proof leftovers", () => {
+  it("a heredoc with a backslash-quoted delimiter into a README is text", () => {
+    expect(run("cat > README.md <<\\EOF\nInstall with `npm install lodash@4.17.20`\nEOF").decision).toBe("allow");
+    // unquoted, the body's backquotes run: held
+    expect(run("cat > README.md <<EOF\nInstall with `npm install lodash@4.17.20`\nEOF").decision).toBe("deny");
+  });
+  it("uv pip install --user is on the list (placement)", () => {
+    expect(run("uv pip install --user requests==2.32.3").text).not.toContain("could not be read");
+  });
+  it("pnpm add -W reads the folder's own manifest (no declaration: judged at latest)", () => {
+    s.ledger([{ ecosystem: "npm", package: "ms", version: "2.1.3", requested: "latest", verdict: "proceed", reason: "ok" }]);
+    expect(run("pnpm add -W ms").decision).toBe("allow");
+    s.file("package.json", '{"dependencies":{"ms":"2.0.0"}}');
+    expect(run("pnpm add -W ms").text).toContain("this project already declares");
+  });
+});

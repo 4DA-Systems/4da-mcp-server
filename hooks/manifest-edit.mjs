@@ -3823,9 +3823,11 @@ function dataHeredoc(line) {
   let rest = line;
   for (let guard = 0; guard < 1000; guard++) {
     tick();
-    const m = /<<-?[ \t]*(['"]?)([A-Za-z0-9_.-]+)\1/.exec(rest);
+    // (a delimiter quoted with a backslash, `<<\EOF`, is literal too: round 15)
+    const m = /<<-?[ \t]*(?:(['"]?)([A-Za-z0-9_.-]+)\1|(\\)([A-Za-z0-9_.-]+))/.exec(rest);
     if (!m) break;
-    const literal = m[1] !== "";
+    if (m[3]) [m[1], m[2]] = ["\\", m[4]];
+    const literal = m[1] !== "" && m[1] !== undefined;
     const nl = rest.indexOf("\n", m.index);
     if (nl < 0) return "a heredoc that does not end";
     stripped += rest.slice(0, m.index) + rest.slice(m.index + m[0].length, nl + 1);
@@ -4279,7 +4281,7 @@ function subcommand(args, table, mode = "") {
  */
 const KEEPS_DECLARED = {
   npm: { file: "package.json", dir: ["--prefix"], workspace: ["-w", "--workspace", "-ws", "--workspaces", "--include-workspace-root"], global: ["-g", "--global"] },
-  pnpm: { file: "package.json", dir: ["-C", "--dir", "--prefix"], workspace: ["-F", "--filter", "-r", "--recursive", "-w", "--workspace-root", "-W", "--ignore-workspace-root-check"], global: ["-g", "--global"] },
+  pnpm: { file: "package.json", dir: ["-C", "--dir", "--prefix"], workspace: ["-F", "--filter", "-r", "--recursive", "-w", "--workspace-root"], global: ["-g", "--global"] },
   uvadd: { file: "pyproject.toml", dir: ["--directory", "--project"], workspace: ["--package"], global: [] },
   poetry: { file: "pyproject.toml", dir: ["-C", "--directory", "-P", "--project"], workspace: [], global: [] },
   cargoadd: { file: "Cargo.toml", dir: ["--manifest-path"], workspace: ["-p", "--package"], global: [] },
@@ -4549,6 +4551,7 @@ const NAMED_OPTIONS = {
   ],
   uvpip: [
     ["--system", "placement: the system interpreter's environment"],
+    ["--user", "placement: the user site (in uv pip install --help)"],
     ["-t= --target= --prefix=", "placement: another folder"],
     ["-e= --editable=", "a local or VCS path, read as that form"],
     ["-r= --requirements=", "a requirements file (read when it is written with the Edit or Write tool)"],
