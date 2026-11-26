@@ -30,7 +30,7 @@ afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 describe("a call whose budget ends while the project is still being read (audit 2026-11-25, F-M1)", () => {
   it.skipIf(!fs.existsSync(serverEntry))("says so, keeps reading, and a later call gets the whole answer", async () => {
-    const calls: Array<[string, Record<string, unknown>]> = Array.from({ length: 60 }, () => ["vulnerability_scan", {}]);
+    const calls: Array<[string, Record<string, unknown>]> = Array.from({ length: 200 }, () => ["vulnerability_scan", {}]);
     // A 40 ms budget: the init of a 30,000-entry lockfile takes longer than one call has.
     const session = await stdioSession(dir, calls, { FOURDA_CALL_BUDGET_MS: "40", FOURDA_OFFLINE: "1" }, { requestTimeoutMs: 10_000 });
     const texts = session.results.map(resultText);

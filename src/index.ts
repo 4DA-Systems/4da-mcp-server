@@ -470,7 +470,11 @@ export function buildServer(): Server {
       // An init still running when the call's budget ends (20 lockfiles of 62 MB took over a minute,
       // audit 2026-11-25, F-M1) is not finished synchronously here: the call says so plainly and the
       // init goes on, so a later call gets the whole answer.
-      const ready = await settleWithin(prepareDatabase().then(() => true, () => true), startedAt + callBudgetMs() - Date.now(), () => false);
+      const prepared = (async () => {
+        await prepareDatabase().catch(() => undefined);
+        return true;
+      })();
+      const ready = await settleWithin(prepared, startedAt + callBudgetMs() - Date.now(), () => false);
       if (!ready) return stillReadingAnswer();
       const { database, note: unavailableNote } = databaseFor(name);
       // A changed .npmrc, .yarnrc.yml, go env file or environment re-reads which names are private (stat calls only).
