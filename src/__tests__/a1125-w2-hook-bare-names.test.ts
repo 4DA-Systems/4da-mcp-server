@@ -39,7 +39,7 @@ const BARE: Array<[string, string, string]> = [
   ["npm i -D @types/node", "npm", "@types/node"],
   ["yarn add lodash", "npm", "lodash"],
   ["yarn workspace web add lodash", "npm", "lodash"],
-  ["pnpm add -D typescript", "npm", "typescript"],
+  ["pnpm add -D zod", "npm", "zod"],
   ["pnpm add lodash@latest --save-dev", "npm", "lodash"],
   ["pnpm up -L react", "npm", "react"],
   ["pnpm up --latest react", "npm", "react"],

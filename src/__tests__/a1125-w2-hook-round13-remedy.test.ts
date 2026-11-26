@@ -138,6 +138,7 @@ describe("p1c: the remedy, followed mechanically, releases the same install", ()
   it.each(LINES)("%s> %s", (tool, original) => {
     let command = original;
     const named: string[] = [];
+    const pinnedNames: string[] = [];
     let last = run(command, tool);
     for (let step = 0; step < 5 && last.decision === "deny"; step++) {
       if (last.text.includes("could not be read")) {
@@ -145,6 +146,10 @@ describe("p1c: the remedy, followed mechanically, releases the same install", ()
         expect(next, last.text).not.toBeNull();
         const removed = /Run the same command without `([^`]+)`/.exec(last.text)?.[1];
         if (removed) named.push(removed);
+        // Round 16 (J1): a name alone a project file above names (this machine's home package.json
+        // names typescript) is written with a version: that operand is the remedy's, not lost.
+        const pinned = /already names (\S+);/.exec(last.text)?.[1];
+        if (pinned) pinnedNames.push(pinned);
         command = next as string;
       } else {
         // The dependency_check call the denial names, answered as the server records it: an exact
@@ -153,7 +158,7 @@ describe("p1c: the remedy, followed mechanically, releases the same install", ()
         record(
           s,
           (last.items ?? []).map((i) => {
-            const exact = /^(?:==)?v?d+.d+.d+$/.test(i.to);
+            const exact = /^(?:==)?v?\d+\.\d+\.\d+$/.test(i.to);
             const known = BASE.find((e) => e.ecosystem === i.ecosystem && e.package === i.package)?.version ?? "1.0.0";
             return { ecosystem: i.ecosystem, package: i.package, version: exact ? i.to.replace(/^==/, "") : known, verdict: "proceed", ...(exact ? {} : { requested: i.to }) };
           }),
@@ -166,7 +171,7 @@ describe("p1c: the remedy, followed mechanically, releases the same install", ()
     // (ii) the same placement flags, and every operand naming a package as written
     for (const flag of placement(original)) expect(placement(command.replace(/--save-dev=true/, "--save-dev")), `${flag} kept in ${command}`).toContain(flag);
     for (const word of original.split(/\s+/)) {
-      if (!NAMES.some((n) => word.includes(n)) || named.some((t) => t.includes(word))) continue;
+      if (!NAMES.some((n) => word.includes(n)) || named.some((t) => t.includes(word)) || pinnedNames.includes(word)) continue;
       expect(command.split(/\s+/), `${word} kept in ${command}`).toContain(word);
     }
     // the named parts are none of those

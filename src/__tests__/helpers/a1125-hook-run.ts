@@ -122,6 +122,9 @@ export function followRemedy(command: string, text: string, value = "lodash", va
   const w = /Run the same command with `([^`]+)` written as (.+?): the hook then reads it/s.exec(text);
   if (!w) return null;
   const [, token, form] = w;
+  // Round 16 (J1): a name alone the project names elsewhere is to be written with a version (here 1.0.0).
+  const pinned = /^an exact version \(`name(@|==)1\.2\.3`\)/.exec(form);
+  if (pinned) return tidy(command.replace(word(token), `$1${bareName(token)}${pinned[1]}1.0.0`));
   if (form.startsWith("an exact version")) return tidy(command.replace(token, bareName(token)));
   if (form.startsWith("one module path")) return tidy(command.replace(token, token.replace(/\/\.\.\.$/, "")));
   if (form.startsWith("its value written out")) return tidy(command.replace(token, value));

@@ -167,58 +167,7 @@ describe("H5: a payload the hook cannot read whole is the failure rule's", () =>
   }, 60_000);
 });
 
-describe("H1: a name alone beside a declaration of it is held (npm, pnpm, uv, Poetry and Cargo keep the declared release)", () => {
-  const AVOID_LATEST_PROCEED = [
-    { ecosystem: "npm", package: "lodash", version: "4.17.21", requested: "latest", verdict: "proceed", reason: "ok" },
-    { ecosystem: "PyPI", package: "requests", version: "2.32.3", requested: "latest", verdict: "proceed", reason: "ok" },
-    { ecosystem: "crates.io", package: "regex", version: "1.11.0", requested: "latest", verdict: "proceed", reason: "ok" },
-  ];
-  beforeEach(() => s.ledger(AVOID_LATEST_PROCEED));
-  it.each([
-    ["package.json", '{"dependencies":{"lodash":"4.17.20"}}', "npm install lodash"],
-    ["package.json", '{"devDependencies":{"lodash":"^4.17.20"}}', "npm i lodash@latest"],
-    ["package.json", '{"dependencies":{"lodash":"4.17.20"}}', "pnpm add lodash"],
-    ["package.json", '{"peerDependencies":{"lodash":"4.17.20"}}', "pnpm add -D lodash"],
-    ["pyproject.toml", '[project]\nname = "x"\nversion = "0.1.0"\ndependencies = ["requests==2.19.0"]\n', "uv add requests --no-sync"],
-    ["pyproject.toml", '[project]\nname = "x"\nversion = "0.1.0"\n[dependency-groups]\ndev = ["requests==2.19.0"]\n', "uv add --dev requests"],
-    ["pyproject.toml", '[tool.poetry]\nname = "x"\n[tool.poetry.dependencies]\nrequests = "2.19.0"\n', "poetry add requests"],
-    ["Cargo.toml", '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nregex = "=1.5.4"\n', "cargo add regex"],
-  ])("%s declares it; %s: held, name the version", (name, content, command) => {
-    s.file(name, content);
-    const r = run(command);
-    expect(r.decision, r.text).toBe("deny");
-    expect(r.text).toContain("this project already declares");
-    expect(r.text).toContain("name the version");
-  });
-  it.each(["yarn add lodash", "bun add lodash"])("%s moves to the newest whatever is declared: judged at latest (proceed: goes ahead)", (command) => {
-    s.file("package.json", '{"dependencies":{"lodash":"4.17.20"}}');
-    expect(run(command).decision).toBe("allow");
-  });
-  it("the folder is the payload's cwd after a plain cd in the same line, or a folder option", () => {
-    s.file("app/package.json", '{"dependencies":{"lodash":"4.17.20"}}');
-    expect(run("npm install lodash").decision).toBe("allow");
-    expect(run("cd app && npm install lodash").text).toContain("this project already declares");
-    expect(run("npm --prefix app install lodash").text).toContain("this project already declares");
-    expect(run("pnpm -C app add lodash").text).toContain("this project already declares");
-  });
-  it("a workspace option beside a name alone, or a folder it cannot name: held", () => {
-    expect(run("pnpm add lodash --filter web").text).toContain("beside a workspace option");
-    expect(run("npm install lodash -w web").text).toContain("beside a workspace option");
-    expect(run("cd $APP && npm install lodash").text).toContain("could not be read");
-  });
-  it("a global install reads no project manifest; an exact version is judged as before", () => {
-    s.file("package.json", '{"dependencies":{"lodash":"4.17.20"}}');
-    expect(run("npm install -g lodash").decision).toBe("allow");
-    expect(run("npm install lodash@4.17.21").text).not.toContain("this project already declares");
-  });
-  it("a manifest that cannot be read is held; a missing or empty one declares nothing", () => {
-    expect(run("npm install lodash").decision).toBe("allow");
-    s.file("package.json", "");
-    expect(run("npm install lodash").decision).toBe("allow");
-    s.file("package.json", "{ not json");
-    expect(run("npm install lodash").text).toContain("could not be read");
-  });
-});
+// Round 16 (J1): the H1 rule became the raw-text rule of a1125-w2-hook-round16.test.ts.
 
 describe("H8a: a quoted heredoc as a command's argument is read as its text", () => {
   const msg = (delim: string, body: string) => `"$(cat <<${delim}\n${body}\n${delim.replace(/['"\\]/g, "")}\n)"`;
@@ -256,6 +205,6 @@ describe("check 13's proof leftovers", () => {
     s.ledger([{ ecosystem: "npm", package: "ms", version: "2.1.3", requested: "latest", verdict: "proceed", reason: "ok" }]);
     expect(run("pnpm add -W ms").decision).toBe("allow");
     s.file("package.json", '{"dependencies":{"ms":"2.0.0"}}');
-    expect(run("pnpm add -W ms").text).toContain("this project already declares");
+    expect(run("pnpm add -W ms").text).toContain("already names ms");
   });
 });

@@ -4272,19 +4272,26 @@ function subcommand(args, table, mode = "") {
 }
 
 /**
- * Round 15 (H1, thirteenth independent check): a name alone is judged at the registry's newest
- * release, but npm, pnpm, uv, Poetry and Cargo keep the release a project already declares
- * (measured: `npm install ms` and `pnpm add ms` beside "ms": "2.0.0" install 2.0.0, `uv add six`
- * beside six==1.16.0 locks 1.16.0, `cargo add regex` beside regex = "=1.5.4" keeps 1.5.4; Yarn 1
- * and Bun move to the newest). So for a name alone with those managers the manifest of the folder
- * the command runs in is read: a name it declares is held, "name the version".
+ * Round 16 (J1, fourteenth independent check): a name alone is judged at the registry's newest
+ * release, but the manager may keep or pin the release a project names elsewhere: a declaration,
+ * a parent manifest, a workspace root, [workspace.dependencies], overrides, a catalog, a pnpmfile.
+ * The hook does not reason about which: a package named without a version by npm, pnpm, Yarn, Bun,
+ * uv add, poetry add or cargo add is held when its name occurs as a whole word (letter case and,
+ * for PyPI and crates.io, `-` / `_` / `.` folded) anywhere in the text of PROJECT_FILES in the folder
+ * the command runs in or any folder above it (at most PROJECT_DEPTH levels), or in a folder a
+ * directory option names. No section is parsed: any mention holds. A file it cannot read, or over
+ * the manifest bound, holds too.
  */
+const PROJECT_FILES = ["package.json", "package.yaml", "package.json5", "pnpm-workspace.yaml", ".pnpmfile.cjs", "bunfig.toml", "Cargo.toml", "pyproject.toml", "uv.toml"];
+const PROJECT_DEPTH = 12;
 const KEEPS_DECLARED = {
-  npm: { file: "package.json", dir: ["--prefix"], workspace: ["-w", "--workspace", "-ws", "--workspaces", "--include-workspace-root"], global: ["-g", "--global"] },
-  pnpm: { file: "package.json", dir: ["-C", "--dir", "--prefix"], workspace: ["-F", "--filter", "-r", "--recursive", "-w", "--workspace-root"], global: ["-g", "--global"] },
-  uvadd: { file: "pyproject.toml", dir: ["--directory", "--project"], workspace: ["--package"], global: [] },
-  poetry: { file: "pyproject.toml", dir: ["-C", "--directory", "-P", "--project"], workspace: [], global: [] },
-  cargoadd: { file: "Cargo.toml", dir: ["--manifest-path"], workspace: ["-p", "--package"], global: [] },
+  npm: { eco: "npm", dir: ["--prefix"], global: ["-g", "--global"], pin: "@" },
+  pnpm: { eco: "npm", dir: ["-C", "--dir", "--prefix"], global: ["-g", "--global"], pin: "@" },
+  yarn: { eco: "npm", dir: ["--cwd"], global: ["global"], pin: "@" },
+  bun: { eco: "npm", dir: ["--cwd"], global: ["-g", "--global"], pin: "@" },
+  uvadd: { eco: "PyPI", dir: ["--directory", "--project"], global: [], pin: "==" },
+  poetry: { eco: "PyPI", dir: ["-C", "--directory", "-P", "--project"], global: [], pin: "==" },
+  cargoadd: { eco: "crates.io", dir: ["--manifest-path"], global: [], pin: "@" },
 };
 /** The folder the command being accounted for runs in (the payload's cwd, after `cd` earlier in the line), or null when not known. */
 let accountDir = null;
@@ -4303,51 +4310,69 @@ function optionValueOf(names) {
   return undefined;
 }
 
-/** H1: a reason when the project already declares one of `bare` (names given alone); null otherwise. */
+/** J1: a regular expression for `name` as a whole word, letter case (and PyPI / crates.io separators) folded. */
+function wholeName(name, eco) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = eco === "PyPI" || eco === "crates.io" ? name.split(/[-_.]+/).map(esc).join("[-_.]+") : esc(name);
+  return new RegExp(`(?<![A-Za-z0-9_@/-])${body}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`, "i");
+}
+
+/** J1: the first project file (in `start` or a folder above it) whose text names `name`: { file, here } / "unreadable" / null. */
+/** J1: the project files read in this call (path -> text, or { unreadable }), each read once. */
+const projectTexts = new Map();
+function projectMention(start, name, eco) {
+  const re = wholeName(name, eco);
+  let dir = start;
+  for (let level = 0; level <= PROJECT_DEPTH; level++) {
+    tick();
+    for (const f of PROJECT_FILES) {
+      const path = join(dir, f);
+      if (!projectTexts.has(path)) {
+        try {
+          projectTexts.set(path, statSync(path).size > MAX_MANIFEST_BYTES ? { unreadable: `over ${MAX_MANIFEST_BYTES / 1024 / 1024} MB` } : readFileSync(path, "utf8"));
+        } catch (error) {
+          projectTexts.set(path, error?.code === "ENOENT" || error?.code === "ENOTDIR" ? null : { unreadable: "could not be read" });
+        }
+      }
+      const text = projectTexts.get(path);
+      if (text === null) continue;
+      if (typeof text !== "string") return { file: path, unreadable: text.unreadable };
+      if (re.test(text)) return { file: path, here: level === 0 };
+    }
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return null;
+}
+
+/** J1: a reason when a project file in the command's folder or above names one of `bare` (names given alone); null otherwise. */
 function declaredHeld(key, bare) {
   if (bare.length === 0) return null;
   const rule = KEEPS_DECLARED[key];
   if (!rule) return null;
   const has = (names) => accountWords.some((w) => names.includes(w) || names.some((n) => w.startsWith(`${n}=`)));
   if (has(rule.global)) return null;
-  const first = bare[0];
   const writtenAs = (name) => accountWords.find((w) => w.replace(/^['"]|['"]$/g, "").toLowerCase().startsWith(name.toLowerCase())) ?? name;
-  const held = (why) => notReadAt(why, writtenAs(first), "an exact version (`name@1.2.3`; uv and Poetry: `name==1.2.3`)");
-  if (has(rule.workspace)) return held(`${first} given alone beside a workspace option: which manifest declares it is not known, and the manager may keep the release one declares`);
-  let file;
+  const form = `an exact version (\`name${rule.pin}1.2.3\`)`;
   const dirValue = optionValueOf(rule.dir);
-  if (accountDir === null || (dirValue !== undefined && (dirValue === "" || /[$`~%]/.test(dirValue)))) return held(`${first} given alone in a folder this hook cannot name, so it cannot read whether the project declares it`);
-  if (key === "cargoadd" && dirValue !== undefined) file = resolve(accountDir, dirValue);
-  else file = join(dirValue === undefined ? accountDir : resolve(accountDir, dirValue), rule.file);
-  let text;
-  try {
-    if (statSync(file).size > MAX_MANIFEST_BYTES) return held(`${first} given alone, and ${rule.file} is over ${MAX_MANIFEST_BYTES / 1024 / 1024} MB`);
-    text = readFileSync(file, "utf8");
-  } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
-    return held(`${first} given alone, and ${rule.file} could not be read`);
+  if (accountDir === null || (dirValue !== undefined && (dirValue === "" || /[$`~%]/.test(dirValue)))) {
+    return notReadAt(`${bare[0]} given alone in a folder this hook cannot name, so it cannot read what the project names there`, writtenAs(bare[0]), form);
   }
-  // An empty manifest declares nothing (npm itself refuses to install beside one).
-  if (text.trim() === "") return null;
-  const kind = rule.file;
-  const eco = ECOSYSTEM[kind];
-  let declared = [];
-  if (kind === "package.json") {
-    const deps = npmWholeDependencies(text);
-    if (deps === null) return held(`${first} given alone, and package.json is not JSON this hook reads`);
-    declared = deps.filter((d) => NPM_PLAIN_SECTIONS.includes(d.section));
-  } else {
-    for (const [k, specs] of declaredVersions(kind, text, () => null, 0, true)) declared.push({ name: k.split("\0")[0], spec: specs[0] });
-  }
+  const starts = [accountDir];
+  if (dirValue !== undefined) starts.push(key === "cargoadd" ? dirname(resolve(accountDir, dirValue)) : resolve(accountDir, dirValue));
   for (const name of bare) {
-    const d = declared.find((x) => nameKey(eco, x.name).toLowerCase() === nameKey(eco, name).toLowerCase());
-    if (!d) continue;
-    const spec = specText(String(d.spec)) || "a form this hook does not repeat";
-    return notReadAt(
-      `this project already declares ${name} at ${spec} (${kind}); the manager may keep that release: name the version (\`${name}@<version>\`)`,
-      writtenAs(name),
-      "an exact version (`name@1.2.3`; uv and Poetry: `name==1.2.3`)",
-    );
+    for (const start of starts) {
+      const found = projectMention(start, name, rule.eco);
+      if (!found) continue;
+      const file = basename(found.file);
+      if (found.unreadable) return notReadAt(`${name} given alone, and ${found.file} ${found.unreadable}`, writtenAs(name), form);
+      return notReadAt(
+        `${file} in ${found.here ? "this folder" : "a parent folder"} already names ${name}; the manager may keep or pin its own release: name the version (\`${name}${rule.pin}<version>\`)`,
+        writtenAs(name),
+        form,
+      );
+    }
   }
   return null;
 }
@@ -4386,7 +4411,8 @@ function accountJs(manager, args, dialect, depth, reader) {
     const kind = jsOperand(o);
     if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     if (kind === "local") continue;
-    if (adds.includes(verb) && (npmBareName(o) || /@latest$/i.test(o))) bare.push(kind.name);
+    // J5: `x@latest` moves to the newest with npm, pnpm, Yarn and Bun (measured): judged on latest, not held.
+    if (adds.includes(verb) && npmBareName(o)) bare.push(kind.name);
     // A name alone moved inside the manifest's range (`npm update x`, `pnpm up x`) installs nothing new.
     if (!toNewest && npmBareName(o)) continue;
     names.push(kind.name);
@@ -5716,6 +5742,7 @@ function judgeCall(input, env, now) {
   // R8-1 / R8-2: a command the detector names goes ahead only when every install in it is read whole.
   if (found.what === "command") {
     // H1: the folder the command starts in (a name alone is checked against that project's manifest).
+    projectTexts.clear();
     accountCwd = resolve(typeof input.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd());
     const part = accountCall(input.tool_input.command, input.tool_name === "PowerShell" ? "powershell" : "bash");
     if (part !== null) {
