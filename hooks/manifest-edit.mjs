@@ -4675,13 +4675,11 @@ function settingBeforeInstall(command) {
   const name = m[0];
   // The statement it stands in: from the last separator before it to the next one.
   const before = text.slice(0, m.index);
-  const startAt = Math.max(
-    0,
-    ...[";", "&&", "||", "|", "\n"].map((s) => {
-      const i = before.lastIndexOf(s);
-      return i < 0 ? 0 : i + s.length;
-    }),
-  );
+  let startAt = 0;
+  for (const s of [";", "&&", "||", "|", "\n"]) {
+    const i = before.lastIndexOf(s);
+    if (i >= 0 && i + s.length > startAt) startAt = i + s.length;
+  }
   const rest = text.slice(startAt);
   const stop = /;|&&|\|\||\||\n/.exec(rest);
   const statement = (stop ? rest.slice(0, stop.index) : rest).trim();
