@@ -206,7 +206,7 @@
  * manifest, so each is held to its shape first (NAME_TEXT, specText).
  */
 
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -4794,7 +4794,14 @@ export function dataDir(env = process.env, platform = process.platform, home = h
  * record no verdict, or none at all.
  */
 function ledgerStarted(dir) {
-  return LEDGER_FILES.some((file) => existsSync(join(dir, file)));
+  if (LEDGER_FILES.some((file) => existsSync(join(dir, file)))) return true;
+  // A ledger file the folder lists but this process cannot stat (a deny-read ACL) exists.
+  try {
+    const names = new Set(readdirSync(dir).map((n) => n.toLowerCase()));
+    return LEDGER_FILES.some((file) => names.has(file.toLowerCase()));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -4810,8 +4817,9 @@ function fileIdentity(path) {
   try {
     const st = statSync(path);
     return `${st.size}:${st.mtimeMs}:${st.ino}:${st.birthtimeMs}`;
-  } catch {
-    return "absent";
+  } catch (error) {
+    // Round 14 (R9): a deny-read ACL fails the stat itself (EPERM / EACCES): unreadable, not absent.
+    return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? "absent" : "unreadable";
   }
 }
 const OVER_BOUND = Symbol("over the bound");
@@ -4832,6 +4840,7 @@ function ledgerSnapshot(dir) {
     const before = paths.map(fileIdentity);
     const texts = paths.map((path, i) => {
       if (before[i] === "absent") return null;
+      if (before[i] === "unreadable") return UNREADABLE;
       if (Number(before[i].split(":")[0]) > MAX_LEDGER_BYTES) return OVER_BOUND;
       try {
         fault("ledger-unreadable");
@@ -4856,6 +4865,7 @@ function readLedger(dir, now) {
   // for it is set aside, so an older proceed never stands in for it. A later answer releases it.
   const unknown = [];
   let seq = 0;
+  let cutBefore = 0;
   const snapshot = ledgerSnapshot(dir);
   if (snapshot === null) {
     refuse("the check ledger changed while it was read (the server was rotating it)");
@@ -4885,6 +4895,9 @@ function readLedger(dir, now) {
       } catch {
         const pkg = /"package"\s*:\s*"((?:[^"\\]|\\.){1,214})"/.exec(line);
         if (pkg) unknown.push({ ecosystem: /"ecosystem"\s*:\s*"([^"]{1,20})"/.exec(line)?.[1] ?? null, package: pkg[1], seq });
+        // Round 14 (R9, S35): a line cut before its package could be for any package: every line
+        // before it is set aside, so no older proceed stands in for the answer it was.
+        else cutBefore = seq;
         continue;
       }
       if (!e || typeof e !== "object" || typeof e.package !== "string") continue;
@@ -4916,6 +4929,11 @@ function readLedger(dir, now) {
     for (const e of entries) {
       if (!(e.seq < (last.get(`${e.ecosystem.toLowerCase()}\0${fold(e.ecosystem, e.package)}`) ?? 0))) entries[w++] = e;
     }
+    entries.length = w;
+  }
+  if (cutBefore > 0) {
+    let w = 0;
+    for (const e of entries) if (e.seq > cutBefore) entries[w++] = e;
     entries.length = w;
   }
   // Oldest first by the time each answer was given: several servers append to one ledger, and the
@@ -5718,6 +5736,9 @@ async function main() {
     try {
       const raw = stdinText.charCodeAt(0) === 0xfeff ? stdinText.slice(1) : stdinText;
       const input = JSON.parse(raw);
+      // Round 14 (R9, S71): read from now, with 1.5 s of budget (the answer lands before Claude
+      // Code's 10 s), not from the hook's start 8 s ago, which held every call as too slow.
+      mainStartedAt = performance.now() - (READ_BUDGET_MS + 500 - 1500);
       out = respond(input);
     } catch {
       out = rawHold(stdinText);
