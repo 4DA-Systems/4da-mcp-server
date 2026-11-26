@@ -68,7 +68,8 @@ describe("a narrow key is judged, but declares no version for the whole tree", (
   it("pnpm-workspace.yaml, the other direction: a plain declaration still covers a narrow key that repeats its version; a changed narrow value is held", () => {
     const text = `${H}catalog:\n  lodash: 3.10.1\noverrides:\n  "foo>lodash": 3.10.0\n`;
     const file = s.file("pnpm-workspace.yaml", text);
-    expect(s.edit(file, "catalog:\n", "overrides2: x\ncatalog:\n").decision).toBe("allow");
+    // (round 15, H3: an unknown top-level key is held; a setting known to install nothing is not)
+    expect(s.edit(file, "catalog:\n", "nodeLinker: hoisted\ncatalog:\n").decision).toBe("allow");
     expect(s.edit(file, '"foo>lodash": 3.10.0', '"foo>lodash": 3.10.1').decision).toBe("allow");
     expect(s.edit(file, '"foo>lodash": 3.10.0', '"foo>lodash": 3.10.2').items).toEqual([{ ecosystem: "npm", package: "lodash", to: "3.10.2", from: "3.10.0" }]);
     expect(s.edit(file, '"foo>lodash": 3.10.0', '"bar>lodash": 3.10.0').decision).toBe("deny");

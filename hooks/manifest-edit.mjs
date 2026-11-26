@@ -186,7 +186,7 @@ const UV_REQUIREMENT_ARRAYS = new Set(["dev-dependencies", "constraint-dependenc
 /** package.json keys outside the dependency sections that hold a version. */
 const NPM_NOT_DEPENDENCIES = new Set(["version", "node", "npm", "pnpm", "yarn", "bun", "deno", "vscode", "packageManager"]);
 /** pnpm-workspace.yaml sections that set dependency versions. */
-const PNPM_VERSION_SECTIONS = new Set(["catalog", "catalogs", "overrides"]);
+const PNPM_VERSION_SECTIONS = new Set(["catalog", "catalogs", "overrides", "packageExtensions"]);
 
 /**
  * For a JSON snippet, the object each position sits in, read in one forward pass (r8: a backward
@@ -585,10 +585,12 @@ function cargoDependencies(entries, more = null) {
   const out = [];
   for (const d of deps.values()) {
     const fields = { ...(more?.get(`${d.section}\0${d.name}`) ?? {}), ...d.fields };
-    const version = fields.version?.s;
-    if (typeof version !== "string" || !VERSION_SHAPED.test(version)) continue;
     // `registry = "crates-io"` names the public registry itself: a crates.io release.
     if (CARGO_OTHER_SOURCE.some((k) => k in fields && !(k === "registry" && fields.registry?.s === "crates-io"))) continue;
+    let version = fields.version?.s;
+    // Round 15 (H2): `"*"`, or a table with no version (and no other source), installs the newest release.
+    if ((typeof version === "string" && UNBOUNDED_SPEC.test(version.trim())) || (version === undefined && !("workspace" in fields))) version = "latest";
+    if (typeof version !== "string" || !(VERSION_SHAPED.test(version) || version === "latest")) continue;
     if (fields.package && typeof fields.package.s !== "string") continue;
     out.push({ name: fields.package ? fields.package.s : d.name, section: d.section, spec: version });
   }
@@ -706,6 +708,8 @@ function requirementString(text) {
   const paren = parenthesised(rest);
   if (paren === undefined) return null;
   if (paren !== null) rest = paren;
+  // Round 15 (H2): a name alone installs the newest release.
+  if (rest.trim() === "") return { name: m[1], spec: "latest" };
   const spec = PEP440_SPECIFIERS.exec(rest);
   return spec && spec[1].length === rest.length ? { name: m[1], spec: spec[1].replace(/\s+/g, "") } : null;
 }
@@ -767,6 +771,8 @@ function pyprojectDependencies(entries, local = new Set()) {
     for (const f of d.alternatives) {
       const version = f.version?.s;
       if (typeof version === "string" && VERSION_SHAPED.test(version)) out.push({ name: d.name, section: d.section, spec: version });
+      // Round 15 (H2): `"*"` bounds nothing: the request latest.
+      else if (typeof version === "string" && UNBOUNDED_SPEC.test(version.trim())) out.push({ name: d.name, section: d.section, spec: "latest" });
     }
   }
   for (const { table, keys, value } of entries) {
@@ -941,6 +947,8 @@ function requirementLine(line) {
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]\n]{0,200}\])?\s*\(?\s*/.exec(text);
   if (!m) return null;
   const rest = text.slice(m[0].length);
+  // Round 15 (H2): a name alone (extras and a marker allowed) installs the newest release.
+  if (withoutMarker(rest).replace(/^\)?\s*/, "").trim() === "") return { name: nameKey("PyPI", m[1]), spec: "latest" };
   const spec = PEP440_SPECIFIERS.exec(rest);
   return spec ? { name: nameKey("PyPI", m[1]), spec: spec[1].replace(/\s+/g, "") } : null;
 }
@@ -988,10 +996,50 @@ function pnpmContentLines(text) {
  * lines are read (a value `npm:name@version` as the package and version it names); flow mappings
  * are not (wholeFileChanges holds a changed file with a line that is not plain, R7).
  */
+/** H3: the sections of a packageExtensions entry that add dependencies. */
+const PNPM_EXTENSION_SECTIONS = new Set(["dependencies", "optionalDependencies", "peerDependencies"]);
+/**
+ * H3: pnpm-workspace.yaml's top-level keys this hook judges (PNPM_VERSION_SECTIONS) and the ones
+ * known to put no registry release in the lockfile. A change under any other key is held.
+ */
+const PNPM_INERT_KEYS = new Set([
+  "packages", "onlyBuiltDependencies", "neverBuiltDependencies", "ignoredBuiltDependencies", "onlyBuiltDependenciesFile", "allowBuilds",
+  "publicHoistPattern", "hoistPattern", "hoist", "shamefullyHoist", "nodeLinker", "strictPeerDependencies", "autoInstallPeers", "resolvePeersFromWorkspaceRoot",
+  "linkWorkspacePackages", "injectWorkspacePackages", "saveWorkspaceProtocol", "preferWorkspacePackages", "sharedWorkspaceLockfile", "peerDependencyRules",
+  "patchedDependencies", "allowedDeprecatedVersions", "allowUnusedPatches", "ignorePatchFailures", "auditConfig", "updateConfig", "engineStrict",
+  "enablePrePostScripts", "ignoreScripts", "savePrefix", "saveExact", "dedupePeerDependents", "verifyDepsBeforeRun", "catalogMode", "cleanupUnusedCatalogs",
+  "minimumReleaseAge", "minimumReleaseAgeExclude", "trustPolicy", "trustPolicyExclude", "dedupeDirectDeps", "dedupeInjectedDeps", "virtualStoreDir",
+  "modulesDir", "storeDir", "childConcurrency", "networkConcurrency", "useNodeVersion", "nodeVersion", "executionEnv", "recursiveInstall", "requiredScripts",
+  "enableModulesDir", "symlink", "packageImportMethod", "sideEffectsCache", "sideEffectsCacheReadonly", "lockfile", "preferFrozenLockfile", "frozenLockfile",
+  "optimisticRepeatInstall", "strictDepBuilds", "dangerouslyAllowAllBuilds", "configDependencies",
+]);
+
+/** H3: the top-level keys of a pnpm-workspace.yaml text, each with its block's content lines. */
+function pnpmTopBlocks(text) {
+  const blocks = new Map();
+  let key = null;
+  for (const raw of String(text).replace(/^\uFEFF/, "").split(/\r\n?|\n/)) {
+    tick();
+    const line = raw.trimEnd();
+    if (!line.trim() || line.trim().startsWith("#") || line === "---") continue;
+    if (!/^\s/.test(line)) {
+      const m = /^(?:'([^']*)'|"([^"]*)"|([^\s:#'"][^:#]*?))\s*:/.exec(line);
+      key = m ? (m[1] ?? m[2] ?? m[3]) : line;
+    }
+    blocks.set(key, `${blocks.get(key) ?? ""}${line}\n`);
+  }
+  return blocks;
+}
+
 function pnpmWorkspaceVersions(text, out) {
   let top = null;
   let catalog = null;
   let catalogIndent = -1;
+  // Round 15 (H3): packageExtensions: <selector>: <section>: <name>: <spec>
+  let ext = null;
+  let extIndent = -1;
+  let extSection = null;
+  let extSectionIndent = -1;
   // A byte order mark is not part of the first key (`\uFEFFoverrides:` read as indented hid the section).
   // YAML ends a line at a lone CR too (pnpm reads `# note\roverrides:` as two lines).
   for (const raw of text.replace(/^\uFEFF/, "").split(/\r\n?|\n/)) {
@@ -1012,6 +1060,8 @@ function pnpmWorkspaceVersions(text, out) {
       const key = m ? (m[1] ?? m[2] ?? m[3]) : "";
       top = m && yamlScalar(m[4]) === null && PNPM_VERSION_SECTIONS.has(key) ? key : null;
       catalog = null;
+      ext = null;
+      extSection = null;
       continue;
     }
     if (!m || top === null) continue;
@@ -1020,6 +1070,17 @@ function pnpmWorkspaceVersions(text, out) {
     if (top === "catalogs" && value === null) {
       catalog = key;
       catalogIndent = indent;
+      continue;
+    }
+    if (top === "packageExtensions") {
+      if (value === null) {
+        if (ext === null || indent <= extIndent) [ext, extIndent, extSection] = [key, indent, null];
+        else [extSection, extSectionIndent] = [key, indent];
+        continue;
+      }
+      if (ext === null || extSection === null || indent <= extSectionIndent || !PNPM_EXTENSION_SECTIONS.has(extSection)) continue;
+      const d = npmDeclared(key, value);
+      if (d) put(out, d.name, `packageExtensions.${ext}.${extSection}`, d.spec);
       continue;
     }
     if (value === null) continue;
@@ -1034,7 +1095,12 @@ function pnpmWorkspaceVersions(text, out) {
       if (!alias) continue;
       name = alias.name;
       spec = alias.spec;
-    } else if (!/^[~^<>=*\dvxX]/.test(value)) continue;
+    } else {
+      // Round 15 (H2): the positive form (a version or range, latest or what bounds nothing, a tag).
+      const d = npmDeclared(name ?? key, value);
+      if (!d) continue;
+      spec = d.spec;
+    }
     if (name === null) continue;
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
     const section = top === "catalogs" ? `catalogs.${catalog}` : top;
@@ -1099,6 +1165,24 @@ function npmWholeDependencies(text) {
   if (isObject(doc.overrides)) overrides(doc.overrides, "overrides", null, 0);
   if (isObject(doc.resolutions)) overrides(doc.resolutions, "resolutions", null, 0);
   if (isObject(doc.pnpm) && isObject(doc.pnpm.overrides)) overrides(doc.pnpm.overrides, "pnpm.overrides", null, 0);
+  // Round 15 (H3): pnpm.packageExtensions (and Yarn 1's, the same shape: `packageExtensions` at the
+  // top) add dependencies to a package: each one a declaration.
+  for (const [holder, prefix] of [
+    [isObject(doc.pnpm) ? doc.pnpm.packageExtensions : null, "pnpm.packageExtensions"],
+    [doc.packageExtensions, "packageExtensions"],
+  ]) {
+    if (!isObject(holder)) continue;
+    for (const [selector, entry] of Object.entries(holder)) {
+      if (!isObject(entry)) continue;
+      for (const sec of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+        if (!isObject(entry[sec])) continue;
+        for (const [name, spec] of Object.entries(entry[sec])) {
+          const d = typeof spec === "string" ? npmDeclared(name, spec) : null;
+          if (d) out.push({ name: d.name, section: `${prefix}.${selector}.${sec}`, spec: d.spec });
+        }
+      }
+    }
+  }
   // Bun's catalogs: `workspaces.catalog` and `workspaces.catalogs.<name>`, and the same two at the
   // top level, which Bun also reads (audit 2026-11-25, D-M2: never read, while the server reads them).
   const catalog = (obj, section) => {
@@ -1127,10 +1211,24 @@ function npmWholeDependencies(text) {
  * (`"npm:minimist@1.2.6"`) as the package and version it names. Other tags, git, file and URL
  * sources name no release.
  */
+/**
+ * Round 15 (H2): a declared specifier that bounds nothing (`*`, `""`, `x`, `X`) installs the newest
+ * release: the request latest.
+ */
+const UNBOUNDED_SPEC = /^(?:\*|x|X|)$/;
+/** H2: npm forms that name no registry release (the project's own source, not judged). */
+const NPM_OTHER_FORM = /^(?:file:|link:|workspace:|portal:|patch:|catalog:|git[+:]|github:|gitlab:|bitbucket:|gist:|https?:|\.{0,2}[\\/]|~[\\/]|[A-Za-z]:[\\/])|\.(?:tgz|tar\.gz|tar)$|^[\w.-]+\/[\w.-]+(?:#.*)?$/i;
 function npmDeclared(name, value) {
   const v = value.trim();
   if (VERSION_SHAPED.test(v)) return { name, spec: value };
-  if (v === "latest") return { name, spec: v };
+  if (v === "latest" || UNBOUNDED_SPEC.test(v)) return { name, spec: "latest" };
+  // A dist-tag other than latest: held, "name the version" (the edit path marks it a tag).
+  if (isDistTag(v)) return { name, spec: v };
+  // (`$name` in an override is the version the project declares for that name, judged where it is declared)
+  if (!v.startsWith("npm:") && !v.startsWith("$") && !NPM_OTHER_FORM.test(v) && !/^[<>=~^\d\s.|xX*-]+$/.test(v)) {
+    refuse(`${JSON.stringify(name).slice(0, 120)}: ${JSON.stringify(v).slice(0, 80)}, a specifier this hook does not read`);
+    return null;
+  }
   const alias = v.startsWith("npm:") ? NPM_SPEC.exec(v.slice(4)) : null;
   const version = alias ? (alias[2] === "latest" ? "latest" : jsVersion(alias[2])) : null;
   return version ? { name: alias[1], spec: version } : null;
@@ -1427,6 +1525,16 @@ function wholeFileChanges(file, before, after) {
         );
       }
       return [];
+    }
+    // Round 15 (H3): a change under a top-level key that is neither judged nor known to declare nothing.
+    const was = pnpmTopBlocks(before);
+    for (const [key, block] of pnpmTopBlocks(after)) {
+      if (PNPM_VERSION_SECTIONS.has(key) || PNPM_INERT_KEYS.has(key) || was.get(key) === block) continue;
+      refuse(
+        `a change under pnpm-workspace.yaml's ${JSON.stringify(String(key).slice(0, 60))}, a key this hook does not read and does not know to install nothing`,
+        "No dependency_check verdict releases this edit: this hook reads the catalog, catalogs, overrides and packageExtensions sections and knows the settings that install nothing; a key outside both may put a registry release in the lockfile. Make the change by hand, or move what it declares into a section the hook reads.",
+      );
+      break;
     }
   }
   if (file === "Cargo.toml" || file === "pyproject.toml") {
@@ -1791,7 +1899,8 @@ function repeatable(changes) {
       refuse(long);
       continue;
     }
-    const to = specText(c.to);
+    // Round 15 (H2): a dist-tag word (shape-checked by isDistTag) is kept, to be held "name the version".
+    const to = specText(c.to) || (typeof c.to === "string" && isDistTag(c.to.trim()) ? c.to.trim() : "");
     if (!to) continue;
     const from = c.from == null ? null : specText(c.from) || null;
     out.push({ name: c.name, from, to });
@@ -2056,7 +2165,9 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
       // Bash expands `$`, a backquote and a backslash inside double quotes; PowerShell expands `$`
       // and its backtick escape, and a backslash is an ordinary character there
       // (`& "C:\Program Files\nodejs\npm.cmd" i x@1` went ahead unread in the 6.5.1 candidate).
-      if (dialect === "powershell" ? /[$`]/.test(inner) : /[$`\\]/.test(inner)) return null;
+      // Round 15 (H8b): in bash a backslash is special inside double quotes only before $ ` " \ or a
+      // newline (or the closing quote it would escape); `\n` there is two literal characters.
+      if (dialect === "powershell" ? /[$`]/.test(inner) : /[$`]|\\[$`"\\\n]|\\$/.test(inner)) return null;
       word = (word ?? "") + inner;
       i = end;
     } else if (ch === " " || ch === "\t") {
@@ -5369,7 +5480,8 @@ function introducedBy(input) {
   const kind = manifestKind(toolInput.file_path);
   if (!kind) return null;
   const changes = repeatable(introducedByEdit(kind, toolName, toolInput, toolInput.file_path));
-  return { what: "edit", changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from })) };
+  // Round 15 (H2): a declared dist-tag other than latest is held as a tag ("name the version").
+  return { what: "edit", changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from, ...(typeof c.to === "string" && c.to !== LATEST && isDistTag(c.to) ? { tag: true } : {}) })) };
 }
 
 /**

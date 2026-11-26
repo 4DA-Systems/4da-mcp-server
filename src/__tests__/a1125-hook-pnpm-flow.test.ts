@@ -156,12 +156,11 @@ describe("rule 2 in detail", () => {
     expect(s.edit(file, "react: ^18.2.0", "react: ^18.2.0\n  lodash: 4.17.20").text).toContain("answered avoid");
   });
 
-  it("a brace in a simply quoted value (`debug: '}'`) is a plain scalar (round 14, R7): the file is read, the version judged", () => {
+  it("a brace in a simply quoted value is a plain scalar (round 14, R7); as an override's value it is no specifier (round 15, H2): held", () => {
     s.ledger([AVOID]);
     const file = s.file("pnpm-workspace.yaml", `${HEAD}overrides:\n  debug: '}'\n  lodash: ^4.17.21\n`);
     const run = s.edit(file, "lodash: ^4.17.21", "lodash: 4.17.20");
-    expect(run.text).not.toContain("could not be read");
-    expect(run.text).toContain("answered avoid");
+    expect(run.text).toContain("a specifier this hook does not read");
   });
 
   it("following the remedy literally passes: the same versions rewritten as block lines, the verdicts the denial then names recorded", () => {
