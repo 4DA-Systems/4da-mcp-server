@@ -85,3 +85,13 @@ describe("2: a manifest's path is resolved as text before its name is matched", 
     expect(write(`${P()}/x/package.json/../notes.json`, PKG).decision).toBe("allow");
   });
 });
+
+describe("3: no option that installs a name not on the line", () => {
+  it.each(["bun add -a ./index.ts", "bun add --analyze src/index.ts", "bun update --interactive", "yarn upgrade --pattern gulp", "yarn upgrade --scope @angular", "yarn install --focus", "yarn add --use-yarnrc ./other.yarnrc lodash@4.17.20", "pnpm update --interactive"])("%s: held as not read", (command) => {
+    expect(run(command).text).toContain("could not be read");
+  });
+
+  it.each(["bun add lodash@4.17.20", "yarn add lodash@4.17.20", "pnpm update lodash@4.17.20"])("%s: the plain command is read", (command) => {
+    releases(command);
+  });
+});
