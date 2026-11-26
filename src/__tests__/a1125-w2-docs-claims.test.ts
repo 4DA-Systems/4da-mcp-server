@@ -15,8 +15,8 @@ import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands } from "../tools/briefing-canonical.js";
-import { RAW_SOURCE, unreadableReason } from "../tools/briefing-command-check.js";
-import { MAX_DECLARED, MAX_TO_CONFIRM, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { CLEAN_COMMAND, RAW_SOURCE, unreadableReason } from "../tools/briefing-command-check.js";
+import { MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -109,7 +109,9 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
   it("a command not read whole is said by its manager and verb, with the wordings the CHANGELOG quotes", () => {
     const comma = canonicalCommands("pip install requests, x")[0]!;
     expect(comma.canonical).toBe(false);
-    expect(unreadableReason({ ...comma, unreadable: comma.why as never, operands: [] })).toBe("This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check.");
+    expect(unreadableReason({ ...comma, unreadable: comma.why as never, operands: [] })).toBe(`This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check. ${CLEAN_COMMAND}`);
+    expect(CLEAN_COMMAND).toBe("For a clean answer, write the command on its own line or in a code span (`npm install x y`) with only package names after the verb, and call again.");
+    expect(next).toContain(`the reason ends "${CLEAN_COMMAND}"`);
     expect(next).toContain("(\"This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check.\")");
     expect(canonicalCommands("npm create vite")[0]!.why).toBe("it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check");
     expect(next).toContain('"it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check"');
@@ -118,12 +120,14 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     for (const runner of ["npx x", "pnpm dlx x", "uv tool run x", "go run example.com/x@v1.0.0", "deno run npm:x"]) expect(canonicalCommands(runner)[0]!.canonical, runner).toBe(false);
   });
 
-  it("a package source of the task's own: the not_read wording, and the -F limit the CHANGELOG states", () => {
+  it("a package source of the task's own: the not_read wording; source words in their own case and manager", () => {
     expect(SOURCE_HELD).toBe("not looked up: the task names a package source of its own; if it is on the public registry, check it with dependency_check");
     expect(next).toContain(`"${SOURCE_HELD}"`);
-    expect(RAW_SOURCE.test("cargo add -F derive serde")).toBe(true);
+    expect(RAW_SOURCE.test("cargo add -F derive serde")).toBe(false);
+    expect(RAW_SOURCE.test("pip install -f ./wheels x")).toBe(true);
     expect(RAW_SOURCE.test("cargo add --features derive serde")).toBe(false);
-    expect(next).toContain("`cargo add -F derive serde` names a package source of its own");
+    expect(next).toContain("Cargo's `-F derive` and npm's `-f` are no source");
+    expect(next).not.toContain("names a package source of its own and nothing the task adds is looked up; write");
   });
 
   it("the safe_to_delegate reason's last sentence, and the task length limit", () => {
@@ -136,6 +140,14 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
   it("build metadata: the wording dependency_check gives, quoted without the label", () => {
     expect(text("src/tools/dependency-check.ts")).toContain('"Build metadata in %s was ignored, as npm ignores it when it orders versions"');
     expect(next).toContain('("Build metadata in "4.17.20+..." was ignored ... and the metadata was not sent")');
+  });
+
+  it("a Go path in the proxy's `!`-escaped form is refused in a declaration (round 7c)", () => {
+    const { entries, refused } = readDeclarations([{ ecosystem: "Go", name: "github.com/!sirupsen/logrus", version: "v1.9.3", public: true }]);
+    expect(entries).toEqual([]);
+    expect(refused[0]!.reason).toContain("`name` is no Go package name");
+    expect(next).toContain("is refused in a declaration, as `dependency_check` refuses the same item: neither tool looks it up or writes a ledger line for it");
+    expect(next).not.toContain("passes the entry check");
   });
 
   it("to_confirm entries carry no version, and the docs say so", () => {

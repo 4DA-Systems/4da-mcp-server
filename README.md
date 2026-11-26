@@ -244,7 +244,7 @@ what_should_i_know { "task": "npm install lodahs", "packages": [{ "ecosystem": "
 
 lodahs is checked in that call (`"checked": [{ "name": "lodahs", "ecosystem": "npm", "version": "0.0.1-security", "verdict": "avoid", "basis": "confirmed public by you" }]`), the level is `human_only` (npm took lodahs down as malware), and the `avoid` is in the check ledger, so the guard hook holds `npm install lodahs` as well. Had the agent meant lodash, it would have declared lodash. An agent that knows its packages passes them on the first call and gets the whole briefing at once.
 
-A command written inside a sentence is read to the end of that sentence: "Use npm install msw for tests" holds msw, for and tests, and each waits like any operand. Putting for and tests in `not_packages` keeps the level at `review_needed`, since they stand where a package stands. For a clean answer, write the command on its own line, in a code span (`` `npm install msw` ``) or in parentheses ("(npm install msw)"), with only package names after the verb.
+A command written inside a sentence is read to the end of that sentence: "Use npm install msw for tests" holds msw, for and tests, and each waits like any operand. Putting for and tests in `not_packages` keeps the level at `review_needed`, since they stand where a package stands, and the reason then says how to get a clean answer: write the command on its own line, in a code span (`` `npm install msw` ``) or in parentheses ("(npm install msw)"), with only package names after the verb.
 
 ### Prompt: `deps`
 
