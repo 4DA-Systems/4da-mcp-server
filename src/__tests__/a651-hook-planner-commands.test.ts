@@ -55,11 +55,15 @@ describe("the planner's commands are read", () => {
     expect(read("cargo update -p time --precise 0.3.20", "powershell")).toEqual(["crates.io time 0.3.20"]);
   });
 
+  // Round 11: `uv lock --upgrade-package requests` names a package and moves it to its newest release: the request "latest" (a1125-w2-hook-round11.test.ts).
+  it("uv lock --upgrade-package <name> is the request latest", () => {
+    expect(read("uv lock --upgrade-package requests")).toEqual(["PyPI requests latest"]);
+  });
+
   it("forms that name no version stay unread", () => {
     for (const command of [
       "cargo update",
       "cargo update -p time",
-      "uv lock --upgrade-package requests",
       "npm pkg set name=app",
       "npm pkg set scripts.test=vitest",
       "npm pkg get dependencies.lodash",

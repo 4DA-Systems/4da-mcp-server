@@ -2785,6 +2785,8 @@ function upgradePackages(args) {
     i += v.taken - 1;
     const r = typeof v.value === "string" ? pep508(v.value) : null;
     if (r) out.push({ ecosystem: "PyPI", name: r.name, spec: r.spec });
+    // Round 11: a name alone moves it to its newest release: the request "latest".
+    else if (typeof v.value === "string" && pyBareName(v.value)) out.push({ ecosystem: "PyPI", name: pyBareName(v.value), spec: LATEST });
   }
   return out;
 }

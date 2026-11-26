@@ -97,3 +97,21 @@ describe("3: a constraints or overrides file beside a named package, on every re
     releasedByTheCall(command.startsWith("uv tool") ? "uv tool install ruff==0.8.0" : "pip install requests==2.32.3");
   });
 });
+
+describe("4: --upgrade-package <name> moves the named package to its newest release", () => {
+  it.each(["uv lock --upgrade-package requests", "uv lock -P requests", "uv sync -P requests", "uv pip compile requirements.in -P requests", "pip-compile -P requests requirements.in", "python -m piptools compile --upgrade-package requests requirements.in"])(
+    "%s: the request latest, held without its verdict, released by the call",
+    (command) => {
+      const r = run(command);
+      expect(r.decision, r.text).toBe("deny");
+      expect(r.items).toEqual([{ ecosystem: "PyPI", package: "requests", to: "latest" }]);
+      answerDenial(s, r, "proceed");
+      expect(run(command).decision).toBe("allow");
+    },
+  );
+
+  it("with an avoid on the latest request: held", () => {
+    s.ledger([{ ecosystem: "PyPI", package: "requests", version: "2.32.3", requested: "latest", verdict: "avoid", reason: "test avoid" }]);
+    expect(run("uv lock -P requests").text).toContain("avoid");
+  });
+});
