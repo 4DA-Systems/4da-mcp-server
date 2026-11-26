@@ -57,7 +57,8 @@ describe("Cargo: path, git and another registry", () => {
 });
 
 describe("npm: file, link, workspace, git and URL specifiers", () => {
-  it.each([["file:../my-lib"], ["link:../my-lib"], ["workspace:^1.0.0"], ["workspace:*"], ["git+https://github.com/acme/my-lib.git#1.0.0"], ["github:acme/my-lib#semver:^1.0.0"], ["https://example.com/my-lib-1.0.0.tgz"], ["catalog:"]])("%s", (spec) => {
+  // (round 16, J3: a tarball URL goes ahead only on a host private by shape; https://example.com is held)
+  it.each([["file:../my-lib"], ["link:../my-lib"], ["workspace:^1.0.0"], ["workspace:*"], ["git+https://github.com/acme/my-lib.git#1.0.0"], ["github:acme/my-lib#semver:^1.0.0"], ["https://npm.corp/my-lib-1.0.0.tgz"], ["catalog:"]])("%s", (spec) => {
     const file = s.file("package.json", PKG);
     onlyReal(s.edit(file, '"react": "18.3.1"', `"react": "18.3.1",\n    "my-lib": "${spec}"`), "my-lib");
   });

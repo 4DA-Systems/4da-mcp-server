@@ -63,12 +63,14 @@ describe("commands", () => {
   });
 
   it("another index or registry still leaves the command unread", () => {
-    expect(read("pip install -i https://pypi.example.com/simple requests==2.25.0")).toEqual([]);
+    // Round 16 (J3): only an index private by shape is the project's own; any other host's names are read.
+    expect(read("pip install -i https://pypi.internal/simple requests==2.25.0")).toEqual([]);
+    expect(read("pip install -i https://mirrors.example.com/simple requests==2.25.0")).toEqual(["PyPI requests ==2.25.0"]);
     expect(read("pip install --index-url https://pypi.org.evil.example/simple requests==2.25.0")).toEqual([]);
     // Round 10 (S6): a find-links location, like an extra index, keeps the public index in play: the name is read.
     expect(read("pip install --find-links https://pypi.org/simple requests==2.25.0")).toEqual(["PyPI requests ==2.25.0"]);
     expect(read("pip install --no-index --find-links ./wheels requests==2.25.0")).toEqual([]);
-    expect(read("cargo add --registry my-company serde@1.0.100")).toEqual([]);
+    expect(read("cargo add --registry my-company serde@1.0.100")).toEqual(["crates.io serde 1.0.100"]);
   });
 
   it("a PEP 508 specifier in parentheses", () => {
