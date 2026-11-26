@@ -117,26 +117,43 @@ describe("a target that clears none of the row's advisories is not a fix", () =>
     for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v;
   });
 
-  it("gorilla/websocket: fixed only in a pseudo-version, so v1.5.3 is still affected: no step serves it, it is not under fixes, not counted", async () => {
-    const ws = "github.com/gorilla/websocket";
-    const net = "golang.org/x/net";
-    // As OSV.dev records it: fixed in 1.5.1, introduced again in 1.5.3, fixed only in a pseudo-version.
-    h.ADVISORIES[ws] = [adv("GO-2026-6278", ws, [{ introduced: "0" }, { fixed: "1.5.1" }, { introduced: "1.5.3" }, { fixed: "1.5.4-0.20240701034025-d67f41855da4" }], "Go")];
+  const ws = "github.com/gorilla/websocket";
+  const net = "golang.org/x/net";
+  // GO-2026-6278 as OSV.dev records it: fixed in 1.5.1, introduced again in 1.5.3, fixed only in a pseudo-version.
+  const goRecord = () => ({ ...adv("GO-2026-6278", ws, [{ introduced: "0" }, { fixed: "1.5.1" }, { introduced: "1.5.3" }, { fixed: "1.5.4-0.20240701034025-d67f41855da4" }], "Go"), aliases: ["GHSA-w67g-5rqw-f597"] });
+  // Its alias GHSA-w67g-5rqw-f597 as OSV.dev records it: fixed in 1.5.3 (so 1.5.1 and 1.5.2 are affected by it).
+  const ghsaRecord = () => ({ ...adv("GHSA-w67g-5rqw-f597", ws, [{ introduced: "0" }, { fixed: "1.5.3" }], "Go"), aliases: ["GO-2026-6278"] });
+  const goProject = () => {
     h.ADVISORIES[net] = [adv("GO-2023-1495", net, [{ introduced: "0" }, { fixed: "0.7.0" }], "Go")];
-    h.GO = { [ws]: ["v1.4.2", "v1.5.3"], [net]: ["v0.5.0", "v0.7.0"] };
-    h.GOMOD = { [`${ws}@v1.5.3`]: "1.12", [`${net}@v0.7.0`]: "1.17" };
+    h.GO = { [ws]: ["v1.4.2", "v1.5.0", "v1.5.1", "v1.5.2", "v1.5.3"], [net]: ["v0.5.0", "v0.7.0"] };
+    h.GOMOD = { [`${ws}@v1.5.1`]: "1.12", [`${ws}@v1.5.3`]: "1.12", [`${net}@v0.7.0`]: "1.17" };
     h.write("go.mod", `module example.com/app\n\ngo 1.18\n\nrequire (\n\t${ws} v1.4.2\n\t${net} v0.5.0\n)\n`);
     h.write("go.sum", `${ws} v1.4.2 h1:x=\n${ws} v1.4.2/go.mod h1:x=\n${net} v0.5.0 h1:x=\n${net} v0.5.0/go.mod h1:x=\n`);
+  };
+  const fixesOf = (result: Record<string, any>) => result.run_order.flatMap((s: { fixes: string[] }) => s.fixes);
+
+  it("fixed, then introduced again: the target is the smallest clean release above the installed one (v1.5.1), never the affected newest", async () => {
+    h.ADVISORIES[ws] = [goRecord()];
+    goProject();
+    const { result, step } = await h.plan();
+    const row = step(ws);
+    expect(row.targetVersion).toBe("v1.5.1");
+    expect(row.commands).toEqual([{ dir: ".", run: `go get ${ws}@v1.5.1` }]);
+    expect(fixesOf(result)).toContain(`Go:${ws}`);
+  });
+
+  it("the real pair of records disagrees (GHSA fixed in 1.5.3, GO affected from 1.5.3): no release clears both, so no step serves it and it is not counted", async () => {
+    h.ADVISORIES[ws] = [goRecord(), ghsaRecord()];
+    goProject();
     const { result, step } = await h.plan();
     const row = step(ws);
     expect(row).toBeDefined();
-    expect(row.targetVersion).toBe("v1.5.3");
     expect(row.commands).toEqual([]);
-    expect(row.reasons.join("\n")).toMatch(/it is NOT a fix, since github\.com\/gorilla\/websocket v1\.5\.3 is still affected by GO-2026-6278/);
-    expect(result.run_order.flatMap((s: { fixes: string[] }) => s.fixes)).not.toContain(`Go:${ws}`);
+    expect(row.reasons.join("\n")).toMatch(/it is NOT a fix, since github\.com\/gorilla\/websocket v1\.5\.3 is still affected by/);
+    expect(fixesOf(result)).not.toContain(`Go:${ws}`);
     expect(result.run_order.map((s: { run: string }) => s.run).join("\n")).not.toContain("websocket");
     // The fix that is real still runs.
-    expect(result.run_order.flatMap((s: { fixes: string[] }) => s.fixes)).toContain(`Go:${net}`);
+    expect(fixesOf(result)).toContain(`Go:${net}`);
   });
 });
 
