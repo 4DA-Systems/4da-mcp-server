@@ -1041,6 +1041,7 @@ const PNPM_EXTENSION_SECTIONS = new Set(["dependencies", "optionalDependencies",
  * H3, re-derived in round 16 (J4) from pnpm's settings documentation: pnpm-workspace.yaml's
  * top-level keys known to put no registry release into node_modules or the lockfile, each with the
  * reason. Any other key (configDependencies, which installs packages, is judged; linkWorkspacePackages,
+ * autoInstallPeers, resolvePeersFromWorkspaceRoot, injectWorkspacePackages, sharedWorkspaceLockfile,
  * dedupe*, catalogMode, minimumReleaseAge, resolutionMode, registry, supportedArchitectures,
  * nodeVersion, updateConfig, the lockfile settings and every unknown key) is held when changed.
  */
@@ -1077,6 +1078,7 @@ const PNPM_INERT_LIST = [
   ["ignorePatchFailures", "whether a failing patch fails"],
   ["auditConfig", "what pnpm audit reports"],
   ["engineStrict", "fails an install whose engines do not fit"],
+  ["strictPeerDependencies", "fails an install whose peers do not fit; the releases chosen are the same"],
   ["verifyDepsBeforeRun", "a check before pnpm run"],
   ["requiredScripts", "a check that scripts exist"],
   ["recursiveInstall", "whether install recurses into workspace packages"],

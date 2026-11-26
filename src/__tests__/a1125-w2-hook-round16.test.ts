@@ -164,11 +164,11 @@ describe("J4: configDependencies are judged; a setting off the inert list is hel
     expect(r.decision).toBe("deny");
     expect(r.text).toContain("answered avoid");
   });
-  it.each(["linkWorkspacePackages: false\n", "dedupePeerDependents: false\n", "catalogMode: prefer\n", "minimumReleaseAge: 1440\n", "supportedArchitectures:\n  os:\n    - linux\n", "nodeVersion: 18.0.0\n"])("%j: held when changed", (content) => {
+  it.each(["linkWorkspacePackages: false\n", "dedupePeerDependents: false\n", "catalogMode: prefer\n", "minimumReleaseAge: 1440\n", "supportedArchitectures:\n  os:\n    - linux\n", "nodeVersion: 18.0.0\n", "autoInstallPeers: false\n", "injectWorkspacePackages: true\n", "sharedWorkspaceLockfile: false\n"])("%j: held when changed", (content) => {
     expect(s.write(`${s.project}/pnpm-workspace.yaml`, content).text).toContain("could not be read");
   });
   it("a setting on the list goes ahead", () => {
-    expect(s.write(`${s.project}/pnpm-workspace.yaml`, "packages:\n  - 'apps/*'\nnodeLinker: hoisted\nonlyBuiltDependencies:\n  - esbuild\n").decision).toBe("allow");
+    expect(s.write(`${s.project}/pnpm-workspace.yaml`, "packages:\n  - 'apps/*'\nnodeLinker: hoisted\nstrictPeerDependencies: false\nonlyBuiltDependencies:\n  - esbuild\n").decision).toBe("allow");
   });
 });
 
