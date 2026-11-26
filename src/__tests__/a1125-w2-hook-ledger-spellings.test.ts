@@ -7,6 +7,7 @@
  */
 
 import { realpathSync } from "node:fs";
+import { hostname } from "node:os";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -36,6 +37,9 @@ const spellings: [string, (h: string) => string][] = [
   ["the /cygdrive/c/ form", (h) => (/^[A-Za-z]:/.test(h) ? `/cygdrive/${h[0].toLowerCase()}${h.slice(2)}/` : `${h}/`)],
   ["a \\\\?\\ prefix", (h) => (/^[A-Za-z]:/.test(h) ? `${B}${B}?${B}${h.replace(/\//g, B)}${B}` : `${h}/`)],
   ["a //localhost/c$/ share", (h) => (/^[A-Za-z]:/.test(h) ? `//localhost/${h[0].toLowerCase()}$${h.slice(2)}/` : `${h}/`)],
+  ["the /proc/cygdrive/c/ form", (h) => (/^[A-Za-z]:/.test(h) ? `/proc/cygdrive/${h[0].toLowerCase()}${h.slice(2)}/` : `${h}/`)],
+  ["a share by this host's name", (h) => (/^[A-Za-z]:/.test(h) ? `//${hostname()}/${h[0].toLowerCase()}$${h.slice(2)}/` : `${h}/`)],
+  ["a share by an ipv6-literal.net name", (h) => (/^[A-Za-z]:/.test(h) ? `${B}${B}0--1.ipv6-literal.net${B}${h[0].toUpperCase()}$${h.slice(2).replace(/\//g, B)}${B}` : `${h}/`)],
   ["a /./ step", (h) => `${h}/./`],
   ["a name/../ step", (h) => `${h.slice(0, h.lastIndexOf("/"))}/zz/../${h.slice(h.lastIndexOf("/") + 1)}/`],
   ["a trailing name/../ step", (h) => `${h}/sub/..//`],

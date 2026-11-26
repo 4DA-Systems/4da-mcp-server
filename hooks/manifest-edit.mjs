@@ -8,16 +8,15 @@
  *
  * WHAT GOES AHEAD, ONLY ON POSITIVE EVIDENCE
  *
- * A command goes ahead when it names no package manager as a command word followed by one of its
- * verbs that can add or move a dependency (detectsInstall: npm, pnpm, Yarn, Bun, pip / `python -m
- * pip`, uv, Poetry, Cargo, Go; install / add / up / update / upgrade / link / get / sync / lock /
- * `npm pkg set` / `go mod edit`, read on the raw text whatever its size). A command word is the
- * first word of a simple command, any word after a prefix, runner or wrapper (sudo, env, npx,
- * stdbuf, find -exec, `pipenv run` ...), a line in the string a shell-like runner runs (`bash -c`,
- * `cmd /c`, `eval`), `pip` after Python's `-m`, or the script `node` runs when it is a manager.
- * A tool installed from the registry (`cargo install x`, `go install x@v`, `yarn global add x`,
- * `uv tool install x`) is read as an add. A command the detector names goes ahead only when the hook reads every such simple
- * command in it whole (accountLine): its program and prefixes, every option known with its arity
+ * A command goes ahead when no line of it holds, anywhere, a package-manager word followed later
+ * on that line by one of its verbs that can add or move a dependency (detectsInstall: npm, pnpm,
+ * Yarn, Bun, pip / `python -m pip`, uv, Poetry, Cargo, Go; install / add / up / update / upgrade /
+ * link / get / sync / lock / `npm pkg set` / `go mod edit`; read on the raw text whatever its size,
+ * and again with the shell's escape and quote characters taken out). A line the detector names goes
+ * ahead only when every simple command in it holding a hit is positively classified: the arguments
+ * of a program on a short list known to take them as text (below), or read whole (accountLine). A
+ * tool installed from the registry (`cargo install x`, `go install x@v`, `yarn global add x`, `uv
+ * tool install x`) is read as an add. Read whole means: its program and prefixes, every option known with its arity
  * (ACCOUNT_TABLES, from each tool's own help; for Yarn, Bun and Poetry an allow list from their
  * documentation), and every operand one of
  * - a public name with an exact version or a range, which goes ahead on its verdict: an exact
@@ -28,18 +27,23 @@
  *   that request (the server records `requested: "latest"`), as do `pnpm up -L x`, `yarn up x` and
  *   `yarn upgrade x --latest`, which move it to the newest release;
  * - a form positively installing nothing new from the public registry: no operand (the lockfile),
- *   a requirements file (`-r`, `-Ur`, `-qr`), a path, a tarball, a git or URL source, a registry or
- *   index that is positively not a public host, a name moved inside the manifest's range
- *   (`npm update x`, `pnpm up x`).
- * A command of a program that takes the words only as data goes ahead (echo, printf, grep, rg,
- * cat and a heredoc fed to it, `git commit` / `log` / `show`, docker and podman, whose commands run
- * in a container, a comment). So do `make install`, `brew install`, `apt-get install`, `gem
- * install`, `composer require` and `dotnet add package`, which name no manager this hook reads.
+ *   a requirements file (`-r`, `-Ur`, `-qr`), a path (with extras: `.[dev]`), a tarball, a git or
+ *   URL source on a host that is not a public registry (a public registry's own file URL is read as
+ *   name and version), a registry or index that is positively not a public host, a name moved
+ *   inside the manifest's range (`npm update x`, `pnpm up x`).
+ * The programs known to take the words as text: echo, printf, cat and a heredoc fed to it, the
+ * grep family and Select-String, sed, awk, make, `node -e` / `-p`, `python -c`, `git commit` /
+ * `log` / `show`, `gh pr` / `issue` text, docker and podman (whose commands run in a container),
+ * and a comment. `brew install`, `apt-get install`, `gem install`, `composer require` and `dotnet
+ * add package` name no manager this hook reads.
  * A command run through a shell's `-c`, `eval`, `pwsh -Command`, `Invoke-Expression`, npx, bunx,
- * pnpx, `npm exec`, `pnpm dlx`, `yarn dlx`, `uv run`, `poetry run` or corepack is read as the
- * command it runs, at most MAX_WRAPS wrappers deep, and what it installs must be what the outer
- * command's reader judges; so is one after a prefix (sudo, env, timeout, nice, nohup, time,
- * command, exec, xargs, busybox, wsl), a shell keyword, or inside a subshell, group or script block.
+ * pnpx, `npm exec`, `pnpm exec` / `dlx`, `yarn exec` / `dlx` / `run`, `bun run` / `x`, pnpm or Yarn
+ * passing a manager command through, `uv run`, `uv tool run` / uvx, `poetry run`, `pipenv` / `pdm`
+ * / `rye` / `pixi` / `hatch [env] run`, `python -m uv` / `poetry`, `node <path>/npm-cli.js` or
+ * corepack is read as the command it runs, at most MAX_WRAPS wrappers deep (deeper is held), and
+ * what it installs must be what the outer command's reader judges; so is one after a prefix (sudo,
+ * env, timeout, nice, nohup, time, command, exec, xargs, busybox, wsl), a shell keyword, or inside a
+ * subshell, group or script block.
  * In a manifest only dependency declarations count (never a comment or another string field), each
  * section's are compared on their own, and a dependency taken from a path, git, URL or a non-public
  * source (Cargo `path`, `git`, `registry`; npm `file:`, `link:`, `workspace:`; a PEP 508 direct
@@ -60,10 +64,13 @@
  *   version>`, or the name alone, with no other options): a command the detector names that is not
  *   read whole. That is an option not in the manager's table (among them every option that changes
  *   which release a name resolves to: `--tag`, `--before`, `--pre`, `--prerelease`, `--resolution`,
- *   Bun's `--latest` and `-c`, uv's `--upgrade`), an environment setting before the manager
- *   (`npm_config_*=`, `PIP_*=`, `UV_*=` ...), an operand not read as a version, a program or prefix
- *   this hook does not read, and a line it cannot take apart (a variable, a substitution, an
- *   escape, a PowerShell here-string: for text that only mentions an install, the Write tool).
+ *   Bun's `--latest` and `-c`, uv's `--upgrade`), a manager's own environment setting
+ *   (`npm_config_*`, `PIP_*`, `UV_*` ...) as a prefix or made earlier in the same call (`export`,
+ *   `$env:`, `Set-Item env:`), an operand not read as a version, a program, prefix or wrapper this
+ *   hook does not read (`start`, `mise exec`, `gsudo`, `concurrently`, `git submodule foreach`
+ *   ...), a runner chain past MAX_WRAPS, and a line it cannot take apart (a variable, a
+ *   substitution, an escape, a PowerShell here-string: for text that only mentions an install, the
+ *   Write tool).
  *   Every such hold has that way through; a shape with none is not held.
  * - A manifest part it cannot read (a TOML escape or a multi-line string in a dependency context,
  *   a brace in pnpm-workspace.yaml) and anything past a bound or the time budget.
@@ -76,13 +83,22 @@
  * sets out to defeat it can, for example through a script file that runs the install, a variable,
  * or the ledger limits (a path reached by `cd` in an earlier call, a junction or symlink made
  * earlier, a name the shell assembles from pieces, a wildcard, a parent folder). It reads no
- * network: a registry it cannot classify as public or private is held, not looked up. Installs
- * through pipenv, pdm, rye, pixi, hatch and conda are not read (their manifest sections, [tool.rye]
- * and [tool.pixi], are read on edits), nor are `pipx inject`, gem, composer, dotnet, commands run
- * inside a container, and a manager word inside another program's arguments (`make PIP=pip3
- * install`, `sed`, `awk`, `node -e`, `python -c`): a program or script that runs an install is
- * outside it. Since it denies only where a ledger exists, a removed ledger means no
- * denials until the server starts again.
+ * network: a registry it cannot classify as public or private is held, not looked up. Not read:
+ * - installs through pipenv, pdm, rye, pixi, hatch and conda (their manifest sections, [tool.rye]
+ *   and [tool.pixi], are read on edits), `pipx inject`, gem, composer, dotnet, and commands run
+ *   inside a container;
+ * - a program or script that runs an install: a make target, a package.json script (`npm run x`),
+ *   `pwsh -File`, code given to `node -e`, `python -c`, sed or awk;
+ * - a manager name the shell assembles or decodes (`$'\x6epm'`, `powershell -EncodedCommand`);
+ * - runners that fetch a package and run it (`npx pkg@v`, `pnpm dlx pkg`, `bunx pkg`, `uvx pkg`,
+ *   `pipx run`, `npm init` / `npm create` / `yarn create` / `pnpm create` / `bun create`, `go run
+ *   mod@v`, `cargo binstall`): what they fetch is not checked (the operator's decision is pending);
+ * - settings that change what a name resolves to when they live in files (`.npmrc`, `pip.conf`,
+ *   `uv.toml` or pyproject's [tool.uv], a lockfile written by hand and then installed with `npm
+ *   ci`): an install under them is read as if they were not there (the operator's decision is
+ *   pending).
+ * Since it denies only where a ledger exists, a removed ledger means no denials until the server
+ * starts again.
  *
  * FOURDA_GUARD=advise: never denies; after a manifest edit (PostToolUse) the agent is told which
  * versions moved and which calls check them. FOURDA_GUARD=off: the hook does nothing.
@@ -101,9 +117,10 @@
  */
 
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 
 const MANIFESTS = new Set(["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "go.mod", "pnpm-workspace.yaml"]);
 /** The largest hook payload read (characters). */
@@ -2213,8 +2230,32 @@ function pyBareName(w) {
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?$/.exec(w);
   return m && /[A-Za-z]/.test(m[1]) && !/\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar|egg|txt|in|cfg|toml|lock|json|ya?ml|ini|md)$/i.test(m[1]) ? m[1] : null;
 }
+/**
+ * D7: a file on the public registry named by its URL, as the registry's own form names it: an npm
+ * tarball (`https://registry.npmjs.org/<name>/-/<name>-<version>.tgz`, a scope too), a PyPI wheel or
+ * sdist on files.pythonhosted.org or pypi.org (`requests-2.5.0-py2.py3-none-any.whl`,
+ * `requests-2.5.0.tar.gz`). { ecosystem, name, spec } or null.
+ */
+function registryFile(word) {
+  if (typeof word !== "string" || word.length > 2048) return null;
+  const npm = /^https?:\/\/(?:registry\.npmjs\.org|registry\.npmjs\.com|registry\.yarnpkg\.com|registry\.npmmirror\.com)\/((?:@[a-z0-9][a-z0-9._~-]*\/)?([a-z0-9._~][a-z0-9._~-]*))\/-\/(?:@[a-z0-9][a-z0-9._~-]*\/)?([a-z0-9._~][a-z0-9._~-]*)-(\d+\.\d+\.\d+(?:-[0-9a-z.-]+)?)\.tgz(?:[?#].*)?$/i.exec(word);
+  if (npm && npm[2].toLowerCase() === npm[3].toLowerCase()) return { ecosystem: "npm", name: npm[1].toLowerCase(), spec: npm[4] };
+  const py = /^https?:\/\/(?:files\.pythonhosted\.org|pypi\.org|pypi\.python\.org)\/[^?#]*\/([^/?#]+)(?:[?#].*)?$/i.exec(word);
+  if (!py) return null;
+  const file = decodeURIComponent(py[1]);
+  const wheel = /^([A-Za-z0-9][A-Za-z0-9._]*?)-(\d[A-Za-z0-9.!+]*)-[^-]+(?:-[^-]+){2,3}\.whl$/.exec(file);
+  const sdist = wheel ? null : /^([A-Za-z0-9][A-Za-z0-9._-]*?)-(\d[A-Za-z0-9.!+]*)\.(?:tar\.gz|zip|tar\.bz2)$/.exec(file);
+  const m = wheel ?? sdist;
+  return m ? { ecosystem: "PyPI", name: m[1].replace(/_/g, "-"), spec: `==${m[2]}` } : null;
+}
+
+/** Whether a URL's host is a public registry or index host (PUBLIC_INDEX_HOSTS). */
+const publicUrl = (word) => /^[a-z][a-z0-9+.-]*:\/\//i.test(word) && sourceKind(word.replace(/^git\+/i, "")) === "public";
+
 /** A PyPI install operand: its requirement, or the name alone as the request "latest". */
 function pyOperand(w) {
+  const file = registryFile(w);
+  if (file) return [file];
   const r = pep508(w);
   if (r) return [{ ecosystem: "PyPI", name: r.name, spec: r.spec }];
   const bare = pyBareName(w);
@@ -2269,7 +2310,8 @@ const JS_VALUES = {
 // it, as `add` (alias `a`) does.
 const JS_SUBCOMMANDS = { npm: new Set(["install", "install-test"]), pnpm: new Set(["add", "install", "i", "up", "update", "upgrade"]), yarn: new Set(["add", "up", "upgrade"]), bun: new Set(["add", "a", "install", "i"]) };
 /** Package-manager subcommands that run another command or package: what they run is read as a command. */
-const JS_RUNNERS = { npm: new Set(["exec"]), pnpm: new Set(["dlx", "exec"]), yarn: new Set(["dlx", "exec"]), bun: new Set(["x"]) };
+// `bun run` and `yarn run` run a script, a binary or (Bun, classic Yarn) a command: what they run is read too.
+const JS_RUNNERS = { npm: new Set(["exec"]), pnpm: new Set(["dlx", "exec"]), yarn: new Set(["dlx", "exec", "run"]), bun: new Set(["x", "run", "exec"]) };
 /** The package managers whose installs this hook reads. */
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
 /** Programs that run a package's binary (npx, bunx, pnpx = `pnpm dlx`): what they run is read as a command. */
@@ -2452,6 +2494,11 @@ function jsInstalls(manager, args) {
     (manager === "bun" && ["add", "a", "install", "i"].includes(sub));
   const out = [];
   for (const word of all.slice(1)) {
+    const file = registryFile(word);
+    if (file && file.ecosystem === "npm") {
+      out.push(file);
+      continue;
+    }
     const m = NPM_SPEC.exec(word);
     if (!m) {
       if (writesNewest && npmBareName(word)) out.push({ ecosystem: "npm", name: word, spec: LATEST });
@@ -2732,8 +2779,52 @@ function npmPkgSet(words, json) {
   return out;
 }
 
+/** Node's options that take the next word as their value. */
+const NODE_VALUE_OPTIONS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions", "--env-file", "--input-type", "--title", "--inspect-port", "--openssl-config", "--icu-data-dir", "--redirect-warnings", "--watch-path", "--test-reporter", "--test-reporter-destination", "--stack-trace-limit", "--max-old-space-size", "--disable-warning", "--experimental-config-file"]);
+
+/**
+ * D2: `node <path>/npm-cli.js install x` (`pnpm.cjs`, `yarn.js`, a quoted path with spaces): the
+ * manager the script is, with its arguments; null when node runs anything else.
+ */
+function nodeManager(args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") return null;
+    if (a.startsWith("-")) {
+      if (!a.includes("=") && NODE_VALUE_OPTIONS.has(a)) i++;
+      continue;
+    }
+    const manager = managerWord(programName(a).toLowerCase());
+    return manager && PACKAGE_MANAGERS.has(manager) ? [manager, ...args.slice(i + 1)] : null;
+  }
+  return null;
+}
+
 /** Tools whose `run` runs the command after it. */
 const RUN_TOOLS = new Set(["poetry", "pipenv", "pdm", "rye", "hatch", "pixi"]);
+/** Python modules that are package managers this hook reads (`python -m uv add x`). */
+const PYTHON_MANAGER_MODULES = new Set(["uv", "poetry"]);
+
+/**
+ * The command a `<tool> run` runs (`pdm run pip install x`, `hatch env run -e test -- pip install
+ * x`): after `--` when there is one, else the words after `run` when no option stands first.
+ * [] for a bare `run`; null when the words are not a `run`, or an option stands first and no `--`.
+ */
+function runInner(program, args) {
+  let rest = program === "hatch" && args[0] === "env" && args[1] === "run" ? args.slice(1) : args;
+  if (rest[0] !== "run") return null;
+  rest = rest.slice(1);
+  if (rest.length === 0) return [];
+  if (!rest[0].startsWith("-")) return rest;
+  const dd = rest.indexOf("--");
+  return dd >= 0 ? rest.slice(dd + 1) : null;
+}
+
+/** `uvx [options] <command>` / `uv tool run`: the command it runs, when uv tool install's table reads the options. */
+function toolRunInstalls(args, depth, dialect) {
+  const read = quietly(() => readOptions(args, ACCOUNT_TABLES.uvtool, "", true));
+  return read.bad || read.at < 0 ? [] : commandInstalls(args.slice(read.at), depth + 1, dialect);
+}
 
 /** `go install mod@v`: the module at that release (`@latest` the request "latest"; a branch is a tag). */
 function goSpecInstalls(w) {
@@ -2801,6 +2892,10 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return line === null ? [] : installsIn(line, "powershell", depth + 1);
   }
   if (PACKAGE_RUNNERS.has(program)) return runnerInstalls(args, depth);
+  if (program === "node") {
+    const managed = nodeManager(args);
+    return managed ? commandInstalls(managed, depth + 1, dialect) : [];
+  }
   if (PACKAGE_MANAGERS.has(program)) {
     const at = subcommandAt(args, JS_VALUES[program], program);
     // `pnpm -c exec '<line>'` / `pnpm --shell-mode exec '<line>'`: the line is a shell command line.
@@ -2808,6 +2903,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       return runnerInstalls(["--shell-mode", ...args.slice(at + 1)], depth);
     }
     if (at >= 0 && isRunnerCommand(program, args[at])) return runnerInstalls(args.slice(at + 1), depth);
+    // pnpm and Yarn run a command they do not know as a script or a binary (`pnpm npm i x`): a manager there is read.
+    if ((program === "pnpm" || program === "yarn") && at >= 0 && managerWord(programName(args[at]))) return wrappedInstalls(args.slice(at), depth);
     // `yarn global add x`: an add, into Yarn's global folder.
     if (program === "yarn" && at >= 0 && args[at] === "global" && args[at + 1] === "add") return jsInstalls(program, [...args.slice(0, at), ...args.slice(at + 1)]);
     return jsInstalls(program, args);
@@ -2836,7 +2933,12 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       const a = args[j];
       // `python -m piptools compile ... --upgrade-package "x==v"` is pip-compile.
       if (a === "-m" && args[j + 1] === "piptools") return args[j + 2] === "compile" ? upgradePackages(args.slice(j + 3)) : [];
-      if (a === "-m") return /^pip(?:\d+(?:\.\d+)*)?$/.test(args[j + 1] ?? "") ? pipInstalls(args.slice(j + 2)) : [];
+      if (a === "-m") {
+        const module = args[j + 1] ?? "";
+        if (/^pip(?:\d+(?:\.\d+)*)?$/.test(module)) return pipInstalls(args.slice(j + 2));
+        // `python -m uv add x`, `python -m poetry add x`: the manager the module is.
+        return PYTHON_MANAGER_MODULES.has(module) ? commandInstalls([module, ...args.slice(j + 2)], depth + 1, dialect) : [];
+      }
       if (a === "-c" || a === "-" || !a.startsWith("-")) return [];
       if (a === "-X" || a === "-W" || a === "--check-hash-based-pycs") j++;
     }
@@ -2847,6 +2949,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     const at = subcommandAt(args, UV_GLOBAL_VALUES);
     if (at >= 0 && args[at] === "pip") return args[at + 1] === "compile" ? upgradePackages(args.slice(at + 2)) : pipInstalls(args.slice(at + 1));
     if (at >= 0 && args[at] === "tool" && args[at + 1] === "install") return uvToolInstall(args.slice(at + 2));
+    // `uv tool run [options] <command>` (uvx spelled out): the command it runs, read as any other.
+    if (at >= 0 && args[at] === "tool" && args[at + 1] === "run") return toolRunInstalls(args.slice(at + 2), depth, dialect);
     // `uv run [options] <command>`: the command, read as any other.
     if (at >= 0 && args[at] === "run") {
       const inner = readOptions(args.slice(at + 1), ACCOUNT_TABLES.uvadd, "", true);
@@ -2862,8 +2966,12 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
   if (program === "pip-compile") return upgradePackages(args);
   // `uvx pip-compile ...`: uv runs the pip-tools command named first.
   if (program === "uvx" && args[0] === "pip-compile") return upgradePackages(args.slice(1));
+  if (program === "uvx") return toolRunInstalls(args, depth, dialect);
   // `poetry run <command>`, `pipenv run`, `pdm run`, `rye run`, `hatch run`, `pixi run`: the command, read as any other.
-  if (RUN_TOOLS.has(program) && args[0] === "run") return args.length > 1 && !args[1].startsWith("-") ? commandInstalls(args.slice(1), depth + 1, dialect) : [];
+  if (RUN_TOOLS.has(program)) {
+    const inner = runInner(program, args);
+    if (inner !== null) return inner.length > 0 ? commandInstalls(inner, depth + 1, dialect) : [];
+  }
   if (program === "poetry") {
     const all = operands(args, { values: POETRY_VALUES, refuse: new Set(["--source"]) });
     if (!all || all[0] !== "add") return [];
@@ -2933,7 +3041,7 @@ const ACCOUNT_TABLES = {
   uvtool: optionTable("--allow-insecure-host= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --editable --extra-index-url= --find-links= --force --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --offline --overrides= --project= --python= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --upgrade-package= --verbose --version --with= --with-editable= --with-requirements= -C= -P= -V -c= -e -f= -h -i= -n -p= -q -v"),
   uvadd: optionTable("--active --all-extras --all-groups --all-packages --allow-insecure-host= --branch= --cache-dir= --check --check-exists --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --dev --directory= --dry-run --editable --extra= --extra-index-url= --find-links= --frozen --group= --help --index= --index-strategy= --index-url= --inexact --keyring-provider= --link-mode= --locked --managed-python --marker= --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-default-groups --no-dev --no-editable --no-extra= --no-group= --no-index --no-install-package= --no-install-project --no-install-workspace --no-managed-python --no-progress --no-python-downloads --no-sources --no-sync --offline --only-dev --only-group= --optional= --package= --project= --python= --quiet --raw-sources --refresh --refresh-package= --reinstall --reinstall-package= --requirements= --rev= --script= --tag= --upgrade-package= --verbose --version -C= -P= -V -c= -f= -h -i= -m= -n -p= -q -r= -v"),
   cargo: optionTable("--all-features --base= --bin --bins --branch= --breaking --build --color= --config= --debug --default-features --dev --dry-run --example --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --version= --workspace -C= -F= -V -Z= -b -f -h -j= -m= -n -p= -q -v -w"),
-  go: optionTable("-C= -u -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -modfile= -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
+  go: optionTable("-C= -u -d -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -modfile= -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
   gomodedit: optionTable("-dropexclude= -dropgodebug= -dropignore= -dropreplace= -droprequire= -dropretract= -droptool= -exclude= -fmt -go= -godebug= -ignore= -json -module= -print -replace= -require= -retract= -tool= -toolchain="),
   yarn: optionTable("--all --audit --cache-folder= --cached --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --flat --focus --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interactive --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --pattern --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scope= --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --use-yarnrc= --verbose --version --worktree -A -C -D -E -L -O -P -R -S= -T -W -g -h -i -j= -p -s -t -v"),
   bun: optionTable("--analyze --backend= --ca= --cache-dir= --cafile= --concurrent-scripts= --cpu= --cwd= --dev --dry-run --exact --filter= --frozen-lockfile --global --help --ignore-scripts --interactive --linker= --lockfile-only --network-concurrency= --no-cache --no-progress --no-save --no-summary --no-verify --omit= --only-missing --optional --os= --peer --production --quiet --recursive --registry= --save --save-text-lockfile --silent --trust --verbose --yarn -E -a -d -g -h -i -p -r -y"),
@@ -2941,13 +3049,15 @@ const ACCOUNT_TABLES = {
 };
 /** npm's one-letter options: the switches, and (NPM_SHORT_VALUE) the five that take a value. */
 const NPM_SHORT_SWITCHES = new Set(["a", "B", "D", "d", "E", "f", "g", "h", "H", "l", "O", "p", "P", "q", "s", "S", "v", "y"]);
+/** npm's long shorthands, switches that set another option (npm 10 lib/utils/config/definitions.js shorthands). */
+const NPM_LONG_SHORTHANDS = new Set(["silent", "quiet", "verbose", "loud", "dd", "ddd", "desc", "porcelain", "help", "local", "global"]);
 const NPM_SHORT_WORDS = new Set(["-dd", "-ddd", "-ws", "-iwr", "-desc", "-reg"]);
 /** npm options that change which release a name resolves to: not taken (held). */
 const NPM_RESOLVING = new Set(["tag", "before"]);
 /** Environment settings before a manager that change where it installs from or what it resolves. */
 const MANAGER_SETTING = /^(?:npm_config_|yarn_|bun_config|pip_|uv_|poetry_|cargo_registr|cargo_source|goproxy|goflags|goprivate|gonoproxy|gonosumdb|goinsecure|gotoolchain)/i;
 /** Programs that take the words after them as data only (a line that mentions an install). */
-const DATA_PROGRAMS = new Set(["echo", "printf", "rg", "grep", "egrep", "fgrep", "select-string", "sls", "findstr", "cat", "write-output", "write-host", "docker", "podman", "true", ":"]);
+const DATA_PROGRAMS = new Set(["echo", "printf", "rg", "grep", "egrep", "fgrep", "select-string", "sls", "findstr", "cat", "write-output", "write-host", "sed", "gsed", "awk", "gawk", "mawk", "nawk", "make", "gmake", "docker", "podman", "true", ":"]);
 /** Git commands that take the words after them as data. */
 const GIT_DATA = new Set(["commit", "log", "grep", "show", "diff", "status", "tag", "notes"]);
 /** GitHub CLI commands whose words are text (a pull request's or an issue's title and body). */
@@ -2970,30 +3080,12 @@ const DETECT_VERBS = new Map([
   ["go", new Set(["get", "install", "edit"])],
 ]);
 
-/**
- * Words that run the command after them (prefixes, runners, wrappers): after one, any later word
- * of the simple command may be the package manager. pipenv, pdm, rye, hatch and pixi are here for
- * their `run`: their own installs are not read (a stated limit), a manager they run is.
- */
-const DETECT_WRAPPERS = new Set([
-  ...Object.keys(PREFIXES),
-  "npx", "bunx", "pnpx", "uvx", "stdbuf", "winpty", "cross-env", "flock", "doas", "setsid", "ionice", "chrt", "taskset", "unbuffer", "dotenv", "parallel", "find", "start-process", "invoke-command", "start-job", "foreach-object", "%", "&", ".",
-  "pipenv", "pdm", "rye", "hatch", "pixi",
-]);
-/** Wrappers that run a string as a command line: a quoted word after one is read as a line of its own. */
-const DETECT_STRING_RUNNERS = new Set([...SHELLS, "eval", "pwsh", "powershell", "invoke-expression", "iex", "cmd", "script", "su", "env", "watch", "wsl", "start-process", "invoke-command"]);
-/** A detector token: a separator, or a word (quoted parts kept inside it). */
-// A double-quoted part holds no `$` or backquote here: bash runs `cmd` and $(cmd) inside double
-// quotes (PowerShell its $(...) subexpression), so there the quote is not one word.
-const DETECT_TOKEN = /<#|#>|[;&|(){}`\n\r]|(?:'[^'\n\r]*'|"[^"\n\r`$]*"|[^\s;&|(){}`\n\r'"<#]|<(?!#)|#(?!>))+/g;
-const unquoteWord = (w) => w.replace(/['"]/g, "");
-
-/** The package manager a token names (`npm.cmd`, `pip3.12`, `yarnpkg`, `pnpm.cjs`, `npm-cli.js`), or null. */
+/** The package manager a token names (`npm.cmd`, `pip3.12`, `-mpip`, `yarnpkg`, `pnpm.cjs`, `npm-cli.js`), or null. */
 function managerWord(token) {
   let t = token.replace(/\.(?:exe|cmd|bat|ps1|js|cjs|mjs)$/, "");
   if (t === "yarnpkg") t = "yarn";
   if (/^(?:npm|pnpm|yarn)-cli$/.test(t)) t = t.slice(0, -4);
-  if (/^pip\d*(?:\.\d+)?$/.test(t)) return "pip";
+  if (/^pip\d*(?:\.\d+)?$/.test(t) || /^-[a-z]*mpip\d*(?:\.\d+)?$/.test(t)) return "pip";
   return t === "npm" || DETECT_VERBS.has(t) ? t : null;
 }
 
@@ -3003,97 +3095,48 @@ function isManagerVerb(manager, token) {
   return DETECT_VERBS.get(manager)?.has(token) ?? false;
 }
 
+/** A detector token: a run of name characters (`npm@10.9.2` is `npm` and `10.9.2`), or a line end. */
+const DETECT_TOKEN = /[a-z0-9._+-]+|[\n\r]/g;
+
 /**
- * R8-1: whether a text holds a package manager AS A COMMAND WORD followed later in that simple
- * command by one of its verbs. A command word is the first word of a simple command (after
- * `VAR=value` and shell keywords), any word after a wrapper (DETECT_WRAPPERS: sudo, env, npx,
- * stdbuf, find -exec ...), a line inside the quoted string a shell-like runner runs (`bash -c`,
- * `cmd /c`, `eval`, `pwsh -c`), `pip` after Python's `-m`, and the script `node` runs when it is a
- * manager (`node pnpm.cjs`). A manager word inside another program's arguments (`make PIP=pip3
- * install`, `sed 's/npm install/npm ci/'`, `node -e "...npm install..."`) is not a command word: a
- * script or program that runs an install is outside what this hook reads (a stated limit), never a
- * hold. One linear pass over the whole text, whatever its size, apart from the command reader.
+ * The detector's pass over one text: `seen` carries the managers met so far on the current line
+ * (a line end clears it). True on a manager word followed, later on the same line, by one of its
+ * verbs. Linear: one pass over the tokens.
  */
-export function detectsInstall(text, depth = 0) {
-  if (typeof text !== "string" || depth > MAX_WRAPS + 1) return false;
-  let first = true;
-  let mode = "";
-  let managers = [];
-  let pythonM = false;
-  let skipTarget = false;
-  for (const m of text.matchAll(DETECT_TOKEN)) {
-    const w = m[0];
-    if (w.length === 1 ? ";&|(){}`\n\r".includes(w) : w === "<#" || w === "#>") {
-      first = true;
-      mode = "";
-      managers = [];
+function detectIn(text, seen) {
+  for (const m of text.toLowerCase().matchAll(DETECT_TOKEN)) {
+    tick();
+    const token = m[0];
+    if (token === "\n" || token === "\r") {
+      seen.length = 0;
       continue;
     }
-    if (w === "=") {
-      // PowerShell `$x = npm i y`: the command starts after the assignment.
-      first = true;
-      mode = "";
-      continue;
-    }
-    const lower = w.toLowerCase();
-    if (managers.length > 0) {
-      const parts = lower.split(/[\s'",=]+/);
-      for (const mgr of managers) for (const p of parts) if (p && isManagerVerb(mgr, p)) return true;
-    }
-    if (first) {
-      if (lower.startsWith("#")) {
-        mode = "comment";
-        first = false;
-        continue;
-      }
-      if (/^[a-z_][a-z0-9_]*=/.test(lower) || KEYWORDS.has(lower)) continue;
-      // A redirection before the command (`2>/dev/null npm i x`, `> log npm i x`): it and its target.
-      if (/^\d*[<>]/.test(lower)) {
-        skipTarget = /[<>&]$/.test(lower);
-        continue;
-      }
-      if (skipTarget) {
-        skipTarget = false;
-        continue;
-      }
-      first = false;
-      const prog = programName(unquoteWord(lower));
-      const mgr = managerWord(prog);
-      if (mgr) managers.push(mgr);
-      else if (DETECT_STRING_RUNNERS.has(prog)) mode = "string";
-      else if (DETECT_WRAPPERS.has(prog)) mode = "wrap";
-      else if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(prog)) mode = "python";
-      else if (prog === "node") mode = "node";
-      continue;
-    }
-    if (mode === "comment") continue;
-    if (mode === "string" && /['"]/.test(w) && detectsInstall(unquoteWord(w), depth + 1)) return true;
-    if (mode === "python") {
-      const glued = /^-[a-z]*m(pip\d*(?:\.\d+)?)?$/.exec(lower);
-      if (glued) {
-        if (glued[1]) managers.push("pip");
-        else pythonM = true;
-      } else if (pythonM) {
-        if (/^pip\d*(?:\.\d+)?$/.test(lower)) managers.push("pip");
-        pythonM = false;
-        mode = "";
-      } else if (!lower.startsWith("-")) mode = "";
-      continue;
-    }
-    if (mode === "node") {
-      if (lower.startsWith("-")) continue;
-      const mgr = managerWord(programName(unquoteWord(lower)));
-      if (mgr) managers.push(mgr);
-      mode = "";
-      continue;
-    }
-    if (mode === "wrap" || mode === "string" || managers.length > 0) {
-      const prog = programName(unquoteWord(lower));
-      const mgr = managerWord(prog);
-      if (mgr && !managers.includes(mgr) && managers.length < 8) managers.push(mgr);
-      else if (mode === "wrap" && DETECT_STRING_RUNNERS.has(prog)) mode = "string";
-    }
+    for (const s of seen) if (isManagerVerb(s, token)) return true;
+    const manager = managerWord(token);
+    if (manager && !seen.includes(manager) && seen.length < 16) seen.push(manager);
   }
+  return false;
+}
+
+/**
+ * R8-1 (seventh independent check, D5): whether a text holds, anywhere on one line, a package-manager
+ * word followed later on that line by one of its verbs. Recall is its only goal, whatever the text's
+ * size and wherever the words stand: a line it names goes ahead only when every simple command in
+ * it holding a hit is positively classified, read whole (accountCommand) or the arguments of a
+ * program that takes them as data (dataCommand). Round 8b had narrowed this to a manager in command
+ * position, and an unknown wrapper (`start npm i x`, `mise exec -- npm i x`) then went unread.
+ */
+export function detectsInstall(text) {
+  if (typeof text !== "string") return false;
+  // A second pass with the shell's escape and quote characters taken out: `n\pm`, `np''m`, `` n`pm ``
+  // are npm to the shell.
+  return detectIn(text, []) || (/[\\`'"]/.test(text) && detectIn(text.replace(/[\\`'"]/g, ""), []));
+}
+
+/** The detector over a parsed command's words, word by word (a quoted word keeps its spaces: never re-joined). */
+function detectsInWords(words) {
+  const seen = [];
+  for (const w of words) if (detectIn(w, seen)) return true;
   return false;
 }
 
@@ -3145,6 +3188,8 @@ function readOptions(args, table, mode = "", stop = false) {
     const name = eq > 0 ? a.slice(0, eq) : a;
     if (mode === "npm" && name.startsWith("--")) {
       const negated = name.startsWith("--no-");
+      // npm's long shorthands (`--silent` is `--loglevel=silent`): switches.
+      if (eq < 0 && NPM_LONG_SHORTHANDS.has(name.slice(2))) continue;
       const resolved = npmOptionName(name.slice(negated ? 5 : 2));
       if (resolved === null || NPM_RESOLVING.has(resolved)) return done(a);
       if (eq > 0 || negated || !NPM_VALUE_OPTIONS.has(resolved)) {
@@ -3216,6 +3261,9 @@ function quietly(f) {
 
 /** A JS install operand: "local" (a path, tarball, git or URL source, a workspace protocol), { name } for a package the reader judges, or null. */
 function jsOperand(word) {
+  const file = registryFile(word);
+  if (file && file.ecosystem === "npm") return { name: file.name };
+  if (publicUrl(word)) return null;
   if (/^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/]|file:|link:|portal:|workspace:)/i.test(word) || /\.(?:tgz|tar\.gz|tar)$/i.test(word)) return "local";
   if (/^(?:git\+|git:|git@|github:|gitlab:|bitbucket:|gist:|https?:\/\/)/i.test(word) || /^[\w.-]+\/[\w.-]+(?:#.*)?$/.test(word)) return "local";
   if (npmBareName(word)) return { name: word };
@@ -3234,8 +3282,13 @@ function jsOperand(word) {
 
 /** A Python install operand: "local", { name } for a requirement the reader judges, or null. */
 function pyOperandKind(word) {
+  const file = registryFile(word);
+  if (file && file.ecosystem === "PyPI") return { name: file.name };
+  if (publicUrl(word) || /\s@\s*https?:\/\/(?:files\.pythonhosted\.org|pypi\.org|pypi\.python\.org)\//i.test(word)) return null;
   if (/:\/\//.test(word) || /^(?:git\+|hg\+|svn\+|bzr\+)/i.test(word) || /\s@\s/.test(word)) return "local";
-  if (/^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(word) || /\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar)$/i.test(word)) return "local";
+  // D8: a path with extras (`.[dev]`, `./pkg[test,docs]`) is a path.
+  const path = word.replace(/\[[^\]]{0,200}\]$/, "");
+  if (/^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(path) || /\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz|tar)$/i.test(path)) return "local";
   const r = quietly(() => pyOperand(word));
   return r.length === 1 ? { name: r[0].name } : null;
 }
@@ -3247,6 +3300,13 @@ function pyOperandKind(word) {
  */
 function accountLine(line, dialect, depth = 0) {
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
+  // D6: PowerShell `$env:NAME = value` statements: a manager's own setting holds the line; any other is taken out before it is read.
+  if (dialect === "powershell") {
+    const env = psEnvAssignments(line);
+    const managed = env.names.find((n) => MANAGER_SETTING.test(n));
+    if (managed) return `the setting ${managed} made earlier in this call`;
+    line = env.line;
+  }
   const dropped = [];
   const commands = quietly(() => simpleCommands(line, dialect, null, dropped, MAX_ACCOUNT_CHARS));
   if (!commands) return dialect === "bash" && line.includes("<<") ? dataHeredoc(line) : "a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)";
@@ -3254,15 +3314,53 @@ function accountLine(line, dialect, depth = 0) {
   for (const { text, readings } of dropped) {
     if (!detectsInstall(text)) continue;
     for (const words of readings) {
-      const why = words.length > 0 && detectsInstall(words.join(" ")) ? accountCommand(words, dialect, depth) : null;
+      const why = words.length > 0 ? accountCommand(words, dialect, depth) : null;
       if (why) return why;
     }
   }
   for (const words of commands) {
+    const set = managerSettingIn(words);
+    if (set) return `the setting ${set} made earlier in this call`;
+  }
+  for (const words of commands) {
     tick();
-    if (!detectsInstall(words.join(" "))) continue;
     const why = accountCommand(words, dialect, depth);
     if (why) return why;
+  }
+  return null;
+}
+
+/** A PowerShell `$env:NAME = value` statement: its name, and the line without it. */
+const PS_ENV_ASSIGNMENT = /(^|[;\n\r])[ \t]*\$env:([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:'[^'\n\r]*'|"[^"`$\n\r]*"|[^\s;|&'"`$()]+)[ \t]*(?=$|[;\n\r])/gi;
+function psEnvAssignments(line) {
+  const names = [];
+  const out = line.replace(PS_ENV_ASSIGNMENT, (_m, lead, name) => {
+    names.push(name);
+    return lead;
+  });
+  return { line: out, names };
+}
+
+/**
+ * D6: the manager setting (MANAGER_SETTING) a simple command makes for the commands after it, or
+ * null: `export npm_config_tag=next`, `declare -x PIP_PRE=1`, a bare `UV_PRERELEASE=allow`, and
+ * PowerShell's `Set-Item env:npm_config_before 2020-01-01` / `-Path env:X`.
+ */
+function managerSettingIn(words) {
+  const program = (words[0] ?? "").toLowerCase();
+  if (words.every((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w))) return words.map((w) => w.slice(0, w.indexOf("="))).find((n) => MANAGER_SETTING.test(n)) ?? null;
+  if (["export", "declare", "typeset", "local", "readonly"].includes(program)) {
+    for (const w of words.slice(1)) {
+      const name = w.startsWith("-") ? "" : w.split("=")[0];
+      if (name && MANAGER_SETTING.test(name)) return name;
+    }
+    return null;
+  }
+  if (["set-item", "si", "new-item", "ni", "set-content", "sc", "add-content", "ac"].includes(programName(program))) {
+    for (const w of words.slice(1)) {
+      const m = /^env:([A-Za-z_][A-Za-z0-9_]*)/i.exec(w);
+      if (m && MANAGER_SETTING.test(m[1])) return m[1];
+    }
   }
   return null;
 }
@@ -3308,6 +3406,9 @@ function dataCommand(words) {
   if (start >= words.length) return true;
   const program = programName(words[start]);
   if (DATA_PROGRAMS.has(program)) return true;
+  // `node -e '...'` / `-p`, `python -c '...'`: code given as text (a program that runs an install is a stated limit).
+  if (program === "node" && /^(?:-e|-p|--eval|--print|-pe)$/.test(words[start + 1] ?? "")) return true;
+  if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program) && words.slice(start + 1).find((a) => a === "-c" || !a.startsWith("-")) === "-c") return true;
   const subs = words.slice(start + 1).filter((a) => !a.startsWith("-"));
   if (program === "gh") return GH_DATA.has(subs[0] ?? "") && GH_DATA_VERBS.has(subs[1] ?? "");
   return program === "git" && GIT_DATA.has(subs[0] ?? "");
@@ -3322,6 +3423,11 @@ let accountTop = null;
 
 /** R8-2 for one simple command that holds a detector hit: null when read whole, else the part not read. */
 function accountCommand(words, dialect, depth) {
+  tick();
+  // Past the reader's own depth the command is not read (a runner chain of any length is held, never followed).
+  if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
+  // A command with no hit has nothing to account for; one whose program takes the words as data neither.
+  if (!detectsInWords(words) || dataCommand(words)) return null;
   if (depth === 0 || accountTop === null) {
     let memo = null;
     accountTop = () => (memo ??= quietly(() => commandInstalls(words, depth, dialect)));
@@ -3355,9 +3461,15 @@ function accountCommand(words, dialect, depth) {
     return inner === null ? `${program} with options this hook does not read` : accountLine(inner, "powershell", depth + 1);
   }
   if (PACKAGE_RUNNERS.has(program)) return accountRunner(args, dialect, depth);
+  if (program === "uvx") return accountToolRun(args, dialect, depth);
+  if (program === "node") {
+    const managed = nodeManager(args);
+    if (managed) return accountCommand(managed, dialect, depth + 1);
+  }
   if (RUN_TOOLS.has(program) && program !== "poetry") {
-    if (args[0] !== "run") return null;
-    return args.length > 1 && !args[1].startsWith("-") ? accountCommand(args.slice(1), dialect, depth + 1) : `${program} run with an option this hook does not read`;
+    const inner = runInner(program, args);
+    if (inner === null) return `${program} with a command this hook does not read`;
+    return inner.length > 0 ? accountCommand(inner, dialect, depth + 1) : null;
   }
   if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program)) return accountPython(program, args, reader);
   if (PACKAGE_MANAGERS.has(program)) return accountJs(program, args, dialect, depth, reader);
@@ -3377,9 +3489,17 @@ function judgedByReader(names, reader, ecosystem) {
   return null;
 }
 
+/** `uvx` / `uv tool run`: the command it runs, read again, its options read with uv tool install's table. */
+function accountToolRun(args, dialect, depth) {
+  const read = readOptions(args, ACCOUNT_TABLES.uvtool, "", true);
+  if (read.bad) return `the option ${read.bad}`;
+  return read.at < 0 ? null : accountCommand(args.slice(read.at), dialect, depth + 1);
+}
+
 /** npx, bunx, pnpx, `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x`: the command they run, read again. */
 function accountRunner(args, dialect, depth) {
   for (let i = 0; i < args.length; i++) {
+    tick();
     const a = args[i];
     if (a === "--") return args.length > i + 1 ? accountCommand(args.slice(i + 1), dialect, depth + 1) : null;
     if (a.startsWith("-") && a.length > 1) {
@@ -3403,12 +3523,15 @@ function accountRunner(args, dialect, depth) {
 /** `python -m pip ...` (also `-mpip`, `-Im pip`): pip read as pip; any other module or script is not a package manager. */
 function accountPython(program, args, reader) {
   for (let i = 0; i < args.length; i++) {
+    tick();
     const a = args[i];
     const glued = /^-[uBOsSEIbdqvRP]*m(pip\d*(?:\.\d+)?)?$/.exec(a);
     if (glued) {
       const module = glued[1] ?? args[i + 1] ?? "";
       const rest = args.slice(i + (glued[1] ? 1 : 2));
-      return /^pip\d*(?:\.\d+)?$/.test(module) ? accountPip(rest, ACCOUNT_TABLES.pip, reader) : null;
+      if (/^pip\d*(?:\.\d+)?$/.test(module)) return accountPip(rest, ACCOUNT_TABLES.pip, reader);
+      if (PYTHON_MANAGER_MODULES.has(module)) return accountCommand([module, ...rest], "bash", 1);
+      return `${program} -m ${module.slice(0, 60)}, a module this hook does not read`;
     }
     if (/^-(?:\d+(?:\.\d+)?(?:-\d+)?|[uBOsSEIbdqvRP]+|V:\S+)$/.test(a)) continue;
     if (a === "-X" || a === "-W") {
@@ -3437,7 +3560,8 @@ function accountJs(manager, args, dialect, depth, reader) {
   if (manager === "yarn" && sub === "workspace") return rest.length > 1 ? accountJs("yarn", rest.slice(1), dialect, depth, reader) : null;
   if (manager === "yarn" && sub === "workspaces") return rest[0] === "foreach" ? accountJs("yarn", rest.slice(1), dialect, depth, reader) : null;
   const verb = manager === "npm" ? (npmCommand(sub) ?? sub) : sub;
-  if ((manager === "npm" && verb === "exec") || ((manager === "pnpm" || manager === "yarn") && (verb === "dlx" || verb === "exec")) || (manager === "bun" && verb === "x")) return accountRunner(rest, dialect, depth);
+  if (isRunnerCommand(manager, sub)) return accountRunner(rest, dialect, depth);
+  if ((manager === "pnpm" || manager === "yarn") && managerWord(programName(sub))) return accountCommand([sub, ...rest], dialect, depth + 1);
   if (manager === "npm" && verb === "pkg") return accountNpmPkg(rest);
   const adds = { npm: ["install", "install-test"], pnpm: ["add", "install", "i"], yarn: ["add"], bun: ["add", "a", "install", "i"] }[manager];
   const moves = { npm: ["update"], pnpm: ["up", "update", "upgrade"], yarn: ["up", "upgrade"], bun: ["update"] }[manager];
@@ -3525,6 +3649,7 @@ function accountUv(args, dialect, depth, reader) {
     return inner.at < 0 ? null : accountCommand(rest.slice(inner.at), dialect, depth + 1);
   }
   if (sub === "tool") {
+    if (rest[0] === "run") return accountToolRun(rest.slice(1), dialect, depth);
     if (rest[0] !== "install") return null;
     const tool = readOptions(rest.slice(1), ACCOUNT_TABLES.uvtool);
     if (tool.bad) return `the option ${tool.bad}`;
@@ -3661,7 +3786,8 @@ function accountCall(command, dialect) {
  */
 export function installsIn(command, dialect, depth = 0) {
   if (depth > MAX_WRAPS) return [];
-  const commands = simpleCommands(command, dialect, null, null, MAX_ACCOUNT_CHARS);
+  const line = dialect === "powershell" && typeof command === "string" ? psEnvAssignments(command).line : command;
+  const commands = simpleCommands(line, dialect, null, null, MAX_ACCOUNT_CHARS);
   if (!commands) return [];
   const seen = new Set();
   const out = [];
@@ -3712,6 +3838,11 @@ function ledgerStarted(dir) {
 function readLedger(dir, now) {
   if (!existsSync(dir) || !ledgerStarted(dir)) return null;
   const entries = [];
+  // D10: a line that does not parse but names a package (an avoid cut short), or one stamped past
+  // the clock's slack, makes that package's verdict unknown from that line on: every earlier line
+  // for it is set aside, so an older proceed never stands in for it. A later answer releases it.
+  const unknown = [];
+  let seq = 0;
   for (const file of LEDGER_FILES) {
     let text;
     try {
@@ -3730,17 +3861,40 @@ function readLedger(dir, now) {
     for (const line of text.split("\n")) {
       if (++n % 512 === 0 && overBudget()) return entries;
       if (!line) continue;
+      seq++;
       let e;
       try {
         e = JSON.parse(line);
       } catch {
+        const pkg = /"package"\s*:\s*"((?:[^"\\]|\\.){1,214})"/.exec(line);
+        if (pkg) unknown.push({ ecosystem: /"ecosystem"\s*:\s*"([^"]{1,20})"/.exec(line)?.[1] ?? null, package: pkg[1], seq });
         continue;
       }
       if (!e || typeof e !== "object" || typeof e.package !== "string" || typeof e.version !== "string" || typeof e.verdict !== "string" || typeof e.ecosystem !== "string") continue;
       const t = Date.parse(e.t);
-      if (!Number.isFinite(t) || t < now - LEDGER_WINDOW_MS || t > now + 5 * 60 * 1000) continue;
-      entries.push({ ...e, at: t });
+      if (Number.isFinite(t) && t > now + 5 * 60 * 1000) {
+        unknown.push({ ecosystem: e.ecosystem, package: e.package, seq });
+        continue;
+      }
+      if (!Number.isFinite(t) || t < now - LEDGER_WINDOW_MS) continue;
+      entries.push({ ...e, at: t, seq });
     }
+  }
+  if (unknown.length > 0) {
+    // The last unknown line per package (per ecosystem, or for every ecosystem when the cut line lost it).
+    const fold = (eco, name) => nameKey(["npm", "crates.io", "PyPI", "Go"].find((x) => x.toLowerCase() === String(eco).toLowerCase()) ?? "npm", name).toLowerCase();
+    const last = new Map();
+    for (const u of unknown) {
+      for (const eco of u.ecosystem === null ? ["npm", "crates.io", "PyPI", "Go"] : [u.ecosystem]) {
+        const key = `${eco.toLowerCase()}\0${fold(eco, u.package)}`;
+        last.set(key, Math.max(last.get(key) ?? 0, u.seq));
+      }
+    }
+    let w = 0;
+    for (const e of entries) {
+      if (!(e.seq < (last.get(`${e.ecosystem.toLowerCase()}\0${fold(e.ecosystem, e.package)}`) ?? 0))) entries[w++] = e;
+    }
+    entries.length = w;
   }
   // Oldest first by the time each answer was given: several servers append to one ledger, and the
   // previous file can hold newer lines than the current one's first. Equal times keep file order.
@@ -4037,7 +4191,9 @@ function denialFor(introduced, ledger, dir, what) {
  *
  * What this does not see (the hook is a guard-rail against an agent's mistakes and shortcuts, not
  * a sandbox): a path reached by `cd` in an earlier call, a junction or symlink made earlier, a name
- * the shell assembles from pieces, a wildcard, a parent folder. And since the hook denies only where
+ * the shell assembles from pieces, a wildcard, a parent folder, a share named by another of this
+ * machine's names or addresses than localhost, 127.x, ::1, an ipv6-literal.net name or its host
+ * name. And since the hook denies only where
  * a ledger exists, a removed ledger means no denials until the server starts again.
  */
 const LEDGER_MENTION = /check-ledger(?!\.(?:d\.)?(?:test\.)?[cm]?[jt]sx?\b)/;
@@ -4049,12 +4205,18 @@ const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "mo
  * `//localhost/c$/` share and the `/c/`, `/mnt/c/`, `/cygdrive/c/` forms read as `c:/`, every run of
  * `/` one `/`, `/./` dropped and `name/../` resolved as text.
  */
+/** This machine's admin shares: `//localhost/c$/`, `//127.x.x.x/c$/`, `//[::1]/c$/`, `//<ipv6>.ipv6-literal.net/c$/`, `//<this host's name>/c$/`. */
+const LOCAL_SHARE = new RegExp(
+  String.raw`\/{2,}(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?|[0-9a-f-]+\.ipv6-literal\.net|${hostname().toLowerCase().replace(/[^a-z0-9-]/g, "")}(?:\.[a-z0-9.-]+)?)\/+([a-z])\$\/+`,
+  "g",
+);
+
 function normaliseLedgerText(text, dots = true) {
   let t = text.toLowerCase().replace(/\\/g, "/");
   t = t.replace(/\/{2,}[?.]\/+(?:unc\/+)?/g, "//");
-  t = t.replace(/\/{2,}(?:localhost|127\.0\.0\.1)\/+([a-z])\$\/+/g, "$1:/");
+  t = t.replace(LOCAL_SHARE, "$1:/");
   t = t.replace(/\/{2,}/g, "/");
-  t = t.replace(/(^|[^a-z0-9._~$-])\/(?:mnt\/|cygdrive\/)?([a-z])(?=\/)/g, "$1$2:");
+  t = t.replace(/(^|[^a-z0-9._~$-])\/(?:mnt\/|cygdrive\/|proc\/cygdrive\/)?([a-z])(?=\/)/g, "$1$2:");
   t = t.replace(/\/(?:\.\/)+/g, "/");
   // `name/../` resolved as text, one pass with a stack per path (linear in the text's size).
   if (dots && t.includes("/..")) t = t.replace(/[^\s'"`;|&<>(){}]+/g, (path) => resolveDots(path));
@@ -4518,8 +4680,48 @@ async function main() {
   // show a manifest write or edit, or a command that names an install (round 4 of the hook review:
   // judged from the first 64 KB of escaped text, it missed `\n` before npm, a long description
   // before the command, content before file_path); let through otherwise.
-  const out = raw.length > MAX_INPUT_CHARS ? oversizedParsed(input) : respond(input);
+  // A payload past WORKER_ABOVE_CHARS is judged in a worker thread under a hard wall clock: the
+  // budget's ticks are the first bound, and this one holds whatever they missed (seventh independent
+  // check, D1: a runner chain over 512 KB printed nothing in 10 s, and the call went ahead).
+  const out = raw.length > WORKER_ABOVE_CHARS ? await judgeInWorker(input, raw.length > MAX_INPUT_CHARS) : respond(input);
   if (out) process.stdout.write(out);
+}
+
+/** Payloads over this are judged in a worker under WALL_LIMIT_MS; smaller ones inline (a worker costs about 40 ms to start). */
+const WORKER_ABOVE_CHARS = 8 * 1024;
+/** From the hook's start: past it, a call a worker has not judged is held (Claude Code's own limit is 10 s). */
+const WALL_LIMIT_MS = 5000;
+
+/** The answer for a call judged in a worker; past WALL_LIMIT_MS (or on a worker's failure) the hold timeHold gives. */
+function judgeInWorker(input, oversize) {
+  return new Promise((done) => {
+    let settled = false;
+    const settle = (out) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.terminate().catch(() => {});
+      done(out);
+    };
+    const worker = new Worker(new URL(import.meta.url), { workerData: { fourdaJudge: input, oversize } });
+    const left = WALL_LIMIT_MS - (performance.now() - (mainStartedAt ?? performance.now()));
+    const timer = setTimeout(() => settle(timeHold(input)), Math.max(250, left));
+    worker.once("message", (m) => settle(typeof m === "string" ? m : timeHold(input)));
+    worker.once("error", () => settle(timeHold(input)));
+    worker.once("exit", () => settle(timeHold(input)));
+  });
+}
+
+/** The hold for a call not judged in time: a command or a manifest write, where a ledger exists and the guard blocks; nothing else. */
+function timeHold(input) {
+  if (!input || typeof input !== "object" || input.hook_event_name !== "PreToolUse" || guardMode(process.env.FOURDA_GUARD) !== "block") return "";
+  const tool = input.tool_name;
+  const command = tool === "Bash" || tool === "PowerShell";
+  const file = input.tool_input?.file_path;
+  if (!command && !(typeof file === "string" && manifestKind(file) !== null)) return "";
+  if (!readLedgerExists(dataDir(process.env))) return "";
+  unreadRemedy = null;
+  return denyJson(notReadDenial(command ? "command" : "edit", `reading it took over ${WALL_LIMIT_MS / 1000} s`));
 }
 
 /** The largest payload the hook parses to judge it (past MAX_INPUT_CHARS it is judged, never read). */
@@ -4577,7 +4779,18 @@ function oversized(head) {
   return denyJson(notReadDenial(tool === "Bash" || tool === "PowerShell" ? "command" : "edit", `the hook payload is over ${MAX_INPUT_CHARS / 1024 / 1024} MB`));
 }
 
-if (basename(process.argv[1] ?? "") === "manifest-edit.mjs") {
+// A worker started by judgeInWorker: judge the one call it was given, and answer.
+if (!isMainThread && workerData && typeof workerData === "object" && workerData.fourdaJudge) {
+  let out = "";
+  try {
+    out = workerData.oversize ? oversizedParsed(workerData.fourdaJudge) : respond(workerData.fourdaJudge);
+  } catch {
+    out = timeHold(workerData.fourdaJudge);
+  }
+  parentPort.postMessage(out);
+}
+
+if (isMainThread && basename(process.argv[1] ?? "") === "manifest-edit.mjs") {
   main().catch(() => {
     // The hook never fails the call it looks at: an error of its own is silence.
   });

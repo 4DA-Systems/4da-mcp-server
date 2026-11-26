@@ -54,7 +54,7 @@ describe("R8-1: the detector", () => {
     expect(detectsInstall(command)).toBe(true);
   });
 
-  it.each(["npm ci", "npm run build", "bunx tsc", "make install", "brew install node", "apt-get install -y python3-pip", "gem install bundler", "composer require x/y", "dotnet add package X", "npm\ninstall", "git commit -m 'docs: `npm install x`'", "make PIP=pip3 install", "pipenv install requests", "pdm install"])(
+  it.each(["npm ci", "npm run build", "bunx tsc", "make install", "brew install node", "apt-get install -y python3-pip", "gem install bundler", "composer require x/y", "dotnet add package X", "npm\ninstall", "pipenv install requests", "pdm install"])(
     "does not name %s",
     (command) => {
       expect(detectsInstall(command)).toBe(false);
@@ -160,16 +160,32 @@ describe("pipenv, pdm, rye, pixi, hatch and conda installs are not read (a state
   });
 });
 
-describe("a manager word inside another program's arguments is not a command word: it goes ahead", () => {
+describe("D5: a manager word in the arguments of a program known to take text as data goes ahead", () => {
   it.each([
     "make PIP=pip3 install",
     "sed -i 's/npm install/npm ci/' README.md",
     "awk '/pip install/ {print}' docs/setup.md",
     "node -e \"console.log('npm install')\"",
     "python -c \"print('pip install requests')\"",
-    "echo \"$HOME: npm install\"",
+    "git commit -m 'docs: `npm install x`'",
   ])("%s", (command) => {
+    expect(detectsInstall(command)).toBe(true);
     expect(run(command).decision).toBe("allow");
+  });
+
+  it("a line this hook cannot take apart is held, with a way through: single quotes", () => {
+    expect(run('echo "$HOME: npm install"').decision).toBe("deny");
+    expect(run("echo '$HOME: npm install'").decision).toBe("allow");
+  });
+});
+
+/** D5: unknown wrappers are held (not added one by one): each has the remedy's way through. */
+describe("D5: a hit inside a program this hook does not know is held", () => {
+  it.each(["start npm -ArgumentList 'i','lodash@4.17.20'", "mise exec -- npm i lodash@4.17.20", "gsudo npm i lodash@4.17.20", "concurrently 'npm i lodash@4.17.20'", "git submodule foreach 'npm i lodash@4.17.20'", "n\\pm i lodash@4.17.20", "np''m i lodash@4.17.20"])("%s", (command) => {
+    const r = run(command, command.startsWith("start ") ? "PowerShell" : "Bash");
+    expect(r.decision, r.text).toBe("deny");
+    s.ledger([]);
+    releases("npm i lodash@4.17.20");
   });
 });
 
@@ -306,5 +322,137 @@ describe("the remedy releases", () => {
 
   it("no remedy names a file as a package", () => {
     for (const c of ["pip install -Ur requirements.txt requests==9", "uv pip install -qr requirements.txt"]) expect(run(c).text).not.toMatch(/"requirements/);
+  });
+});
+
+/** D4: a manager subcommand that runs another command is read as that command, then released by the call its denial names. */
+describe("D4: what a runner subcommand runs is read", () => {
+  it.each([
+    "bun run npm i lodash@4.17.20",
+    "bun x npm@10 i lodash@4.17.20",
+    "pnpm npm i lodash@4.17.20",
+    "yarn npm i lodash@4.17.20",
+    "yarn run npm i lodash@4.17.20",
+    "yarn exec npm i lodash@4.17.20",
+    "pnpm exec npm i lodash@4.17.20",
+    "npm exec -- npm i lodash@4.17.20",
+    "npx -y npm@10.9.2 install lodash@4.17.20",
+    "uv tool run uv add requests==2.5.0",
+    "uvx uv add requests==2.5.0",
+    "python -m uv add requests==2.5.0",
+    "python -m poetry add requests==2.5.0",
+    "python -X utf8 -m pip install requests==2.5.0",
+    "hatch env run -e test -- pip install requests==2.5.0",
+    "pdm run pip install requests==2.5.0",
+  ])("%s: held, and the call its denial names releases it", (command) => {
+    s.ledger([]);
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    releases(command);
+  });
+
+  it("python -m <a module this hook does not read> with an install in its words is held", () => {
+    expect(run("python -m pipx run uv add requests==2.5.0").text).toContain("could not be read");
+  });
+});
+
+/** D6: a manager's own setting made earlier in the same call holds the install; any other setting does not. */
+describe("D6: a setting made earlier in the call", () => {
+  it.each([
+    ["export npm_config_before=2020-01-01; npm i lodash", "Bash"],
+    ["export npm_config_tag=beta && npm i lodash", "Bash"],
+    ["declare -x npm_config_tag=beta; npm i lodash", "Bash"],
+    ["npm_config_tag=beta; export npm_config_tag; npm i lodash", "Bash"],
+    ["set -a; npm_config_tag=beta; npm i lodash", "Bash"],
+    ["export PIP_PRE=1; pip install requests", "Bash"],
+    ["export UV_PRERELEASE=allow; uv add requests", "Bash"],
+    ["$env:npm_config_tag = 'beta'; npm i lodash", "PowerShell"],
+    ["$env:PIP_PRE=1; pip install requests", "PowerShell"],
+    ["Set-Item env:npm_config_tag beta; npm i lodash", "PowerShell"],
+    ["Set-Item -Path env:UV_PRERELEASE -Value allow; uv add requests", "PowerShell"],
+  ])("%s: held as not read; the plain install releases", (command, tool) => {
+    const r = run(command, tool);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.text).toContain("made earlier in this call");
+    s.ledger([]);
+    releases(command.includes("pip") ? "pip install requests" : command.includes("uv add") ? "uv add requests" : "npm i lodash");
+  });
+
+  it.each([
+    ['$env:CI = "true"; pnpm install --frozen-lockfile', "PowerShell"],
+    ["$env:NODE_ENV='production'; npm ci", "PowerShell"],
+    ["export CI=true; npm ci", "Bash"],
+    ["export NODE_OPTIONS=--max-old-space-size=4096 && npm install", "Bash"],
+  ])("%s: another namespace's setting goes ahead", (command, tool) => {
+    expect(run(command, tool).decision).toBe("allow");
+  });
+});
+
+/** D2: a manager at a quoted path with a space, or a manager script node runs, is that manager. */
+describe("D2: quoted manager paths and node <manager script>", () => {
+  it.each([
+    ['"C:/Program Files/nodejs/npm.cmd" install lodash@4.17.20', "Bash"],
+    ['& "C:/Program Files/nodejs/npm.cmd" install lodash@4.17.20', "PowerShell"],
+    ['node "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js" install lodash@4.17.20', "Bash"],
+    ['node "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js" install lodash@4.17.20', "PowerShell"],
+    ["node --max-old-space-size 4096 ./node_modules/pnpm/bin/pnpm.cjs add lodash@4.17.20", "Bash"],
+    ["node .yarn/releases/yarn.js add lodash@4.17.20", "Bash"],
+  ])("%s (%s): read as the manager, held, released by the call its denial names", (command, tool) => {
+    s.ledger([]);
+    const r = run(command, tool);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items, r.text).not.toBeNull();
+    answerDenial(s, r, "proceed");
+    expect(run(command, tool).decision).toBe("allow");
+  });
+
+  it("an option the account does not take, after a quoted manager path, is held as not read", () => {
+    expect(run('"C:/Program Files/nodejs/npm.cmd" install --@types:registry=https://registry.npmjs.org lodash@4.17.20').text).toContain("could not be read");
+  });
+});
+
+/** D3: a manager named with its version after a runner is that manager, for the detector as for the reader. */
+describe("D3: a runner's manager@version", () => {
+  it.each(["npx -y npm@10.9.2 install lodash@4.17.20", "pnpm dlx yarn@1 add lodash@4.17.20", "bunx pnpm@9 add lodash@4.17.20", "corepack pnpm@9.15.0 add lodash@4.17.20"])("%s", (command) => {
+    expect(detectsInstall(command)).toBe(true);
+    s.ledger([]);
+    expect(run(command).decision).toBe("deny");
+    releases(command);
+  });
+
+  it("with an option the account does not take: held as not read", () => {
+    expect(run("npx -y npm@10.9.2 install --@types:registry=https://registry.npmjs.org lodash@4.17.20").text).toContain("could not be read");
+  });
+});
+
+/** D7: a URL on a public registry host is the public registry: read as name and version, or held. */
+describe("D7: a public-registry URL operand", () => {
+  it.each([
+    ["npm i https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz", { ecosystem: "npm", package: "lodash", to: "4.17.20" }],
+    ["npm i https://registry.npmjs.org/@types/node/-/node-20.11.0.tgz", { ecosystem: "npm", package: "@types/node", to: "20.11.0" }],
+    ["pip install https://files.pythonhosted.org/packages/aa/bb/requests-2.5.0-py2.py3-none-any.whl", { ecosystem: "PyPI", package: "requests", to: "2.5.0" }],
+    ["pip install https://files.pythonhosted.org/packages/aa/bb/requests-2.5.0.tar.gz", { ecosystem: "PyPI", package: "requests", to: "2.5.0" }],
+  ])("%s: read, held on its verdict, released by the call", (command, item) => {
+    s.ledger([]);
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items).toEqual([item]);
+    answerDenial(s, r, "proceed");
+    expect(run(command).decision).toBe("allow");
+  });
+
+  it.each(["npm i https://registry.npmjs.org/lodash", "pip install https://pypi.org/simple/requests/", "pip install 'requests @ https://files.pythonhosted.org/x/y'"])("%s: another form on a public host is held as not read", (command) => {
+    expect(run(command).text).toContain("could not be read");
+  });
+
+  it("a URL on another host is still a source of its own", () => {
+    expect(run("npm i https://npm.corp.example/lodash-4.17.20.tgz").decision).toBe("allow");
+  });
+});
+
+/** D8: a path with extras is a path. */
+describe("D8: pip install .[dev]", () => {
+  it.each(["pip install .[dev]", 'pip install ".[dev,test]"', "pip install -e .[dev]", "pip install ./pkg[test]", "uv pip install -e '.[dev]'", "python -m pip install '.[all]'"])("%s goes ahead", (command) => {
+    expect(run(command).decision).toBe("allow");
   });
 });
