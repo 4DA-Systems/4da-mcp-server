@@ -1,0 +1,133 @@
+[
+ {
+  "id": "e9-req-names",
+  "unit": "requirements.txt\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-req-names-colon",
+  "unit": "requirements.txt: a <2 and b\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-req-fence",
+  "unit": "```requirements\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-req-then-lines",
+  "unit": "requirements.txt\nzqxa\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-toml-unanchored",
+  "unit": "a = \"1\" [dependencies]\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-toml-poetry",
+  "unit": "[tool.poetry.group.x.dependencies]\na = \"1\"\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-deps-json-open",
+  "unit": "\"dependencies\": {\"a\": \"1\", ",
+  "length": 199000
+ },
+ {
+  "id": "e9-pyproj-arr",
+  "unit": "dependencies = [\"a<2\", ",
+  "length": 199000
+ },
+ {
+  "id": "e9-brew-lines",
+  "unit": "brew install x\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-go-up",
+  "unit": "go up ",
+  "length": 199000
+ },
+ {
+  "id": "e9-go-up-lines",
+  "unit": "go up\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-npm-pkg-lines",
+  "unit": "the npm package\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-xargs-lines",
+  "unit": "xargs npm install x\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-alias-forms",
+  "unit": "a@npm:b@1 ",
+  "length": 199000
+ },
+ {
+  "id": "e9-quoted-forms",
+  "unit": "a@'1' ",
+  "length": 199000
+ },
+ {
+  "id": "e9-json-alias",
+  "unit": "\"a\": \"npm:b@1\", ",
+  "length": 199000
+ },
+ {
+  "id": "e9-pep-spaced",
+  "unit": "a >= 1, < 2, ",
+  "length": 199000
+ },
+ {
+  "id": "e9-heredoc",
+  "unit": "cat > requirements.txt <<EOF\na <2\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-fence-tilde",
+  "unit": "~~~\nnpm install a\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-pipe-lines",
+  "unit": "npm install a | npm install b\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-goreq-block",
+  "head": "require (\n",
+  "unit": "\texample.com/a/b v1.0.0 // indirect\n",
+  "length": 199000
+ },
+ {
+  "id": "e9-crlf",
+  "unit": "npm install a\r\n",
+  "length": 199000
+ },
+ {
+  "id": "e9x-pct",
+  "unit": "requirements.txt %\na\n",
+  "length": 199000
+ },
+ {
+  "id": "e9x-in",
+  "unit": "requirements.in %\na\n",
+  "length": 199000
+ },
+ {
+  "id": "e9x-short",
+  "unit": "r.txt %\na\n",
+  "length": 199000
+ },
+ {
+  "id": "e9x-pct3",
+  "unit": "requirements.txt\na\n%\n",
+  "length": 199000
+ }
+]

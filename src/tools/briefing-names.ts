@@ -2,10 +2,10 @@
 /**
  * What a word in a task can and cannot be, as a package name (blind audit round 4): shared by the
  * briefing's readers of named versions (briefing-requested-versions.ts) and new packages
- * (briefing-new-packages.ts). The forms that tie a version to a name are one list, in briefing-command-check.ts
- * (strictEvidence): name@spec with the spec bare or in single or double quotes; `alias@npm:name@spec` (tied to name);
- * name==spec and PEP 440's other operators, bare or spaced; `name = "spec"`; `"name": "spec"`; `"alias":
- * "npm:name@spec"`. They are versions the briefing happens to read, never a complete reading.
+ * (briefing-new-packages.ts). The forms that tie a version to a name live in briefing-command-check.ts
+ * (strictEvidence), for example name@spec (bare or quoted), `alias@npm:name@spec` (tied to name), name==spec and
+ * PEP 440's other operators, `name = "spec"`, `"name": "spec"`. They are versions the briefing happens to read,
+ * best effort: a spelling it does not read is not checked (round 11, P1).
  */
 
 import { mayScanWord } from "../call-budget.js";

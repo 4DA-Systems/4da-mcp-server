@@ -2,9 +2,10 @@
 /**
  * Round 7, C1: the canonical command grammar. Five independent checks found new holes in a hand-written reader of
  * commands inside free text (launcher names, where options stand, stop words, option arity, lower-casing, prose
- * versions), so a command is either read whole by this small exact grammar or it is NOT READ WHOLE, and the answer
- * can then be at most review_needed (what-should-i-know.ts). There are no stop-word lists and no guessing which word
- * is a value.
+ * versions), so this small grammar reads a command it recognises, and where it notices a shape it cannot read the
+ * command is NOT READ WHOLE (the answer is then at most review_needed: what-should-i-know.ts). Best effort, never a
+ * promise (round 11, P1): a command it does not recognise as one is not read, and the level rests on the caller's
+ * declaration. There are no stop-word lists and no guessing which word is a value.
  *
  * A command is NAMED when a manager word (its basename: a directory, `.cmd` / `.exe` / `.bat` / `.ps1` and a
  * version suffix such as `pip3.12` set aside; `python -m pip`, `py -m pip`) is followed by one of its verbs with

@@ -163,11 +163,13 @@ describe("1. the command and the specifier fix the ecosystem, for every reader",
     expect(r.summary).not.toMatch(/flask[^;]*\(proceed/);
   });
 
-  it("gem install rails -v 5.0.0 in an npm project: named NOT CHECKED, never safe_to_delegate", async () => {
+  // Round 11, P6: said as a command this briefing does not read; its package is not offered.
+  it("gem install rails -v 5.0.0 in an npm project: said as a command not read, never safe_to_delegate", async () => {
     const r = await brief("gem install rails -v 5.0.0");
     expect(r.new_packages ?? []).toEqual([]);
     expect(r.requested_versions ?? []).toEqual([]);
-    expect(r.summary).toContain("rails (RubyGems: not read by this server)");
+    expect(r.summary).not.toContain("rails (RubyGems: not read by this server)");
+    expect(r.delegation_assessment.reason).toContain("a command this briefing does not read (gem)");
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
