@@ -472,8 +472,10 @@ describe("J1: data program options and pipelines", () => {
     ["awk 'BEGIN { system(\"npm i lodash@4.17.20\") }'", "Bash"],
     ["make -f - <<'EOF'\nall:\n\tnpm i lodash@4.17.20\nEOF", "Bash"],
     ["echo 'npm i lodash@4.17.20' > package.json", "Bash"],
-  ])("%s: held", (command, tool) => {
+  ])("%s: held; the plain command the remedy names releases", (command, tool) => {
     expect(run(command, tool).decision).toBe("deny");
+    s.ledger([]);
+    releases("npm i lodash@4.17.20");
   });
 
   it.each([
@@ -489,8 +491,10 @@ describe("J1: data program options and pipelines", () => {
 });
 
 describe("J2: operands from somewhere the hook cannot read", () => {
-  it.each(["echo lodash@4.17.20 | xargs npm i", "echo requests==2.5.0 | xargs pip install", "cat pkgs.txt | pip install -r -", "pip install -r /dev/stdin", "npm i $(cat pkgs.txt)"])("%s: held as not read", (command) => {
+  it.each(["echo lodash@4.17.20 | xargs npm i", "echo requests==2.5.0 | xargs pip install", "cat pkgs.txt | pip install -r -", "pip install -r /dev/stdin", "npm i $(cat pkgs.txt)"])("%s: held as not read; the plain command releases", (command) => {
     expect(run(command).text).toContain("could not be read");
+    s.ledger([]);
+    releases(command.includes("pip") ? "pip install requests==2.5.0" : "npm i lodash@4.17.20");
   });
 });
 

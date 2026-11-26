@@ -104,3 +104,28 @@ describe("S6: an extra index keeps the public index in play", () => {
     expect(run("uv add --index https://pypi.corp.example/simple requests==2.5.0").decision).toBe("allow");
   });
 });
+
+/** L1: the header's limits, each tested as it is written: these go ahead. */
+describe("L1: commands that let the manager choose versions go ahead (a stated limit)", () => {
+  it.each(["npm audit fix", "npm audit fix --force", "pnpm audit --fix", "npm update", "pnpm up", "yarn upgrade", "bun update", "cargo update", "cargo upgrade", "poetry update", "uv tool upgrade ruff", "go mod tidy", "go get", "go get -u ./..."])("%s", (command) => {
+    expect(run(command).decision).toBe("allow");
+  });
+  it("uv lock --upgrade is held", () => {
+    expect(run("uv lock --upgrade").decision).toBe("deny");
+  });
+});
+
+describe("L2, L3, L5: the other limits as written", () => {
+  it("a requirements file written by the shell, then installed: goes ahead", () => {
+    expect(run("echo requests==2.5.0 > r.txt && pip install -r r.txt").decision).toBe("allow");
+  });
+  it("a private index serving public packages: not judged", () => {
+    expect(run("npm i --registry https://npm.mirror.corp.example lodash@4.17.20").decision).toBe("allow");
+  });
+  it("uv run --with pkg (fetch-and-run, decision pending): goes ahead", () => {
+    expect(run("uv run --with requests==2.5.0 python -c 1").decision).toBe("allow");
+  });
+  it("L4: cd to the data folder's parent in the same call, then a write by a relative name: goes ahead (stated)", () => {
+    expect(run("cd .. && echo x > notes.txt").decision).toBe("allow");
+  });
+});
