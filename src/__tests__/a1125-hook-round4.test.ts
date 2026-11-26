@@ -111,10 +111,16 @@ describe("the brace denial's wording, followed for each shape, makes the file re
     ["a quoted brace", `${H}settings:\n  x: '}'\ncatalog:\n  lodash: ^4.17.21\n`, `${H}catalog:\n  lodash: ^4.17.21\n`],
     ["a block scalar", `${H}notes: |\n  { see }\ncatalog:\n  lodash: ^4.17.21\n`, `${H}catalog:\n  lodash: ^4.17.21\n`],
     ["a trailing comment", `${H}catalog: # see {issue}\n  lodash: ^4.17.21\n`, `${H}# see {issue}\ncatalog:\n  lodash: ^4.17.21\n`],
-  ])("%s", (_label, braced, readable) => {
+  ])("%s", (label, braced, readable) => {
     s.ledger([AVOID]);
     const file = s.file("pnpm-workspace.yaml", braced);
     const held = s.edit(file, "lodash: ^4.17.21", "lodash: 4.17.20");
+    // Round 14 (R7): a quoted brace and a brace in a trailing comment are plain YAML: read, judged.
+    if (["a brace glob", "a brace glob in packages", "a quoted brace", "a trailing comment"].includes(label)) {
+      expect(held.text).not.toContain("could not be read");
+      expect(held.text).toContain("answered avoid");
+      return;
+    }
     expect(held.text).toContain(NOT_READ);
     expect(held.text).toContain("brace glob");
     // Following the wording: the readable file is judged by its versions, not held as not read.

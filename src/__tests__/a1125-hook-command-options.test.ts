@@ -24,18 +24,14 @@ const PY_AVOID = { ecosystem: "PyPI", package: "requests", version: "2.19.0", ve
 
 describe("each spelling is held with an avoid on record, and released by the denial's own call", () => {
   it.each([
-    ["npm --audit false install lodash@4.17.20", NPM_AVOID, "lodash@4.17.21", "lodash"],
     ["npm --no-audit true i lodash@4.17.20", NPM_AVOID, "lodash@4.17.21", "lodash"],
     ["npm --save-dev false install lodash@4.17.20", NPM_AVOID, "lodash@4.17.21", "lodash"],
-    ["npm --ignore-scripts true --audit false install lodash@4.17.20", NPM_AVOID, "lodash@4.17.21", "lodash"],
     ["pnpm --prefix sub add lodash@4.17.20", NPM_AVOID, "lodash@4.17.21", "lodash"],
     ["uv -q pip install requests==2.19.0", PY_AVOID, "requests==2.32.3", "requests"],
-    ["uv --cache-dir /tmp/c --directory sub pip install requests==2.19.0", PY_AVOID, "requests==2.32.3", "requests"],
     ["uv --color never pip compile --upgrade-package requests==2.19.0 requirements.in", PY_AVOID, "requests==2.32.3", "requests"],
     ["pip --cert ca.pem install requests==2.19.0", PY_AVOID, "requests==2.32.3", "requests"],
     ["pip --client-cert c.pem --exists-action w install requests==2.19.0", PY_AVOID, "requests==2.32.3", "requests"],
     ["python -m pip --cert ca.pem install requests==2.19.0", PY_AVOID, "requests==2.32.3", "requests"],
-    ["pip3 --use-feature truststore install requests==2.19.0", PY_AVOID, "requests==2.32.3", "requests"],
   ])("%s", (command, avoid, safe, name) => {
     s.ledger([avoid]);
     const held = run(command);
@@ -52,7 +48,7 @@ describe("each spelling is held with an avoid on record, and released by the den
 
   it("PowerShell reads them the same way", () => {
     s.ledger([NPM_AVOID, PY_AVOID]);
-    expect(run("npm --audit false install lodash@4.17.20", "PowerShell").decision).toBe("deny");
+    expect(run("npm --no-audit true i lodash@4.17.20", "PowerShell").decision).toBe("deny");
     expect(run("uv -q pip install requests==2.19.0", "PowerShell").decision).toBe("deny");
   });
 });
@@ -74,7 +70,23 @@ describe("what installs nothing is not held", () => {
 
   it("a `true` or `false` after an install's own Boolean option is not a package", () => {
     s.ledger([]);
-    const held = run("npm install --save false lodash@4.17.21");
+    const held = run("npm install --save-dev false lodash@4.17.21");
     expect(held.items).toEqual([{ ecosystem: "npm", package: "lodash", to: "4.17.21" }]);
+  });
+});
+
+// Round 14 (R1): beside a named package only the options on the manager's allow list are taken.
+// These spellings were read as options in round 10; they are not on the lists (--audit spelled with
+// a value, --save, a cache folder, pip's --use-feature), so they are held as not read now.
+describe("round 14: options off the allow list beside a named package are held as not read", () => {
+  it.each([
+    "npm --audit false install lodash@4.17.21",
+    "npm --ignore-scripts true --audit false install lodash@4.17.21",
+    "npm install --save false lodash@4.17.21",
+    "uv --cache-dir /tmp/c --directory sub pip install requests==2.32.3",
+    "pip3 --use-feature truststore install requests==2.32.3",
+  ])("%s", (command) => {
+    s.ledger([]);
+    expect(run(command).text).toContain("could not be read");
   });
 });

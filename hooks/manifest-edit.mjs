@@ -1,212 +1,137 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
 /**
- * The 4DA guard: a Claude Code plugin hook that stops a dependency version from being written or
- * installed before `dependency_check` has judged it. PreToolUse on Edit / MultiEdit / Write (a
- * manifest) and Bash / PowerShell (a command), against the check ledger the server writes in its
- * data folder (src/check-ledger.ts), entries of the last 24 hours only.
+ * The 4DA guard: a Claude Code plugin hook (PreToolUse on Edit, MultiEdit, Write, NotebookEdit,
+ * Bash and PowerShell; PostToolUse for advice) that stops a dependency version from being written
+ * or installed before `dependency_check` has judged it, against the check ledger the server writes
+ * in its data folder (src/check-ledger.ts), entries of the last 24 hours only. A guard-rail against
+ * an agent's mistakes and shortcuts, not a sandbox. No network, no dependencies, plain Node; it
+ * always exits 0.
  *
- * WHAT GOES AHEAD, ONLY ON POSITIVE EVIDENCE
+ * WHAT GOES AHEAD
  *
- * A command goes ahead when no line of it holds, anywhere, a package-manager word followed later
- * on that line by one of its verbs that can add or move a dependency (detectsInstall: npm, pnpm,
- * Yarn, Bun, pip / `python -m pip`, uv, Poetry, Cargo, Go; install / add / up / update / upgrade /
- * link / get / sync / lock / `npm pkg set` / `go mod edit`; lines continued with `\` or a
- * PowerShell backtick joined; read again with the shell's escape and quote characters taken out).
- * The raw text is read whatever its size, except a payload over 64 MB, which is judged from its
- * first 64 KB. A line the detector names goes ahead only when every simple command in it holding a
- * hit is positively classified: the text of a data program (below), or read whole (accountLine).
- * A tool installed from the registry (`cargo install x`, `go install x@v`, `yarn global add x`,
- * `uv tool install x`, `poetry self add x`) is read as an add. Read whole means: its program and
- * prefixes, every option known with its arity (ACCOUNT_TABLES, from each tool's own help; for
- * Yarn, Bun and Poetry an allow list from their documentation; no option in any of them lets the
- * manager install a name that is not an operand on the line), and every operand one of
- * - a public name with an exact version or a range, which goes ahead on its verdict: an exact
- *   version on `proceed` or `review`; a range on a `proceed` or `review` answered for that same
- *   constraint, or else for exactly the release its inclusive ceiling names (`<=V`, `A - V`, only
- *   lower bounds beside it, no `!=`). A public registry's own file URL, alone or as `name@<URL>`
- *   (an npm tarball, a PyPI wheel or sdist), is read as that name and version;
- * - a name alone or `@latest`, the request "latest", which goes ahead on the verdict recorded for
- *   that request (the server records `requested: "latest"`), as do `pnpm up -L x`, `yarn up x` and
- *   `yarn upgrade x --latest`, which move it to the newest release, and a link of a registry name
- *   (`npm` / `pnpm` / `yarn` / `bun link x`), read as that name at its newest release;
- * - a requirements file named with `-r` (`-Ur`, `-qr`, alone or with a constraints file): it
- *   names public releases, and it is read when it is written with the Edit, MultiEdit or Write
- *   tool (below), not when it is installed;
- * - a form that names no public release: a path (with extras: `.[dev]`), a local tarball, a git
- *   source, a URL on a host that is not a public registry, a registry or index that is positively
- *   not a public host (THE LIMITS: such an index is not judged).
- * A command with no package operand goes ahead without a verdict: for npm, pnpm, Yarn, Bun, pip,
- * uv and Poetry it installs the lockfile or the manifest's own ranges; what the manager then
- * chooses is a stated limit (THE LIMITS), not a check.
- * A data program's words are text only when all three hold: its options are all on its own short
- * list (echo, whose every argument is text, printf, cat, the grep family, rg, Select-String,
- * findstr, Set-Content / Add-Content into a file that is no manifest or lockfile, git commit / log /
- * show / diff / status / grep / tag with their options and no `-c` before them, gh pr / issue /
- * release / gist text (bodies, notes, titles, a review's verdict), `node -e` / `-p`, `python -c`,
- * and docker / podman run / exec / build, whose commands run in a container; not sed, awk or make,
- * which can run a command from their script or their line); no setting for it stands in the call
- * (a prefix, an export, `$env:`, Set-Item env:) other than the inert GIT_AUTHOR_NAME / _EMAIL /
- * _DATE, GIT_COMMITTER_NAME / _EMAIL / _DATE, TZ, LANG, LC_ALL, NO_COLOR, FORCE_COLOR and CI (any
- * other, such as GH_BROWSER, BROWSER, PAGER or GIT_EDITOR, can make it run a command of its own);
- * and its output goes nowhere that runs it: it is the last stage, or every later stage of its
- * pipeline is such a program or a pure sink (wc, head, tail, sort, uniq, cut, tr, less, more, tee,
- * Out-File, Set-Content or Add-Content to a file that is no manifest or lockfile, Out-Null,
- * Select-Object, Measure-Object, clip), and no redirection on the line writes a manifest or a
- * lockfile. A quoted string as the first word (PowerShell's `'text' | Out-File notes.txt`) is
- * text, and so is a heredoc fed to such a program or sink. A comment is text. `brew install`, `apt-get install`, `gem install`, `composer
- * require` and `dotnet add package` name no manager this hook reads.
- * A command run through a shell's `-c`, `eval`, `pwsh -Command`, `Invoke-Expression`, npx, bunx,
- * pnpx, `npm exec`, `pnpm exec` / `dlx`, `yarn exec` / `dlx` / `run`, `bun run` / `x`, pnpm or Yarn
- * passing a manager command through, `uv run`, `uv tool run` / uvx, `poetry run`, `pipenv` / `pdm`
- * / `rye` / `pixi` / `hatch [env] run`, `python -m uv` / `poetry`, `node <path>/npm-cli.js` or
- * corepack is read as the command it runs, at most MAX_WRAPS wrappers deep (deeper is held), and
- * what it installs must be what the outer command's reader judges; so is one after a prefix (sudo,
- * env, timeout, nice, nohup, time, command, exec, busybox, wsl), a shell keyword, or inside a
- * subshell, group or script block. Under xargs a manager's operands come from its input: held.
- * The files read on an Edit, MultiEdit or Write are package.json, Cargo.toml, pyproject.toml,
- * go.mod, pnpm-workspace.yaml, and a requirements file (a name `requirements*.txt`, or any `.txt`
- * in a folder named `requirements`). The path is first resolved as text, as Windows opens it
- * (`\` read as `/`, empty and `.` parts dropped, `name/..` resolved, each part's trailing dots and
- * blanks dropped, an NTFS stream suffix `::$DATA` / `:s` taken off the last part), and the name is
- * matched case-insensitively on every platform (on a case-sensitive file system `Package.json` is
- * held as well: the safe side). Other files a later command reads (constraints.txt, requirements.in, a
- * lockfile) are not read.
- * In a manifest written with the Edit, MultiEdit or Write tool only dependency declarations count
- * (never a comment or another string field), each section's are compared on their own, and a
- * dependency taken from a path, git, URL or a non-public source (Cargo `path`, `git`, `registry`;
- * npm `file:`, `link:`, `workspace:`; a PEP 508 direct reference; [tool.uv.sources] other than a
- * public index; Poetry `path`, `git`, `url`, a named source; a go.mod `replace` to a directory)
- * goes ahead, its name never repeated.
- * A package a private-registry rule covers (the server recorded `private`) goes ahead at any
- * version, unless an avoid or wait for that exact version or constraint came first.
+ * A command goes ahead when no line of it holds a package manager's word (npm, pnpm, Yarn, Bun,
+ * pip or `python -m pip` with any module spelling after it, uv, Poetry, Cargo, Go) followed later on
+ * that line by one of its verbs that can add or move a dependency (install, add, up, update, upgrade,
+ * link, get, sync, lock, `npm pkg set`, `go mod edit`), read again with quotes and escapes taken out
+ * and continued lines joined. A line that holds one goes ahead only when every simple command in it
+ * that holds a hit is either
+ * - the text of a data program: echo, printf, cat, the grep family, rg, Select-String, findstr,
+ *   Set-Content / Add-Content into a file that is no manifest or lockfile, git commit / log / show /
+ *   diff / status / grep / tag, gh pr / issue / release / gist text, `node -e` / `python -c` with
+ *   nothing after the code and not fed from a pipe, docker / podman run / exec / build; its options
+ *   on its own list, no setting for it in the call but GIT_AUTHOR_* and GIT_COMMITTER_* (NAME, EMAIL,
+ *   DATE), TZ, LANG, LC_ALL, NO_COLOR, FORCE_COLOR and CI, and its output going only to such programs
+ *   or to sinks (wc, head, tail, sort, uniq, cut, tr, less, more, tee, Out-File, Set-Content,
+ *   Add-Content to a file that is no manifest or lockfile, Out-Null, Select-Object, Measure-Object,
+ *   clip). A first word that begins with a quote (PowerShell's `'text' | Out-File notes.txt`), a
+ *   comment, and a heredoc fed to such a program or sink are text; or
+ * - read whole: its program and prefixes known (sudo, env, timeout, nice, nohup, time, command,
+ *   exec, busybox, wsl, a shell keyword, subshell or group; a shell's -c, eval, pwsh -Command, npx,
+ *   bunx, pnpx, npm exec, pnpm exec / dlx, yarn exec / dlx / run, bun run / x, uv run, uv tool run /
+ *   uvx, poetry run, pipenv / pdm / rye / pixi / hatch run and corepack are read as the command they
+ *   run, at most MAX_WRAPS deep); beside a named package only the options on that manager's allow
+ *   list (NAMED_OPTIONS: placement, output, scripts off, a dry run, each with its reason); and every
+ *   operand one of: a public name with an exact version (on `proceed` or `review`), with a range in
+ *   its registry's grammar (on a verdict for that constraint, or for exactly the release its
+ *   inclusive ceiling names), alone or `@latest` (on a verdict for `latest`); a public registry's
+ *   own file URL (read as that name and version); a requirements file named with -r; or a form that
+ *   names no public release (a path, a local archive, git, a URL on a host that is no public
+ *   registry). One index or registry option that replaces the public index (-i, --index-url,
+ *   --default-index, --registry, cargo --index), with nothing else naming a source and a host that
+ *   is positively not public, lets the install go ahead unjudged as the project's own source.
+ * A command that names no package (`npm ci`, `pip install -r r.txt`, `uv sync`) goes ahead; what the
+ * manager then chooses is a limit. A tool installed from the registry (`cargo install x`, `go install
+ * x@v`, `yarn global add x`, `uv tool install x`, `poetry self add x`) and a link of a registry name
+ * are read as an add.
+ *
+ * An Edit, MultiEdit or Write of package.json, Cargo.toml, pyproject.toml, go.mod,
+ * pnpm-workspace.yaml or a requirements file (`requirements*.txt`, any `.txt` in a `requirements`
+ * folder; the path resolved as Windows opens it, the name matched case-insensitively) goes ahead on
+ * the verdicts of the versions it changes. Only dependency declarations count, each section compared
+ * on its own; a dependency from a path, git, a URL or a non-public source goes ahead.
+ * pnpm-workspace.yaml is read only when every line of the file is plain: a `key:` header, a
+ * `- 'entry'` item, or `key: value` with a plain or simply quoted value. A package a private-registry
+ * rule covers goes ahead at any version unless an avoid or wait for that version came first.
  *
  * WHAT IS HELD
  *
- * - A version with an `avoid` or `wait` verdict: denied with that verdict's reason.
- * - A version with no verdict, or only `unknown`: denied with the `dependency_check` call to make;
- *   the call goes through once it answers proceed or review. A package whose newest ledger line is
- *   cut short, dated ahead of the clock or not fully valid has an unknown verdict. The two ledger
- *   files are read as one snapshot (stat'ed, read, stat'ed again, at most three times, as the
- *   server may be moving check-ledger.jsonl over check-ledger.1.jsonl): a ledger still changing
- *   holds the call, and so does a ledger file that exists but cannot be read (EACCES, EPERM, a
- *   deny-read ACL): it is unreadable, not absent.
- * - A dist-tag other than latest (`x@next`) or a Go branch: "name the version".
- * - A name the project takes from elsewhere (`local_source`) or one whose lockfile could not be
- *   read (`unreadable_lockfile`).
- * - As NOT READ, with one remedy that names the first part of the line the hook did not read, as
- *   written, and says "run the same command without <that>" or "with <that> written as <the form
- *   the hook reads>" (an exact version or the name alone; one module path; a variable's value
- *   written out; an npm placement setting as its option, `npm_config_save_dev` as `--save-dev`);
- *   it prints no command the user did not write, and where no single part can be named (a heredoc)
- *   it says to run the install as a plain command of its own: a command the detector names that is
- *   not read whole. That is a named package beside an option that can change which release of it
- *   is installed or where it is fetched from, taken where no package is named (npm / pnpm / Yarn
- *   `--offline` / `--prefer-offline`, npm `--cache-min`, pnpm / Yarn / Bun `--frozen-lockfile`,
- *   Yarn `--immutable` / `--immutable-cache` / `--mode`, pip `--upgrade-strategy` /
- *   `--only-binary` / `--no-binary` / `--platform` / `--python-version` / `--implementation` /
- *   `--abi`, uv `--offline` / `--frozen` / `--locked` / `--no-build` / `--no-binary` /
- *   `--only-binary` / `--python-version` / `--python-platform`, `cargo add --locked` / `--offline`
- *   / `--frozen`, go `-mod`) or beside a constraints or overrides file (`-c`, `--constraint(s)`,
- *   `--override(s)`, `--build-constraints`), which decides its release; an option not in the
- *   manager's table (among them every option that changes which release a name resolves to:
- *   `--tag`, `--before`, `--pre`, `--prerelease`, `--resolution`, Yarn's `--cached`, pnpm's
- *   `--resolution-mode`, Bun's `--latest` and `-c`, uv's `--upgrade` on uv add / lock / sync,
- *   Poetry's bare `--optional` before a package); a manager's own environment setting
- *   (`npm_config_*`, `PIP_*`, `UV_*` ...) as a prefix or made earlier in the same call (`export`,
- *   `$env:`, `Set-Item env:`), an operand not read as a version, operands from the command's input
- *   (xargs, `-r -`), a program, prefix or wrapper this hook does not read (`start`, `mise exec`,
- *   `gsudo`, `concurrently`, `git submodule foreach` ...), a data program whose options are not on
- *   its list or whose output is piped into anything else (`| sh`, `| pwsh -`, `| python`), a runner
- *   chain past MAX_WRAPS, and a line it cannot take apart (a variable, a substitution, an escape, a
- *   PowerShell here-string; for text that only mentions an install, the Write tool). sed and awk
- *   with a manager word and verb in their words are held too, with the remedy "grep / rg /
- *   Select-String to search for that text, the Write tool to write it", and so is make with one on
- *   its line (a variable, --eval, SHELL or MAKEFLAGS can run it), with the remedy "run the make
- *   target without putting the package manager's command on the line". The remedy is tested,
- *   followed mechanically, to release each of these classes (a1125-w2-hook-account.test.ts), every
- *   manager and verb the detector names (a1125-w2-hook-round12.test.ts), and the eleventh check's
- *   lines with the same operands, versions, extras and placement flags as written
- *   (a1125-w2-hook-round13-remedy.test.ts). `uv pip install -U <name>` is pip's: the name at its
- *   newest release.
- * - A manifest part it cannot read (a TOML escape or a multi-line string in a dependency context,
- *   a brace in pnpm-workspace.yaml) and anything past a bound or the time budget (the loops' ticks;
- *   a payload over 8 KB is also judged under a 5 s wall clock).
- * - Any call that names the check ledger (its file name or the data folder's path, normalised)
- *   unless it is one plain read command alone on its line.
+ * - `avoid` or `wait`: denied with the reason. No verdict, or only `unknown`: denied with the
+ *   dependency_check call to make; the same call goes ahead once it answers proceed or review. A
+ *   dist-tag other than latest, or a Go branch: "name the version". `local_source` and
+ *   `unreadable_lockfile`.
+ * - As NOT READ, a command the detector names that is not read whole. The denial names the first
+ *   part it did not read, as written, and prints no command the user did not write: "Run the same
+ *   command without <that>" or "with <that> written as <the form the hook reads>"; an option is named
+ *   alone ("without the option `X`; if that option takes a value, remove its value too"). Among them:
+ *   an option off the list; any other index or source combination; a constraints or overrides file
+ *   beside a named package; a spec that is no version this hook reads ("write an exact version"); a
+ *   manager's own setting (npm_config_*, PIP_*, UV_*, POETRY_*, YARN_*, BUN_CONFIG*, CARGO_ registry,
+ *   source, net and http settings, GOPROXY, GOFLAGS, GOPRIVATE, GONOPROXY, GONOSUMDB, GOINSECURE,
+ *   GOTOOLCHAIN, any letter case) named anywhere at or before an install line, by its name in the raw
+ *   text (a placement setting such as npm_config_save_dev: "written as `--save-dev`"); xargs,
+ *   Set-Alias, New-Alias, alias, function, fn, `f() {`, Invoke-Expression, iex, `&` with a string or
+ *   doskey beside a package manager's name; a blank or control other than space, tab, CR and LF
+ *   ("retype it with plain spaces"); a program, prefix or wrapper this hook does not read; a data
+ *   program off its list or piped into anything else; sed, awk or make with an install on their
+ *   line; a line it cannot take apart (a variable, a substitution, an escape, a here-string, a
+ *   PowerShell comma list or --%). Tested: a1125-w2-hook-round14-remedy.test.ts follows the twelfth
+ *   check's 441 held lines to an allowed command with the same operands and placement, or to the
+ *   general remedy.
+ * - An edit it cannot read: a pnpm-workspace.yaml line that is not plain ("rewrite as plain
+ *   `name: version` lines"), a TOML escape or multi-line string in a dependency, anything past a bound.
+ * - Past the time budget (2 s of reading; a payload over 8 KB also under a 5 s wall clock), or when
+ *   anything goes wrong (an error of its own, a worker that stops, a payload that does not parse),
+ *   where a ledger exists and the guard blocks: every Bash and PowerShell call ("the hook could not
+ *   finish reading this command, so the dependency versions it may install were not checked. Run it
+ *   in smaller parts"), and every Edit, MultiEdit, Write and NotebookEdit whose path names a manifest
+ *   or the ledger or cannot be read; any other call gets nothing. stdin still open after 8 s: a whole
+ *   payload is judged with 1.5 s of budget, a partial one is held by that rule.
+ * - The ledger read: the two files as one snapshot (a ledger still changing holds the call, so does
+ *   a ledger file that exists but cannot be read); a package whose newest line is not fully valid,
+ *   or is dated more than 5 minutes ahead of the clock, has an unknown verdict; a line cut before its
+ *   package sets every earlier line aside.
+ * - Any call that names the check ledger or the data folder it is in, unless it is one plain read
+ *   command, whether or not a ledger file exists: only the server writes there.
  *
- * THE LIMITS
+ * THE LIMITS (each goes ahead unchecked)
  *
- * The hook is a guard-rail against an agent's mistakes and shortcuts, not a sandbox: an agent that
- * sets out to defeat it can, for example through a script file that runs the install, a variable,
- * or the ledger limits (a path that reaches the data folder through `cd`, `pushd` or Set-Location,
- * in this call or an earlier one, a junction or symlink made earlier, a name the shell assembles
- * from pieces, a wildcard, a parent folder). It reads no network: a registry it cannot classify as
- * public or private is held, not looked up. Not read or not judged:
- * - commands that let the manager choose versions without naming a package: `npm audit fix` (also
- *   with --force), `pnpm audit --fix`, `npm update` / `pnpm up` / `yarn upgrade` / `bun update` with
- *   no name or inside the manifest's range, `cargo update`, `cargo upgrade`, `cargo install-update`,
- *   `poetry update`, `uv tool upgrade`, `go mod tidy`, `go get` with no module, `go get -u ./...`
- *   (`uv lock --upgrade` is held). Run vulnerability_scan after them;
- * - a manifest, requirements or lock file changed by a shell command (a redirection, `sed -i`, tee,
- *   a script); only changes made with the Edit, MultiEdit and Write tools are read (`npm pkg set`
- *   is read), so `echo x==1 > r.txt && pip install -r r.txt` goes ahead;
- * - an index or registry other than the public hosts is taken as the project's own source and is
- *   not judged, also when it serves the public registry's packages (a mirror or a proxy);
- * - installs through pipenv, pdm, rye, pixi, hatch and conda (their manifest sections, [tool.rye]
- *   and [tool.pixi], are read on edits), `pipx inject`, gem, composer, dotnet, and commands run
- *   inside a container;
- * - a program or script that runs an install: a make target, a package.json script (`npm run x`),
- *   `pwsh -File`, code given to `node -e` or `python -c`;
- * - a manager name the shell assembles or decodes (`$'\x6epm'`, `powershell -EncodedCommand`);
- * - runners that fetch a package and run it (`npx pkg@v`, `pnpx pkg`, `npm exec` / `npm x pkg`,
- *   `pnpm dlx pkg`, `yarn dlx pkg`, `bunx pkg`, `bun x pkg`, `uvx pkg`, `uv tool run pkg`,
- *   `uv run --with pkg`, `pipx run`, `npm init` / `npm create` / `yarn create` / `pnpm create` /
- *   `bun create`, `go run mod@v`, `cargo binstall`): what they fetch is not checked (the operator's
- *   decision is pending);
- * - settings that change what a name resolves to when they live in files (`.npmrc`, `pip.conf`,
- *   `uv.toml` or pyproject's [tool.uv], a lockfile written by hand and then installed with `npm
- *   ci`), including those a manager's own config-writing verb writes before an install in the
- *   same call (`npm` / `pnpm` / `yarn` / `pip config set`, `poetry config`, `poetry source add`,
- *   `go env -w`, `git config url.<x>.insteadOf`), and variables outside the managers' own names
- *   that point a manager at other config files (HOME, USERPROFILE, XDG_CONFIG_HOME, APPDATA,
- *   CARGO_HOME, GOENV), and Go's checksum settings before `go get` (GOSUMDB, GONOSUMCHECK): an
- *   install under them is read as if they were not there (the operator's decision is pending). A
- *   manager's own setting (NPM_CONFIG_USERCONFIG, PIP_CONFIG_FILE, any `npm_config_*` / `PIP_*` /
- *   `UV_*` / `POETRY_*` / `YARN_*` / `BUN_CONFIG*`, Cargo's registry and source settings,
- *   GOPROXY, GOFLAGS, GOPRIVATE, GONOPROXY, GONOSUMDB, GOINSECURE, GOTOOLCHAIN) before the install
- *   is held (WHAT IS HELD).
- * Since it denies only where a ledger exists, a removed ledger means no denials until the server
- * starts again.
+ * - An agent that sets out to defeat it can: a script that runs the install, a path built from
+ *   pieces, `cd` / pushd / Set-Location to the data folder in an earlier call, a junction or symlink,
+ *   a wildcard, a manager name the shell assembles or decodes.
+ * - A name alone is judged at the registry's newest release; the manager may install an older one
+ *   when the newest does not fit this Node or Python (`engines`, `requires-python`) or when the
+ *   `latest` tag is not the highest version.
+ * - The allow lists are lists, not proofs: the tested property is that none of their options changes
+ *   the named release in the tool versions tested (a1125-w2-hook-round14-options.test.ts).
+ * - Commands that let the manager choose versions without naming a package: npm audit fix, pnpm audit
+ *   --fix, npm update / pnpm up / yarn upgrade / bun update with no name or inside the range, cargo
+ *   update / upgrade / install-update, poetry update, uv tool upgrade, go mod tidy, go get with no
+ *   module. Run vulnerability_scan after them.
+ * - A manifest, requirements or lock file changed by a shell command, and the files a later command
+ *   reads (constraints, requirements.in, a lockfile).
+ * - Installs through pipenv, pdm, rye, pixi, hatch, conda, pipx inject, gem, composer and dotnet, and
+ *   commands run inside a container; a program or script that runs an install (a make target, npm
+ *   run x, pwsh -File); runners that fetch a package and run it (npx pkg@v, pnpx, npm exec / x, pnpm
+ *   dlx, yarn dlx, bunx, bun x, uvx, uv tool run, uv run --with, pipx run, the init and create
+ *   commands, go run mod@v, cargo binstall).
+ * - Settings in files (.npmrc, pip.conf, uv.toml, [tool.uv], a hand-edited lockfile), written by a
+ *   config command before the install, or reached through HOME, USERPROFILE, XDG_CONFIG_HOME,
+ *   APPDATA, CARGO_HOME or GOENV, and Go's GOSUMDB and GONOSUMCHECK; another project folder's (-C,
+ *   --prefix, --cwd, --directory), which is the same limit as `cd` to it.
  *
- * FOURDA_GUARD=advise: never denies (the ledger guard included); after a manifest edit
- * (PostToolUse) the agent is told which versions moved and which calls check them, the edited file
- * compared as a whole as block mode reads it (the edits applied backwards give the file before).
- * FOURDA_GUARD=off: the hook does nothing.
+ * FOURDA_GUARD=advise never denies (the ledger guard included) and, after a manifest edit, says
+ * which versions moved and which calls check them. FOURDA_GUARD=off does nothing.
  *
- * It denies only where a ledger exists. A server from 6.5.0 on starts one when it starts; a
- * server before 6.5.0 records no verdict, so beside one a denied call could never pass. With no
- * ledger file in the data folder the hook works as it did before 6.5.0: nothing is denied, and
- * the advice follows a manifest edit.
- *
- * Reading past its time budget (every stage, link and word the tokenizer produces counts against
- * it) holds the call as not read. That, and anything else that goes wrong (an error of its own, a
- * rejected promise, a worker's error or exit without an answer, the wall clock, a payload that
- * does not parse), ends in one rule that looks for no words, where a ledger exists and the guard
- * blocks: on a PreToolUse call it holds every Bash and PowerShell call ("the hook could not finish
- * reading this command; run it in smaller parts"), and every Edit, MultiEdit, Write and
- * NotebookEdit whose path names a manifest or the ledger or cannot be read; a payload that does not
- * parse at all is held; any other call gets nothing. stdin that is never closed: after 8 s the text
- * that has arrived is judged as any other payload when it parses whole, else held by that rule
- * (Claude Code closes stdin). A payload that
- * starts with a byte-order mark is read. It always ends with exit 0. No network, no dependencies,
- * plain Node.
+ * The ledger guard holds a call that names the ledger whether or not a ledger file exists. Every
+ * other denial needs a ledger: a server from 6.5.0 on starts one when it starts; beside an older one,
+ * or once the ledger is removed, nothing else is denied and the advice follows a manifest edit.
  *
  * Names and versions it repeats come from the edit or command, which may quote a third party's
  * manifest, so each is held to its shape first (NAME_TEXT, specText).
  */
 
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -1006,6 +931,13 @@ function requirementLine(line) {
   const text = line.replace(/(^|\s)#.*$/, "").trim();
   if (text.length > MAX_LINE_CHARS) return refuse(`a requirements line over ${MAX_LINE_CHARS} characters`);
   if (!text || text.startsWith("-")) return null;
+  // Round 14: `name @ https://files.pythonhosted.org/.../name-1.2.3-py3-none-any.whl`, or the URL alone,
+  // installs that public release: read as it (a command reads it the same way).
+  const url = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@\s*)?(https?:\/\/\S+)$/.exec(text);
+  if (url) {
+    const file = registryFile(url[1]);
+    return file && file.ecosystem === "PyPI" ? { name: nameKey("PyPI", file.name), spec: file.spec } : null;
+  }
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?![A-Za-z0-9._-])\s*(?:\[[^\]\n]{0,200}\])?\s*\(?\s*/.exec(text);
   if (!m) return null;
   const rest = text.slice(m[0].length);
@@ -1051,25 +983,10 @@ function pnpmContentLines(text) {
 }
 
 /**
- * Whether pnpm-workspace.yaml content lines hold a flow mapping the hook does not read: a `{` or `}`
- * on a line that is not a `#` line, once each exact empty mapping (`{}`, `{ }`) is taken out. No
- * quote or comment is read: a reader of YAML's flow syntax could not be made right in small steps
- * (three blind checks of the a1125 hook lane: `''` escapes, tags and anchors before a quote,
- * carried quotes, block scalars holding braces), so a brace anywhere stands for one.
- */
-function pnpmHasBrace(lines) {
-  for (const line of lines) {
-    tick();
-    if (!line.trimStart().startsWith("#") && /[{}]/.test(line.replace(/\{[ \t]*\}/g, ""))) return true;
-  }
-  return false;
-}
-
-/**
  * pnpm-workspace.yaml: the versions its `catalog`, named `catalogs` and `overrides` set, keyed by
  * name and section (the same package in two catalogs is two entries). Only plain `key: value`
  * lines are read (a value `npm:name@version` as the package and version it names); flow mappings
- * are not (wholeFileChanges holds a changed file that has one).
+ * are not (wholeFileChanges holds a changed file with a line that is not plain, R7).
  */
 function pnpmWorkspaceVersions(text, out) {
   let top = null;
@@ -1239,7 +1156,7 @@ function goDirectives(text, block = null) {
     tick();
     // go.mod allows a module path or version in double quotes (`replace x => "github.com/fork/x" v1.0.0`).
     // The comment is dropped first; a line still over the bound is refused, not skipped.
-    const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").trim();
+    const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").replace(/`([^`]*)`/g, "$1").trim();
     if (!line) continue;
     if (line.length > MAX_LINE_CHARS) {
       refuse(`a go.mod line over ${MAX_LINE_CHARS} characters`);
@@ -1430,6 +1347,66 @@ function diffVersions(old, now, same = (spec) => spec) {
   return changes;
 }
 
+/** YAML's indicators: a plain scalar or key does not start with one. */
+const YAML_INDICATORS = new Set([..."-?:,[]{}#&*!|>'\"%@`"]);
+/** R7: a plain scalar or key (no indicator first, no `: `, no flow brackets), or a simply quoted one. */
+function yamlScalarOk(v) {
+  if (v === "") return false;
+  if (v[0] === "'") {
+    if (v.length < 2 || v[v.length - 1] !== "'") return false;
+    const inner = v.slice(1, -1);
+    return !inner.replace(/''/g, "").includes("'");
+  }
+  if (v[0] === '"') return v.length >= 2 && v[v.length - 1] === '"' && !/["\\]/.test(v.slice(1, -1));
+  if (YAML_INDICATORS.has(v[0])) return false;
+  return !/[[\]{}]/.test(v) && !v.includes(": ") && !v.endsWith(":") && !/\s#/.test(v);
+}
+/** R7: the first line of a pnpm-workspace.yaml text that is not plain YAML (null when every line is). */
+export function pnpmUnplainLine(text) {
+  let content = false;
+  for (const raw of String(text).split(/\r\n|\r|\n/)) {
+    tick();
+    // a comment: from a `#` at the start or after a blank, outside quotes
+    let end = raw.length;
+    let quote = null;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === "'" || ch === '"') quote = ch;
+      else if (ch === "#" && (i === 0 || raw[i - 1] === " " || raw[i - 1] === "\t")) {
+        end = i;
+        break;
+      }
+    }
+    const line = raw.slice(0, end).trimEnd();
+    const s = line.trimStart();
+    if (s === "") continue;
+    if (s === "---" && !content && line === s) continue;
+    content = true;
+    if (s === "-" ) return raw;
+    if (s.startsWith("- ")) {
+      if (!yamlScalarOk(s.slice(2).trim())) return raw;
+      continue;
+    }
+    // `key:` or `key: value`; a quoted key ends at its closing quote
+    let k;
+    if (s[0] === "'" || s[0] === '"') {
+      const close = s.indexOf(s[0], 1);
+      if (close < 0 || s[close + 1] !== ":") return raw;
+      k = close + 1;
+    } else {
+      const m = /:(?=\s|$)/.exec(s);
+      if (!m) return raw;
+      k = m.index;
+    }
+    if (!yamlScalarOk(s.slice(0, k))) return raw;
+    const value = s.slice(k + 1).trim();
+    if (value !== "" && !yamlScalarOk(value)) return raw;
+  }
+  return null;
+}
+
 /** Changed or added dependency versions between two whole texts of one manifest (both show every section). */
 function wholeFileChanges(file, before, after) {
   if (file === "pnpm-workspace.yaml") {
@@ -1437,12 +1414,16 @@ function wholeFileChanges(file, before, after) {
     // content lines is held as not read, and no verdict releases it; a re-save, a comment or a
     // blank line changed holds nothing.
     const now = pnpmContentLines(after);
-    if (pnpmHasBrace(now)) {
+    // Round 14 (R7): a positive grammar. The edit is read only when every line of the file it makes
+    // is a plain one; any other line (a tag, an anchor or alias, a block scalar, an explicit key, a
+    // merge key, a flow mapping or sequence, a second document) holds an edit that changes the file.
+    const odd = pnpmUnplainLine(after);
+    if (odd !== null) {
       const was = pnpmContentLines(before);
       if (was.length !== now.length || was.some((line, i) => line !== now[i])) {
         refuse(
-          "pnpm-workspace.yaml holds { or } outside a comment line, which this hook does not read exactly (a flow mapping, a brace glob, a quoted or commented brace), and this edit changes the file",
-          `No dependency_check verdict releases this edit. To make the file readable: write each flow mapping as block lines, one "name: version" per line; write a brace glob ('*{eslint,prettier}*', 'packages/{a,b}') as separate entries; move a brace in a trailing comment to a comment line of its own; take any other brace (in a quoted value or a block scalar) out of the file. Then the versions it sets are judged as in any other edit (call dependency_check for each one the denial names).`,
+          `pnpm-workspace.yaml holds a line this hook does not read as plain YAML (${JSON.stringify(odd.slice(0, 80))}), and this edit changes the file`,
+          "No dependency_check verdict releases this edit. To make the file readable: write each flow mapping as block lines, one \"name: version\" per line; write a brace glob ('*{eslint,prettier}*', 'packages/{a,b}') as separate entries; move a brace in a trailing comment to a comment line of its own; and rewrite as plain `name: version` lines every other line that is not plain: a `key:` header, `  - 'entry'` list items, and `name: version` lines with a plain or simply quoted value (no tag, anchor, alias, block scalar, explicit or merge key, braces or brackets). Then the versions it sets are judged as in any other edit (call dependency_check for each one the denial names).",
         );
       }
       return [];
@@ -1883,7 +1864,9 @@ function manifestKind(filePath) {
   // dropped, and the name compared case-insensitively on every platform (Round 11: on a
   // case-sensitive file system `Package.json` is then held too: the safe side).
   const parts = pathParts(filePath);
-  const name = (parts[parts.length - 1] ?? "").replace(/:.*$/, "").replace(/[. ]+$/, "");
+  // Round 14: invisible and format characters and NUL taken out, a dot look-alike read as a dot.
+  // eslint-disable-next-line no-control-regex -- NUL is one of the characters taken out
+  const name = (parts[parts.length - 1] ?? "").replace(/[\u0000\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]/g, "").replace(/[\u2024\uff0e\u3002\u00b7]/g, ".").replace(/:.*$/, "").replace(/[. ]+$/, "");
   const known = MANIFEST_NAMES.get(name.toLowerCase());
   if (known) return known;
   // The server reads no `syntax_test_*` file (an editor grammar's fixture: isSyntaxTestName).
@@ -2537,7 +2520,7 @@ const CARGO_VALUES = new Set(["-C", "-F", "--features", "--rename", "-p", "--pac
 const CARGO_REFUSE = new Set(["--git", "--path", "--registry", "--branch", "--tag", "--rev", "--index"]);
 const PY_INDEX = new Set(["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links"]);
 /** pip options that take a value, its general ones (`pip --help`: `--cert`, `--client-cert`, ...) first: they may stand before `install`. */
-const PIP_VALUES = new Set(["--exclude", "--excludes", "--cert", "--client-cert", "--exists-action", "--use-feature", "--use-deprecated", "--resume-retries", "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
+const PIP_VALUES = new Set(["--color", "--exclude", "--excludes", "--cert", "--client-cert", "--exists-action", "--use-feature", "--use-deprecated", "--resume-retries", "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-t", "--target", "--prefix", "--root", "--trusted-host", "--python-version", "--platform", "--implementation", "--abi", "--src", "--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--progress-bar", "--upgrade-strategy", "--no-binary", "--only-binary", "--config-settings", "-C", "--global-option", "--report", "--python", "-p", "--exclude-newer", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--link-mode", "--override", "--overrides", "--group", "--extra", "--python-platform", "--torch-backend", "--build-constraint", "-b"]);
 /** uv's global options that take a value, which may stand before its subcommand (uv help). */
 const UV_GLOBAL_VALUES = new Set(["--cache-dir", "--color", "--allow-insecure-host", "--directory", "--project", "--config-file", "--python-preference"]);
 const UV_ADD_VALUES = new Set(["--group", "--optional", "--extra", "--package", "--project", "--directory", "--python", "-p", "--marker", "-m", "--bounds", "--script", "--config-file", "--cache-dir", "-r", "--requirements", "-c", "--constraints", "--tag", "--branch", "--rev", "--refresh-package", "--reinstall-package", "--upgrade-package", "-P", "--no-binary-package", "--no-build-package", "--exclude-newer", "--link-mode", "--keyring-provider", "--resolution", "--prerelease", "--fork-strategy", "--index-strategy", "--python-preference", "--color"]);
@@ -3089,12 +3072,12 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       const a = args[j];
       // `python -m piptools compile ... --upgrade-package "x==v"` is pip-compile.
       // `-m`, glued to its module (`-mpip`) or after other one-letter options (`-Im pip`, `-Impip`).
-      const glued = /^-[uBOsSEIbdqvRP]*m(pip\d*(?:\.\d+)?)?$/.exec(a);
+      const glued = /^-[uBOsSEIbdqvRP]*m(pip(?:\d+(?:\.\d+)*)?(?:\.[\w.]+)?)?$/.exec(a);
       if (glued?.[1]) return pipInstalls(args.slice(j + 1));
       if (glued && args[j + 1] === "piptools") return args[j + 2] === "compile" ? upgradePackages(args.slice(j + 3)) : [];
       if (glued) {
         const module = args[j + 1] ?? "";
-        if (/^pip(?:\d+(?:\.\d+)*)?$/.test(module)) return pipInstalls(args.slice(j + 2));
+        if (PIP_MODULE.test(module)) return pipInstalls(args.slice(j + 2));
         // `python -m uv add x`, `python -m poetry add x`: the manager the module is.
         return PYTHON_MANAGER_MODULES.has(module) ? commandInstalls([module, ...args.slice(j + 2)], depth + 1, dialect) : [];
       }
@@ -3202,16 +3185,16 @@ function optionTable(spec) {
  * dependencies, and `go get -u ./...`, is a stated limit (the manager chooses those versions).
  */
 const ACCOUNT_TABLES = {
-  pnpm: optionTable("--aggregate-output --allow-build= --changed-files-ignore-pattern= --child-concurrency= --color --config --depth= --dev --dir= --fail-if-no-match --filter= --filter-prod= --fix-lockfile --force --frozen-lockfile --global --global-dir= --help --hoist-pattern= --ignore-pnpmfile --ignore-scripts --ignore-workspace --latest --lockfile-dir= --lockfile-only --loglevel= --merge-git-branch-lockfiles --modules-dir= --network-concurrency= --no-color --no-frozen-lockfile --no-hoist --no-lockfile --no-optional --no-save-exact --no-save-workspace-protocol --no-verify-store-integrity --node-linker= --offline --optimistic-repeat-install --package-import-method= --prefer-frozen-lockfile --prefer-offline --prefix= --prod --public-hoist-pattern= --recursive --reporter= --resolution-only --save-catalog --save-catalog-name= --save-dev --save-exact --save-optional --save-peer --save-prod --save-workspace-protocol --shamefully-hoist --side-effects-cache --side-effects-cache-readonly --silent --store-dir= --stream --strict-peer-dependencies --test-pattern= --trust-policy= --trust-policy-exclude= --trust-policy-ignore-after= --update-checksums --use-running-store-server --use-stderr --use-store-server --verify-store-integrity --virtual-store-dir= --workspace --workspace-concurrency= --workspace-root -C= -D -E -F= -L -O -P -g -h -r -s -w"),
+  pnpm: optionTable("--aggregate-output --allow-build= --changed-files-ignore-pattern= --child-concurrency= --color --config --depth= --dev --dir= --fail-if-no-match --filter= --filter-prod= --fix-lockfile --force --frozen-lockfile --global --global-dir= --help --hoist-pattern= --ignore-pnpmfile --ignore-scripts --ignore-workspace --latest --lockfile-dir= --lockfile-only --loglevel= --merge-git-branch-lockfiles --modules-dir= --network-concurrency= --no-color --no-frozen-lockfile --no-hoist --no-lockfile --no-optional --no-save-exact --no-save-workspace-protocol --no-verify-store-integrity --node-linker= --offline --optimistic-repeat-install --package-import-method= --prefer-frozen-lockfile --prefer-offline --prefix= --prod --public-hoist-pattern= --recursive --reporter= --resolution-only --save-catalog --save-catalog-name= --save-dev --save-exact --save-optional --save-peer --save-prod --save-workspace-protocol --shamefully-hoist --side-effects-cache --side-effects-cache-readonly --silent --store-dir= --stream --strict-peer-dependencies --test-pattern= --trust-policy= --trust-policy-exclude= --trust-policy-ignore-after= --update-checksums --use-running-store-server --use-stderr --use-store-server --verify-store-integrity --virtual-store-dir= --workspace --workspace-concurrency= --workspace-root --ignore-workspace-root-check -C= -D -E -F= -L -O -P -W -g -h -r -s -w"),
   pip: optionTable("--abi= --break-system-packages --cache-dir= --cert= --check-build-dependencies --client-cert= --compile --config-settings= --constraint= --debug --disable-pip-version-check --dry-run --editable= --exists-action= --extra-index-url= --find-links= --force-reinstall --global-option= --help --ignore-installed --ignore-requires-python --implementation= --index-url= --isolated --keyring-provider= --log= --no-binary= --no-build-isolation --no-cache-dir --no-clean --no-color --no-compile --no-deps --no-index --no-input --no-python-version-warning --no-warn-conflicts --no-warn-script-location --only-binary= --platform= --prefer-binary --prefix= --progress-bar= --proxy= --python= --python-version= --quiet --report= --require-hashes --require-virtualenv --requirement= --retries= --root= --root-user-action= --src= --target= --timeout= --trusted-host= --upgrade --upgrade-strategy= --use-deprecated= --use-feature= --use-pep517 --user --verbose --version -C= -I -U -V -c= -e= -f= -h -i= -q -r= -t= -v"),
-  uvpip: optionTable("--all-extras --allow-insecure-host= --break-system-packages --build-constraints= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --dry-run --editable= --exact --exclude= --excludes= --extra= --extra-index-url= --find-links= --group= --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary= --no-break-system-packages --no-build --no-build-isolation --no-build-isolation-package= --no-cache --no-config --no-deps --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --no-verify-hashes --offline --only-binary= --overrides= --prefix= --project= --python= --python-platform= --python-version= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --require-hashes --requirements= --strict --system --target= --torch-backend= --upgrade --upgrade-package= --user --verbose --version -C= -P= -U -V -b= -c= -e= -f= -h -i= -n -p= -q -r= -v"),
+  uvpip: optionTable("--all-extras --allow-insecure-host= --break-system-packages --build-constraints= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --dry-run --editable= --exact --exclude= --excludes= --extra= --extra-index-url= --find-links= --group= --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary= --no-break-system-packages --no-build --no-build-isolation --no-build-isolation-package= --no-cache --no-config --no-deps --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --no-verify-hashes --offline --only-binary= --overrides= --prefix= --project= --python= --python-platform= --python-version= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --require-hashes --requirements= --strict --system --target= --torch-backend= --upgrade --upgrade-package= --user --verbose --version -C= -P= -U -V -b= -c= -e= -f= -h -i= -n -p= -q -r= -t= -v"),
   uvtool: optionTable("--allow-insecure-host= --cache-dir= --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --directory= --editable --extra-index-url= --find-links= --force --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-index --no-managed-python --no-progress --no-python-downloads --no-sources --offline --overrides= --project= --python= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --upgrade-package= --verbose --version --with= --with-editable= --with-requirements= -C= -P= -V -c= -e -f= -h -i= -n -p= -q -v"),
   uvadd: optionTable("--active --all-extras --all-groups --all-packages --allow-insecure-host= --branch= --cache-dir= --check --check-exists --color= --compile-bytecode --config-file= --config-setting= --constraints= --default-index= --dev --directory= --dry-run --editable --extra= --extra-index-url= --find-links= --frozen --group= --help --index= --index-strategy= --index-url= --inexact --keyring-provider= --link-mode= --locked --managed-python --marker= --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-default-groups --no-dev --no-editable --no-extra= --no-group= --no-index --no-install-package= --no-install-project --no-install-workspace --no-managed-python --no-progress --no-python-downloads --no-sources --no-sync --offline --only-dev --only-group= --optional= --package= --project= --python= --quiet --raw-sources --refresh --refresh-package= --reinstall --reinstall-package= --requirements= --rev= --script= --tag= --upgrade-package= --verbose --version -C= -P= -V -c= -f= -h -i= -m= -n -p= -q -r= -v"),
   cargo: optionTable("--all-features --base= --bin? --bins --branch= --breaking --build --color= --config= --debug --default-features --dev --dry-run --example? --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --version= --workspace -C= -F= -V -Z= -b -f -h -j= -m= -n -p= -q -v -w"),
   go: optionTable("-C= -u -d -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -modfile= -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
   gomodedit: optionTable("-dropexclude= -dropgodebug= -dropignore= -dropreplace= -droprequire= -dropretract= -droptool= -exclude= -fmt -go= -godebug= -ignore= -json -module= -print -replace= -require= -retract= -tool= -toolchain="),
   yarn: optionTable("--all --audit --cache-folder= --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --verbose --version --worktree -A -C -D -E -L -O -P -R -T -W -g -h -j= -p -s -t -v"),
-  bun: optionTable("--backend= --ca= --cache-dir= --cafile= --concurrent-scripts= --cpu= --cwd= --dev --dry-run --exact --filter= --frozen-lockfile --global --help --ignore-scripts --linker= --lockfile-only --network-concurrency= --no-cache --no-progress --no-save --no-summary --no-verify --omit= --only-missing --optional --os= --peer --production --quiet --recursive --registry= --save --save-text-lockfile --silent --trust --verbose --yarn -E -d -g -h -p -r -y"),
+  bun: optionTable("--backend= --ca= --cache-dir= --cafile= --concurrent-scripts= --cpu= --cwd= --dev --dry-run --exact --filter= --frozen-lockfile --global --help --ignore-scripts --linker= --lockfile-only --network-concurrency= --no-cache --no-progress --no-save --no-summary --no-verify --omit= --only-missing --optional --os= --peer --production --quiet --recursive --registry= --save --save-text-lockfile --silent --trust --verbose --yarn -D -E -d -g -h -p -r -y"),
   poetry: optionTable("--all-extras --ansi --compile --dev --directory= --dry-run --editable --extras= --group= --help --lock --markers= --no-ansi --no-cache --no-directory --no-interaction --no-plugins --no-root --no-update --only= --only-root --optional --platform= --project= --python= --quiet --regenerate --source= --sync --verbose --with= --without= -C= -D -E= -G= -P= -e -h -n -q -v -vv -vvv"),
 };
 /** npm's one-letter options: the switches, and (NPM_SHORT_VALUE) the five that take a value. */
@@ -3248,7 +3231,7 @@ function managerWord(token) {
   let t = token.replace(/\.(?:exe|cmd|bat|ps1|js|cjs|mjs)$/, "");
   if (t === "yarnpkg") t = "yarn";
   if (/^(?:npm|pnpm|yarn)-cli$/.test(t)) t = t.slice(0, -4);
-  if (/^pip\d*(?:\.\d+)?$/.test(t) || /^-[a-z]*mpip\d*(?:\.\d+)?$/.test(t)) return "pip";
+  if (/^pip\d*(?:\.\d+)?(?:\.[a-z0-9_.]*)?$/.test(t) || /^-[a-z]*mpip\d*(?:\.\d+)?(?:\.[a-z0-9_.]*)?$/.test(t)) return "pip";
   return t === "npm" || DETECT_VERBS.has(t) ? t : null;
 }
 
@@ -3260,6 +3243,8 @@ function isManagerVerb(manager, token) {
 
 /** A detector token: a run of name characters (`npm@10.9.2` is `npm` and `10.9.2`), or a line end. */
 const DETECT_TOKEN = /[a-z0-9._+-]+|[\n\r]/g;
+/** R6: a module spelled as pip and more (`pip.__main__`, `pip._internal.cli.main`). */
+const PIP_MODULE = /^pip(?:\d+(?:\.\d+)*)?(?:\.[\w.]+)?$/;
 
 /**
  * The detector's pass over one text: `seen` carries the managers met so far on the current line
@@ -3336,19 +3321,7 @@ function sourceKind(value) {
  * the subcommand's). `mode`: "npm" (npm's own names and abbreviations), "go" (single-dash names,
  * `--x` read as `-x`, no clusters), or "" (long names, and one-letter clusters as getopt reads them).
  */
-/**
- * Round 13: options a table leaves out (they are held) that take a value, by table: the remedy names
- * the option with its value (`-c x.toml`), so removing what it names leaves the operands as written.
- */
-const HELD_WITH_VALUE = new Map();
-function heldWithValue() {
-  if (HELD_WITH_VALUE.size > 0) return;
-  const uv = ["--prerelease", "--resolution", "--exclude-newer", "--exclude-newer-package", "--fork-strategy"];
-  for (const [k, v] of [["bun", ["-c", "--config"]], ["pnpm", ["--resolution-mode", "--config"]], ["yarn", ["--tag"]], ["uvadd", uv], ["uvpip", uv], ["uvtool", uv], ["poetry", ["--source"]]]) HELD_WITH_VALUE.set(ACCOUNT_TABLES[k], v);
-}
-
 function readOptions(args, table, mode = "", stop = false) {
-  heldWithValue();
   const positional = [];
   const values = new Map();
   let at = -1;
@@ -3380,7 +3353,7 @@ function readOptions(args, table, mode = "", stop = false) {
       // npm's long shorthands (`--silent` is `--loglevel=silent`): switches.
       if (eq < 0 && NPM_LONG_SHORTHANDS.has(name.slice(2))) continue;
       const resolved = npmOptionName(name.slice(negated ? 5 : 2));
-      if (resolved === null || NPM_RESOLVING.has(resolved)) return done(a, NPM_RESOLVING.has(resolved) && eq < 0 && i + 1 < args.length ? `${a} ${args[i + 1]}` : a);
+      if (resolved === null || NPM_RESOLVING.has(resolved)) return done(a);
       if (eq > 0 || negated || !NPM_VALUE_OPTIONS.has(resolved)) {
         // A switch: npm also takes a following `true` / `false` as its value.
         if (eq < 0 && (args[i + 1] === "true" || args[i + 1] === "false")) i++;
@@ -3435,7 +3408,7 @@ function readOptions(args, table, mode = "", stop = false) {
       if (ok) continue;
     }
     // An option left out of the table that is known to take a value: named with it, so leaving both out is one step.
-    return done(a, eq < 0 && i + 1 < args.length && HELD_WITH_VALUE.get(table)?.includes(name) ? `${raw} ${args[i + 1]}` : raw);
+    return done(a, raw);
   }
   return done(null);
 }
@@ -3527,7 +3500,8 @@ function accountLine(line, dialect, depth = 0) {
   const commands = quietly(() => simpleCommands(line, dialect, redirects, dropped, MAX_ACCOUNT_CHARS, links));
   if (!commands) {
     if (dialect === "bash" && line.includes("<<")) return dataHeredoc(line);
-    const span = /\$\([^()]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`/.exec(line)?.[0];
+    // (a backquote span is not named: it cannot be quoted inside the remedy's own backquotes)
+    const span = /\$\([^()]*\)|\$\{[^}]*\}|\$env:[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_][A-Za-z0-9_]*/i.exec(line)?.[0];
     // A substitution that holds the install itself: the command inside it, run on its own.
     const inner = span && /^(?:\$\(|`)/.test(span) ? span.replace(/^\$\(|^`|\)$|`$/g, "") : "";
     const form = inner && detectsInstall(inner) ? "the command inside it, run as a command of its own" : "its value written out in single quotes, not a variable or substitution";
@@ -3557,7 +3531,7 @@ function accountLine(line, dialect, depth = 0) {
   }
   for (let k = 0; k < commands.length; k++) {
     tick();
-    const exempt = !writesManifest && !dataSetting && safeAfter[k];
+    const exempt = !writesManifest && !dataSetting && safeAfter[k] && !(k > 0 && links[k - 1] === "|" && runsInput(commands[k]));
     const why = accountCommand(commands[k], dialect, depth, exempt);
     if (why) {
       if (!exempt && dataCommand(commands[k])) {
@@ -3841,7 +3815,7 @@ function dataCommand(words) {
   if (words.slice(0, start).some((w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && !INERT_SETTING.test(settingName(w)))) return false;
   // Round 13: a first word with a blank in it and no path is a quoted string: PowerShell's value
   // (`'npm install x' | Out-File notes.txt`), and in bash no program at all.
-  if (/\s/.test(words[start]) && !/[\\/]/.test(words[start])) return words.length === start + 1;
+  if (/\s/.test(words[start]) && !/[\\/]/.test(words[start]) && ["'", '"', "\u2018", "\u2019", "\u201c", "\u201d"].some((q) => accountRaw.includes(q + words[start]))) return words.length === start + 1;
   const program = programName(words[start]);
   const args = words.slice(start + 1);
   if (program === "git") {
@@ -3861,12 +3835,19 @@ function dataCommand(words) {
   }
   // `node -e '...'` / `-p`, `python -c '...'`: code given as text, nothing else on the line before it
   // (a program that runs an install is a stated limit).
-  if (program === "node") return /^(?:-e|-p|--eval|--print|-pe)$/.test(args[0] ?? "");
-  if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program)) return args[0] === "-c";
+  // Round 14 (R8): only the code alone; the words after it are the code's own arguments, which it may run.
+  if (program === "node") return /^(?:-e|-p|--eval|--print|-pe)$/.test(args[0] ?? "") && args.length <= 2;
+  if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program)) return args[0] === "-c" && args.length <= 2;
   // docker and podman: the command runs in a container (a stated limit); their own options set it up.
   if (program === "docker" || program === "podman") return ["run", "exec", "build", "compose", "buildx", "create"].includes(args.find((a) => !a.startsWith("-")) ?? "");
   const spec = DATA_SPECS[program];
   return Boolean(spec) && optionsAllowed(args, spec) && (!spec.check || spec.check(args));
+}
+
+/** `node -e` / `-p` and `python -c`: code that may run what it reads from its input. */
+function runsInput(words, start = Math.max(0, commandStart(words))) {
+  const p = programName(words[start] ?? "");
+  return p === "node" || /^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(p);
 }
 
 /** A later pipeline stage that runs nothing it is given: a listed sink, or a data program. */
@@ -3874,6 +3855,8 @@ function sinkCommand(words) {
   const start = commandStart(words);
   if (start < 0) return false;
   if (start >= words.length) return true;
+  // R8: code given on the line runs what it is given (`| python -c "os.system(sys.stdin.read())"`).
+  if (runsInput(words, start)) return false;
   const spec = SINK_SPECS[programName(words[start])];
   return (Boolean(spec) && optionsAllowed(words.slice(start + 1), spec)) || dataCommand(words);
 }
@@ -3962,9 +3945,52 @@ function accountCommand(words, dialect, depth, exempt = true) {
 }
 
 /** Each package the account named must be one the reader judges (the two read the same command). */
+/**
+ * Round 14 (R10c): whether a version or constraint is one dependency_check can answer: an exact
+ * version, latest, or a range in the registry's own grammar (npm semver ranges, PEP 440 specifiers
+ * without ===, Cargo requirements, Go versions and queries). Anything else (`ms@^^2`, `2.x.y`,
+ * `1.0.200.1`, `===1.0x`) would ask for a call that can never pass.
+ */
+function versionReadable(ecosystem, spec) {
+  const v = String(spec).trim();
+  if (v === "" || v.toLowerCase() === LATEST) return true;
+  if (ecosystem === "npm") {
+    const part = String.raw`(?:\*|x|X|\d+)`;
+    const partial = String.raw`v?${part}(?:\.${part}(?:\.${part}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)?)?`;
+    const one = new RegExp(`^(?:(?:<=|>=|<|>|=|~>?|\\^)?${partial})$`);
+    const hyphen = new RegExp(`^${partial}\\s+-\\s+${partial}$`);
+    return v.split("||").every((alt) => {
+      const a = alt.trim().replace(/(<=|>=|<|>|=|~>?|\^)\s+/g, "$1");
+      return a === "" || hyphen.test(a) || a.split(/\s+/).every((c) => one.test(c));
+    });
+  }
+  if (ecosystem === "PyPI") {
+    // (Poetry's `^` / `~` as the reader passes them on; an epoch `1!`)
+    const clause = /^(?:~=|==|!=|<=|>=|<|>|\^|~)\s*v?(?:\d+!)?\d+(?:\.\d+)*(?:\.\*)?(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?(?:post|rev|r)[-_.]?\d*)?(?:[-_.]?dev[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+    return v === "*" || /^v?(?:\d+!)?\d+(?:\.\d+)*$/.test(v) || v.split(",").every((c) => clause.test(c.trim()));
+  }
+  if (ecosystem === "crates.io") {
+    const req = /^(?:=|>=|<=|>|<|~|\^)?\s*(?:\*|\d+(?:\.(?:\d+|\*|x|X)(?:\.(?:\d+|\*|x|X))?)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/;
+    return v.split(",").every((c) => req.test(c.trim()));
+  }
+  if (ecosystem === "Go") return /^(?:v\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|upgrade|patch|none|[<>]=?v\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?)$/.test(v) || !/^v\d/.test(v);
+  return true;
+}
+
 function judgedByReader(names, reader, ecosystem) {
   if (names.length === 0) return null;
+  for (const r of reader()) {
+    if (r.ecosystem !== ecosystem || r.tag || specTooLong(String(r.spec)) || versionReadable(ecosystem, r.spec)) continue;
+    const lower = String(r.name).toLowerCase();
+    const written = accountWords.find((w) => w.replace(/^['"]|['"]$/g, "").toLowerCase().startsWith(lower));
+    return notReadAt(`${r.name} ${r.spec}, not a version this hook reads; write an exact version`, written ?? null, OPERAND_FORM);
+  }
   const read = new Set(reader().map((r) => nameKey(r.ecosystem, r.name)));
+  // R1: and the account names every name the reader would judge (an option's value read as a package
+  // `bun add --os linux` would ask for a call that can never pass).
+  const named = new Set(names.map((n) => nameKey(ecosystem, n).toLowerCase()));
+  const extra = reader().find((r) => r.ecosystem === ecosystem && !named.has(nameKey(ecosystem, r.name).toLowerCase()));
+  if (extra) return `${extra.name}, which this hook would judge as a package but the command may not install as one`;
   for (const n of names) {
     if (read.has(nameKey(ecosystem, n))) continue;
     const lower = n.toLowerCase();
@@ -4010,11 +4036,11 @@ function accountPython(program, args, reader) {
   for (let i = 0; i < args.length; i++) {
     tick();
     const a = args[i];
-    const glued = /^-[uBOsSEIbdqvRP]*m(pip\d*(?:\.\d+)?)?$/.exec(a);
+    const glued = /^-[uBOsSEIbdqvRP]*m(pip(?:\d+(?:\.\d+)*)?(?:\.[\w.]+)?)?$/.exec(a);
     if (glued) {
       const module = glued[1] ?? args[i + 1] ?? "";
       const rest = args.slice(i + (glued[1] ? 1 : 2));
-      if (/^pip\d*(?:\.\d+)?$/.test(module)) return accountPip(rest, ACCOUNT_TABLES.pip, reader);
+      if (PIP_MODULE.test(module)) return accountPip(rest, ACCOUNT_TABLES.pip, reader);
       if (PYTHON_MANAGER_MODULES.has(module)) return accountCommand([module, ...rest], "bash", 1);
       return `${program} -m ${module.slice(0, 60)}, a module this hook does not read`;
     }
@@ -4048,6 +4074,7 @@ function accountJs(manager, args, dialect, depth, reader) {
   if (isRunnerCommand(manager, sub)) return accountRunner(rest, dialect, depth);
   if ((manager === "pnpm" || manager === "yarn") && managerWord(programName(sub))) return accountCommand([sub, ...rest], dialect, depth + 1);
   if (manager === "npm" && verb === "pkg") return accountNpmPkg(rest);
+  if (manager === "npm" && /[A-Z]/.test(sub) && ["install", "install-test", "link", "update"].includes(npmCommand(sub.toLowerCase()) ?? "")) return `npm ${sub}, a command word in capitals this hook does not read`;
   const adds = { npm: ["install", "install-test"], pnpm: ["add", "install", "i"], yarn: ["add"], bun: ["add", "a", "install", "i"] }[manager];
   const moves = { npm: ["update"], pnpm: ["up", "update", "upgrade"], yarn: ["up", "upgrade"], bun: ["update"] }[manager];
   const links = { npm: ["link"], pnpm: ["link", "ln"], yarn: ["link"], bun: ["link"] }[manager];
@@ -4061,7 +4088,6 @@ function accountJs(manager, args, dialect, depth, reader) {
   if (manager === "yarn" && sub === "install") return read.positional.length === 0 ? null : "yarn install with a package, which this hook does not read";
   // Round 13: a link of a registry name fetches (npm) or names it: read as that name at its newest release.
   if (links.includes(verb) && read.positional.every((o) => jsOperand(o) === "local")) return null;
-  if (registries.length > 0 && registries.every((v) => sourceKind(v) === "private")) return null;
   const toNewest = adds.includes(verb) || links.includes(verb) || values.has("-L") || values.has("--latest") || (manager === "yarn" && verb === "up");
   const names = [];
   for (const o of read.positional) {
@@ -4072,7 +4098,9 @@ function accountJs(manager, args, dialect, depth, reader) {
     if (!toNewest && npmBareName(o)) continue;
     names.push(kind.name);
   }
-  return namedHeld(manager, values, names) ?? judgedByReader(names, reader, "npm");
+  const source = sourceRule(values, ["--registry"], names);
+  if (source !== undefined) return source;
+  return namedHeld(manager, names) ?? judgedByReader(names, reader, "npm");
 }
 
 /** `npm pkg set k=v`: a dependency key's value must be a version or range the reader reads. */
@@ -4102,18 +4130,19 @@ function accountPip(args, table, reader) {
   const values = new Map([...head.values, ...read.values]);
   // J2: a requirements or constraints file read from stdin is not one this hook can read.
   for (const k of ["-r", "--requirement", "--requirements", "-c", "--constraint", "--constraints"]) {
-    for (const v of values.get(k) ?? []) if (v === "-" || /^(?:\/dev\/(?:stdin|fd\/\d+)|con)$/i.test(v)) return notReadAt(`${k} ${v}, a file read from the command's input`, optionToken(k), "a file name");
+    for (const v of values.get(k) ?? []) if (v === "-" || /^(?:\/dev\/(?:stdin|fd\/\d+)|con)$/i.test(v)) return notReadAt(`${k} ${v}, a file read from the command's input`, accountWords.includes(`${k}=${v}`) ? `${k}=${v}` : `${k} ${v}`, "a file name");
   }
   const index = ["-i", "--index-url", "--index", "--default-index"].flatMap((k) => values.get(k) ?? []);
   for (const v of index) if (sourceKind(v) === "unknown") return `the index ${v}`;
-  if (values.has("--no-index") || (index.length > 0 && index.every((v) => sourceKind(v) === "private"))) return null;
   const names = [];
   for (const o of read.positional) {
     const kind = pyOperandKind(o);
     if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     if (kind !== "local") names.push(kind.name);
   }
-  return judgePyNames(names, reader, values, table === ACCOUNT_TABLES.uvpip ? "uv" : "pip");
+  const source = sourceRule(values, ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], names);
+  if (source !== undefined) return source;
+  return judgePyNames(names, reader, values, table === ACCOUNT_TABLES.uvpip ? "uvpip" : "pip");
 }
 
 /** Options naming a file that decides the release of the packages named beside it. */
@@ -4124,30 +4153,251 @@ const CONSTRAINT_OPTIONS = ["-c", "--constraint", "--constraints", "--overrides"
  * overrides file beside a named package decides its release), then the reader's own judgement.
  */
 function judgePyNames(names, reader, values, manager = "pip") {
-  return constraintsBeside(values, names) ?? namedHeld(manager, values, names) ?? judgedByReader(names, reader, "PyPI");
+  return constraintsBeside(values, names) ?? namedHeld(manager, names) ?? judgedByReader(names, reader, "PyPI");
 }
 
 /**
- * Round 13 (eleventh independent check, S28): options that can change WHICH RELEASE of a named
- * package is installed, or where it is fetched from (a cache, offline, a frozen lockfile, another
- * platform, binaries only, a resolution mode): taken for an install that names no package (the
- * lockfile), held beside a named one.
+ * Round 14 (R1, twelfth independent check): the options a command may carry beside a named package,
+ * by manager and verb. An allow list: each started empty, and an option is on it only when it is in
+ * the tool's own help and cannot change which release of a named package is installed, where it is
+ * fetched from, which config values are read, or add a name that is not an operand; the reason is
+ * beside it. `=`: it takes a value (the next word, or attached with `=`). Every other option beside a
+ * named package is held, whatever it is: an index or registry (but R2), a config file or value,
+ * offline / cache / frozen / locked, an interpreter, a platform, a resolution mode, a date, a tag, an
+ * abbreviation (`--offl`) or a `--no-` form not listed. Tested property (not a proof): none of these
+ * changes the named release in the tool versions tested (a1125-w2-hook-round14-options.test.ts).
  */
-const NAMED_HELD = {
-  npm: ["--offline", "--prefer-offline", "--cache-min"],
-  pnpm: ["--offline", "--prefer-offline", "--frozen-lockfile"],
-  yarn: ["--offline", "--prefer-offline", "--frozen-lockfile", "--immutable", "--immutable-cache", "--mode"],
-  bun: ["--frozen-lockfile"],
-  pip: ["--upgrade-strategy", "--only-binary", "--no-binary", "--platform", "--python-version", "--implementation", "--abi"],
-  uv: ["--offline", "--frozen", "--locked", "--no-build", "--no-binary", "--only-binary", "--python-version", "--python-platform"],
-  cargo: ["--locked", "--offline", "--frozen"],
-  go: ["-mod"],
+const NAMED_OPTIONS = {
+  npm: [
+    ["-D --save-dev", "placement: devDependencies"],
+    ["-O --save-optional", "placement: optionalDependencies"],
+    ["--save-peer", "placement: peerDependencies"],
+    ["-P --save-prod", "placement: dependencies"],
+    ["-E --save-exact", "writes the resolved release with no range prefix"],
+    ["--no-save", "placement: package.json is not written"],
+    ["-g --global", "placement: the global folder"],
+    ["-w= --workspace=", "placement: that workspace of the same root"],
+    ["-ws --workspaces --include-workspace-root", "placement: the workspaces of the same root"],
+    ["--prefix=", "placement: another project folder, as `cd` to it (its config files are a stated limit)"],
+    ["--ignore-scripts", "runs no install scripts"],
+    ["--legacy-peer-deps", "peers are not installed; the named spec resolves to the same release"],
+    ["--no-audit --no-fund", "reports off"],
+    ["-q --quiet -s --silent --verbose --no-progress --no-color --loglevel=", "output only"],
+    ["--dry-run", "installs nothing"],
+  ],
+  pnpm: [
+    ["-D --save-dev", "placement: devDependencies"],
+    ["-O --save-optional", "placement: optionalDependencies"],
+    ["--save-peer", "placement: peerDependencies"],
+    ["-P --save-prod", "placement: dependencies"],
+    ["-E --save-exact", "writes the resolved release with no range prefix"],
+    ["-g --global", "placement: the global store"],
+    ["-w --workspace-root -W --ignore-workspace-root-check", "placement: the workspace root package"],
+    ["-F= --filter= -r --recursive", "placement: the selected workspace packages"],
+    ["-C= --dir= --prefix=", "placement: another project folder, as `cd` to it (its config files are a stated limit)"],
+    ["-L --latest", "the named package's newest release, judged as the request latest"],
+    ["--ignore-scripts", "runs no install scripts"],
+    ["-s --silent --no-color --reporter= --loglevel=", "output only"],
+  ],
+  yarn: [
+    ["-D --dev", "placement: devDependencies"],
+    ["-P --peer", "placement: peerDependencies"],
+    ["-O --optional", "placement: optionalDependencies"],
+    ["-E --exact", "writes the resolved release with no range prefix"],
+    ["-T --tilde", "writes a ~ range around the resolved release"],
+    ["-W --ignore-workspace-root-check", "placement: the workspace root"],
+    ["-L --latest", "the named package's newest release, judged as the request latest"],
+    ["--cwd=", "placement: another project folder, as `cd` to it (its config files are a stated limit)"],
+    ["--ignore-scripts", "runs no install scripts"],
+    ["-s --silent --verbose --no-progress --json", "output only"],
+  ],
+  bun: [
+    ["-d -D --dev", "placement: devDependencies"],
+    ["--optional", "placement: optionalDependencies"],
+    ["--peer", "placement: peerDependencies"],
+    ["-E --exact", "writes the resolved release with no range prefix"],
+    ["-g --global", "placement: the global folder"],
+    ["--no-save", "placement: package.json is not written"],
+    ["--cwd=", "placement: another project folder, as `cd` to it (its config files are a stated limit)"],
+    ["--ignore-scripts", "runs no install scripts"],
+    ["--dry-run", "installs nothing"],
+    ["--silent --verbose --no-progress --no-summary", "output only"],
+  ],
+  poetry: [
+    ["-G= --group=", "placement: a dependency group"],
+    ["-D --dev", "placement: the dev group"],
+    ["--optional?", "placement: optional, or the extra named with = (a bare one before a package is held, see accountPoetry)"],
+    ["-E= --extras=", "extras of the named package"],
+    ["-e --editable", "a path dependency installed editable"],
+    ["-C= --directory= -P= --project=", "placement: another project folder, as `cd` to it (its config files are a stated limit)"],
+    ["--lock", "writes the lockfile only"],
+    ["--dry-run", "installs nothing"],
+    ["-n --no-interaction --ansi --no-ansi -q --quiet -v -vv -vvv --verbose", "output only"],
+  ],
+  pip: [
+    ["--user", "placement: the user site"],
+    ["-t= --target= --prefix= --root=", "placement: another folder"],
+    ["-e= --editable=", "a local or VCS path, read as that form"],
+    ["-r= --requirement=", "a requirements file (read when it is written with the Edit or Write tool)"],
+    ["-c= --constraint=", "a constraints file: beside a named package held by its own rule (S2)"],
+    ["-U --upgrade", "the named spec, its newest release where it names none"],
+    ["--no-deps", "installs only the named package"],
+    ["--force-reinstall -I --ignore-installed", "installs the same resolved release again"],
+    ["--break-system-packages", "placement: allows the system environment"],
+    ["--cert= --client-cert=", "TLS certificates for the same index"],
+    ["--timeout= --retries=", "network patience for the same index"],
+    ["--exists-action=", "what to do with a folder already there"],
+    ["--dry-run", "installs nothing"],
+    ["-q --quiet -v --verbose --no-color --disable-pip-version-check --no-input --no-warn-script-location --no-warn-conflicts --progress-bar=", "output only"],
+  ],
+  uvpip: [
+    ["--system", "placement: the system interpreter's environment"],
+    ["-t= --target= --prefix=", "placement: another folder"],
+    ["-e= --editable=", "a local or VCS path, read as that form"],
+    ["-r= --requirements=", "a requirements file (read when it is written with the Edit or Write tool)"],
+    ["-c= --constraints=", "a constraints file: beside a named package held by its own rule (S2)"],
+    ["-U --upgrade", "the named spec, its newest release where it names none"],
+    ["-P= --upgrade-package=", "names a package to move to its newest release, judged as such"],
+    ["--no-deps", "installs only the named package"],
+    ["--reinstall", "installs the same resolved release again"],
+    ["--break-system-packages", "placement: allows the system environment"],
+    ["--compile-bytecode", "compiles the installed files"],
+    ["--dry-run", "installs nothing"],
+    ["-q --quiet -v --verbose --no-progress --color=", "output only"],
+  ],
+  uvadd: [
+    ["--dev", "placement: the dev group"],
+    ["--group=", "placement: a dependency group"],
+    ["--optional=", "placement: an optional extra of the project"],
+    ["--extra=", "an extra of the named package"],
+    ["--package=", "placement: a workspace member"],
+    ["--directory= --project=", "placement: another project folder, as `cd` to it (its config files are a stated limit)"],
+    ["--editable", "a path dependency installed editable"],
+    ["--no-sync", "writes pyproject.toml and the lockfile, installs nothing"],
+    ["-c= --constraints=", "a constraints file: beside a named package held by its own rule (S2)"],
+    ["-q --quiet -v --verbose --no-progress --color=", "output only"],
+  ],
+  uvtool: [
+    ["--with=", "another named package, judged as an operand"],
+    ["--force", "replaces the tool's executables"],
+    ["-c= --constraints=", "a constraints file: beside a named package held by its own rule (S2)"],
+    ["-q --quiet -v --verbose --no-progress --color=", "output only"],
+  ],
+  cargoadd: [
+    ["--dev", "placement: dev-dependencies"],
+    ["--build", "placement: build-dependencies"],
+    ["--target=", "placement: a target's dependency table"],
+    ["-F= --features= --no-default-features --default-features", "features of the named crate"],
+    ["--optional --no-optional", "placement: an optional dependency"],
+    ["--rename=", "placement: the dependency's key in Cargo.toml"],
+    ["-p= --package=", "placement: a workspace member"],
+    ["--manifest-path=", "placement: another Cargo.toml (Cargo reads its config from the current folder)"],
+    ["-n --dry-run", "writes nothing"],
+    ["-q --quiet -v --verbose --color=", "output only"],
+  ],
+  cargoinstall: [
+    ["--version= --vers=", "the named release, read as the operand's version"],
+    ["--locked", "builds with the crate's own lockfile: the named release is the same"],
+    ["-f --force", "installs the same release again"],
+    ["--root=", "placement: another install folder"],
+    ["--bin= --bins --example= --examples", "which binaries of the named release are built"],
+    ["-F= --features= --all-features --no-default-features", "features of the named crate"],
+    ["--target= --debug --profile= -j= --jobs=", "how the named release is built"],
+    ["--git= --branch= --tag= --rev= --path=", "a source that is not the registry: read as that form, not judged"],
+    ["-q --quiet -v --verbose --color=", "output only"],
+  ],
+  goget: [
+    ["-t", "also the named modules' test dependencies"],
+    ["-tool", "placement: a tool directive in go.mod"],
+    ["-d", "no effect since Go 1.18"],
+    ["-C=", "placement: another module folder, as `cd` to it"],
+    ["-v -x", "output only"],
+  ],
+  goinstall: [
+    ["-C=", "placement: another module folder, as `cd` to it"],
+    ["-v -x", "output only"],
+  ],
+  gomodedit: [
+    ["-require=", "the named module and its version, judged"],
+    ["-droprequire=", "removes a requirement"],
+    ["-fmt -print -json", "output only"],
+  ],
 };
-/** The first such option beside a named package, as a reason; null when there is none. */
-function namedHeld(manager, values, names) {
+/** The allow lists as maps: option -> 1 (takes a value) or 0. */
+const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
+export { NAMED_OPTIONS };
+
+/** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
+function managerStart(key, words) {
+  const program = { npm: "npm", pnpm: "pnpm", yarn: "yarn", bun: "bun", poetry: "poetry", cargoadd: "cargo", cargoinstall: "cargo", goget: "go", goinstall: "go", gomodedit: "go" }[key];
+  for (let i = 0; i < words.length; i++) {
+    const p = programName(words[i]).replace(/@[^@/\\]*$/, "");
+    if (program && (p === program || (program === "yarn" && p === "yarnpkg"))) return i + 1;
+    if (key === "pip" && /^pip\d*(?:\.\d+)?$/.test(p)) return i + 1;
+    if (key === "pip" && /^-[uBOsSEIbdqvRP]*m(?:pip[\w.]*)?$/.test(words[i])) return words[i].includes("pip") ? i + 1 : i + 2;
+    if (key.startsWith("uv") && (p === "uv" || p === "uvx")) return i + 1;
+  }
+  return words.length;
+}
+
+/**
+ * R1: beside a named package, the first option not on the manager's allow list, as written (null
+ * when every option is on it). Options before the subcommand count too.
+ */
+function namedHeld(key, names) {
   if (names.length === 0) return null;
-  const option = (NAMED_HELD[manager] ?? []).find((o) => values.has(o));
-  return option ? notReadAt(`the option ${option} beside the named package ${names[0]}, which can change the release installed`, optionToken(option)) : null;
+  const table = NAMED_TABLES[key];
+  if (!table) return null;
+  const words = accountWords;
+  for (let i = managerStart(key, words); i < words.length; i++) {
+    tick();
+    const w = words[i];
+    if (w === "--") break;
+    if (!w.startsWith("-") || w === "-" || /\s/.test(w)) continue;
+    const eq = w.indexOf("=");
+    const name = eq > 0 ? w.slice(0, eq) : w;
+    // uv's and pip's global options before the subcommand
+    if (table.has(name)) {
+      if (eq > 0 && table.get(name) === 0) return heldOption(w, names);
+      if (eq < 0 && table.get(name) === 1) i++;
+      continue;
+    }
+    // a cluster of one-letter switches (`-Dq`): each on the list; a value option last takes the next word
+    if (eq < 0 && /^-[A-Za-z]{2,}$/.test(w) && !key.startsWith("go")) {
+      let ok = true;
+      for (let k = 1; k < w.length && ok; k++) {
+        const a = table.get(`-${w[k]}`);
+        if (a === undefined || (a === 1 && k < w.length - 1)) ok = false;
+        else if (a === 1) i++;
+      }
+      if (ok) continue;
+    }
+    return heldOption(w, names);
+  }
+  return null;
+}
+/** The reason for an option held beside a named package; the remedy names the option alone. */
+function heldOption(word, names) {
+  return notReadAt(`the option ${word} beside the named package ${names[0]}, which is not on this hook's list of options that leave the named release as it is`, word);
+}
+
+/**
+ * Round 14 (R2): beside a named package, index and registry options. The install goes ahead
+ * unjudged, as the project's own source, only when exactly one such option stands and its host is
+ * positively not public; any other combination (a second index of any kind, a public one beside a
+ * private one, `--no-index`, a registry named by its config name) is held. undefined: none stands.
+ */
+const REPLACING_SOURCES = new Set(["-i", "--index-url", "--default-index", "--registry", "--source"]);
+function sourceRule(values, keys, names, replacing = REPLACING_SOURCES) {
+  if (names.length === 0) return undefined;
+  const found = keys.flatMap((k) => (values.get(k) ?? []).map((v) => [k, String(v).replace(/^[\w-]+=(?=[a-z][\w+.-]*:)/i, "")]));
+  if (found.length === 0) return undefined;
+  // Only an option that replaces the public index counts: --extra-index-url, --find-links and uv's
+  // --index add to it, so the public index stays in play beside them.
+  if (found.length === 1 && replacing.has(found[0][0]) && sourceKind(found[0][1]) === "private") return null;
+  const k = found[0][0];
+  const written = accountWords.find((w) => w === k || w.startsWith(`${k}=`) || (/^-[A-Za-z]$/.test(k) && w.startsWith(k) && !w.startsWith("--"))) ?? k;
+  return notReadAt(`the option ${written} beside the named package ${names[0]}: an install goes ahead unjudged only from exactly one index or registry that is positively not a public host`, written);
 }
 
 /** S2: a constraints or overrides file beside a named package: held, with "name the version". */
@@ -4187,14 +4437,15 @@ function accountUv(args, dialect, depth, reader) {
     if (tool.bad) return notReadAt(`the option ${tool.bad}`, tool.badToken);
     const index = ["-i", "--index-url", "--index", "--default-index"].flatMap((k) => tool.values.get(k) ?? []);
     for (const v of [...index, ...(tool.values.get("--extra-index-url") ?? [])]) if (sourceKind(v) === "unknown") return `the index ${v}`;
-    if (tool.values.has("--no-index") || (index.length > 0 && index.every((v) => sourceKind(v) === "private"))) return null;
     const names = [];
     for (const o of [...tool.positional.slice(0, 1), ...(tool.values.get("--with") ?? [])]) {
       const kind = pyOperandKind(o);
       if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
       if (kind !== "local") names.push(kind.name);
     }
-    return judgePyNames(names, reader, tool.values, "uv");
+    const source = sourceRule(tool.values, ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], names);
+    if (source !== undefined) return source;
+    return judgePyNames(names, reader, tool.values, "uvtool");
   }
   if (sub !== "add" && sub !== "sync" && sub !== "lock") return null;
   const read = readOptions(rest, ACCOUNT_TABLES.uvadd);
@@ -4205,14 +4456,15 @@ function accountUv(args, dialect, depth, reader) {
   if (sub !== "add") return null;
   const uvIndex = ["--index", "--default-index", "-i", "--index-url"].flatMap((k) => values.get(k) ?? []).map((v) => v.replace(/^[\w-]+=/, ""));
   for (const v of uvIndex) if (sourceKind(v) === "unknown") return `the index ${v}`;
-  if (uvIndex.some((v) => sourceKind(v) === "private")) return null;
   const names = [];
   for (const o of read.positional) {
     const kind = pyOperandKind(o);
     if (kind === null) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     if (kind !== "local") names.push(kind.name);
   }
-  return judgePyNames(names, reader, values, "uv");
+  const source = sourceRule(values, ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], names);
+  if (source !== undefined) return source;
+  return judgePyNames(names, reader, values, "uvadd");
 }
 
 function accountPoetry(args, dialect, depth, reader) {
@@ -4227,7 +4479,6 @@ function accountPoetry(args, dialect, depth, reader) {
   const read = readOptions(rest, ACCOUNT_TABLES.poetry);
   if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   if (sub !== "add") return null;
-  if ((read.values.get("--source") ?? []).some((v) => !/^pypi$/i.test(v))) return null;
   // Poetry 2 reads the word after a bare --optional as an extra's name (Poetry 1: a switch): which
   // word is the package is not known. Named, with the spelling both read alike.
   if ((read.values.get("--optional") ?? []).includes("") && read.positional.length > 0 && !rest.some((w) => w.startsWith("--optional=")))
@@ -4239,6 +4490,8 @@ function accountPoetry(args, dialect, depth, reader) {
     if (!r) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
     names.push(r.name);
   }
+  const source = sourceRule(read.values, ["--source"], names);
+  if (source !== undefined) return source;
   return judgePyNames(names, reader, read.values, "poetry");
 }
 
@@ -4251,7 +4504,7 @@ function accountCargo(args, reader) {
   if (read.bad) return notReadAt(`the option ${read.bad}`, read.badToken);
   const values = new Map([...head.values, ...read.values]);
   for (const v of values.get("--index") ?? []) if (sourceKind(v) === "unknown") return `the index ${v}`;
-  const nonPublic = values.has("--path") || values.has("--git") || (values.get("--registry") ?? []).some((v) => v !== "crates-io") || (values.get("--index") ?? []).some((v) => sourceKind(v) === "private");
+  const nonPublic = values.has("--path") || values.has("--git");
   if (sub === "update") return values.has("--precise") ? judgedByReader([...(values.get("-p") ?? []), ...(values.get("--package") ?? [])].map((p) => p.split("@")[0]), reader, "crates.io") : null;
   if (nonPublic || (sub === "install" && read.positional.length === 0)) return null;
   const version = values.get("--version") ?? values.get("--vers") ?? [];
@@ -4263,7 +4516,9 @@ function accountCargo(args, reader) {
     else if (m) names.push(m[1]);
     else return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
   }
-  return (sub === "add" ? namedHeld("cargo", values, names) : null) ?? judgedByReader(names, reader, "crates.io");
+  const source = sourceRule(values, ["--registry", "--index"], names, new Set(["--registry", "--index"]));
+  if (source !== undefined) return source;
+  return namedHeld(sub === "add" ? "cargoadd" : "cargoinstall", names) ?? judgedByReader(names, reader, "crates.io");
 }
 
 function accountGo(args, reader) {
@@ -4277,6 +4532,9 @@ function accountGo(args, reader) {
       const m = GO_SPEC.exec(v);
       if (!m || !GO_EXACT.test(m[2])) return `-require=${v}, which this hook does not read as a version to check`;
     }
+    const required = (edit.values.get("-require") ?? []).map((v) => GO_SPEC.exec(v)[1]);
+    const heldEdit = namedHeld("gomodedit", required);
+    if (heldEdit) return heldEdit;
     for (const v of edit.values.get("-replace") ?? []) {
       const to = v.slice(v.indexOf("=") + 1);
       const m = GO_SPEC.exec(to);
@@ -4295,7 +4553,7 @@ function accountGo(args, reader) {
       if (o.includes("...") || !m || !(m[2] === "latest" || GO_EXACT.test(m[2]) || /^v\d+(?:\.\d+)?$/.test(m[2]) || isDistTag(m[2]))) return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
       names.push(m[1]);
     }
-    return namedHeld("go", read.values, names) ?? judgedByReader(names, reader, "Go");
+    return namedHeld("goinstall", names) ?? judgedByReader(names, reader, "Go");
   }
   const names = [];
   for (const o of read.positional) {
@@ -4308,7 +4566,7 @@ function accountGo(args, reader) {
     else if (m && (m[2] === "latest" || GO_EXACT.test(m[2]) || /^v\d+(?:\.\d+)?$/.test(m[2]) || isDistTag(m[2]))) names.push(m[1]);
     else return notReadAt(`${o}, which this hook does not read as a version to check`, o, OPERAND_FORM);
   }
-  return namedHeld("go", read.values, names) ?? judgedByReader(names, reader, "Go");
+  return namedHeld("goget", names) ?? judgedByReader(names, reader, "Go");
 }
 
 /**
@@ -4322,7 +4580,11 @@ const SED_AWK_REMEDY =
 /** The not-read remedy: the part not read, named, and what to do with it in the user's own command. */
 function remedyText(part) {
   if (!part) return ACCOUNT_REMEDY;
-  const change = part.form ? `with \`${part.token}\` written as ${part.form}` : `without \`${part.token}\`${part.also ? ` and ${part.also}` : ""}`;
+  const change = part.form
+    ? `with \`${part.token}\` written as ${part.form}`
+    : part.option
+      ? `without the option \`${part.token}\`; if that option takes a value, remove its value too`
+      : `without \`${part.token}\`${part.also ? ` and ${part.also}` : ""}`;
   return `Run the same command ${change}: the hook then reads it, and it passes once dependency_check answers proceed or review for each version it installs (if it is held for a verdict, its denial names the call). If the command installs nothing and only writes or shows text that mentions an install, write that text with the Write tool instead.`;
 }
 
@@ -4339,6 +4601,8 @@ let accountRemedy = null;
  * as <form>"; it never prints a command the user did not write.
  */
 let accountToken = null;
+/** The call's raw text (R3: a quoted first word is text only when it begins with a quote there). */
+let accountRaw = "";
 /** The words of the simple command being accounted for (optionToken finds an option's spelling in them). */
 let accountWords = [];
 const OPERAND_FORM = "an exact version (name@1.2.3, pip: name==1.2.3) or the name alone";
@@ -4353,11 +4617,15 @@ function settingForm(name, value) {
   if (!m) return null;
   const resolved = npmOptionName(m[1].toLowerCase().replace(/_/g, "-"));
   if (resolved === null || NPM_RESOLVING.has(resolved) || ["registry", "userconfig", "globalconfig"].includes(resolved)) return null;
-  return "`--" + resolved + "=" + value.trim().replace(/^['"]|['"]$/g, "") + "` on the package manager's command";
+  // Round 14: only a switch set on (true, 1) has a spelling on the list; any other value is left out.
+  if (!/^(?:true|1|yes)$/i.test(value.trim().replace(/^['"]|['"]$/g, "")) || NAMED_TABLES.npm.get(`--${resolved}`) !== 0) return null;
+  return "`--" + resolved + "` on the package manager's command";
 }
 /** Records the first part not read and returns the reason. */
 function notReadAt(reason, token, form = null, also = null) {
-  if (accountToken === null && typeof token === "string" && token !== "") accountToken = { token, form, also };
+  // An option is named alone: its arity is not known, so its value (if any) is the user's to remove.
+  const option = /^the option /.test(reason) && form === null;
+  if (accountToken === null && typeof token === "string" && token !== "") accountToken = { token, form, also, option };
   return reason;
 }
 /** An option as it stands in the command: `--opt value`, `--opt=value` or `-xvalue`. */
@@ -4371,11 +4639,81 @@ function optionToken(option) {
   return option;
 }
 
+/** R3: blanks and controls other than space, tab, CR, LF. */
+// eslint-disable-next-line no-control-regex -- the control characters are what this rule finds
+const UNUSUAL_BLANKS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00A0\u061C\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF]/g;
+const UNUSUAL_BLANK = new RegExp(UNUSUAL_BLANKS.source);
+/** R5: what builds a command from other words. */
+const BUILDS_COMMAND = /\bxargs\b|\bset-alias\b|\bnew-alias\b|(?:^|[\s;&|(])alias\s|\bfunction\s|(?:^|[\s;&|(])fn\s|\binvoke-expression\b|\biex\b|&\s*['"\u2018-\u201d]|\bdoskey\b|[\w-]\s*\(\)\s*\{/i;
+/** Whether a package manager's name stands anywhere in the text, as the detector reads words. */
+function namesManager(text) {
+  for (const m of text.toLowerCase().replace(/[\\`'"\u2018-\u201e]/g, "").matchAll(DETECT_TOKEN)) {
+    tick();
+    if (managerWord(programName(m[0]))) return true;
+  }
+  return false;
+}
+/** R4: a manager's own setting names, by raw text. */
+const SETTING_NAME = /(?<![A-Za-z0-9_])(?:npm_config_[A-Za-z0-9_]+|yarn_[A-Za-z0-9_]+|bun_config[A-Za-z0-9_]*|pip_[A-Za-z0-9_]+|uv_[A-Za-z0-9_]+|poetry_[A-Za-z0-9_]+|cargo_(?:registr|source|net|http)[A-Za-z0-9_]*|goproxy|goflags|goprivate|gonoproxy|gonosumdb|goinsecure|gotoolchain)(?![A-Za-z0-9_])/gi;
+/**
+ * R4: the first manager setting named in the call at or before the end of the last line the
+ * detector names: held, its remedy built from the text as written (the setting word, or the whole
+ * statement that sets it), with the option it stands for where it only places the install.
+ */
+function settingBeforeInstall(command) {
+  const text = command.replace(/[\\`]\r?\n/g, "  ");
+  let end = -1;
+  let at = 0;
+  for (const line of text.split("\n")) {
+    if (detectsInstall(line)) end = at + line.length;
+    at += line.length + 1;
+  }
+  if (end < 0) return null;
+  SETTING_NAME.lastIndex = 0;
+  const m = SETTING_NAME.exec(text);
+  if (!m || m.index > end) return null;
+  const name = m[0];
+  // The statement it stands in: from the last separator before it to the next one.
+  const before = text.slice(0, m.index);
+  let startAt = 0;
+  for (const s of [";", "&&", "||", "|", "\n"]) {
+    const i = before.lastIndexOf(s);
+    if (i >= 0 && i + s.length > startAt) startAt = i + s.length;
+  }
+  const rest = text.slice(startAt);
+  const stop = /;|&&|\|\||\||\n/.exec(rest);
+  const statement = (stop ? rest.slice(0, stop.index) : rest).trim();
+  // A prefix assignment (`NAME=v npm i x`, `env NAME=v npm i x`): the word alone; else the statement.
+  const inStatement = detectsInstall(statement);
+  const word = /^[^\s;&|]+/.exec(text.slice(m.index))?.[0] ?? name;
+  const token = inStatement ? word : statement;
+  const value = word.includes("=") ? word.slice(word.indexOf("=") + 1) : (/[\s=]+['"]?([^'"\s;]+)/.exec(text.slice(m.index + name.length))?.[1] ?? "");
+  return notReadAt(`the setting ${name}, which a package manager reads`, token, settingForm(name, value));
+}
+
 function accountCall(command, dialect) {
   fault("account");
   accountRemedy = null;
   accountToken = null;
+  accountRaw = typeof command === "string" ? command : "";
+  if (typeof command !== "string") return null;
+  // R3: a blank the shell may split at that this hook's words do not (NBSP, U+2000-200A, U+3000,
+  // VT, FF, U+0085, zero-width and bidi marks, other controls): with an install the detector names
+  // once they are read as blanks, held.
+  const odd = UNUSUAL_BLANK.exec(command);
+  if (odd && detectsInstall(command.replace(UNUSUAL_BLANKS, " "))) {
+    const cp = `U+${odd[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
+    accountRemedy = `The command holds an invisible or unusual blank character (${cp}); retype it with plain spaces. FOURDA_GUARD is the user's setting, not yours to change.`;
+    return `an invisible or unusual blank character (${cp}) the shell may split at`;
+  }
+  // R5: a command the call builds (xargs, an alias, a function, iex, & with a string, doskey) beside
+  // a package manager's name: the manager's words may come from elsewhere; held.
+  const builder = BUILDS_COMMAND.exec(command);
+  if (builder && namesManager(command)) return `${builder[0].trim()} beside a package manager's name: the command it runs is built from words this hook does not see`;
   if (!detectsInstall(command)) return null;
+  // R4: a manager's own setting named anywhere before or on an install line the detector names.
+  const setting = settingBeforeInstall(command);
+  if (setting) return setting;
   if (command.length > MAX_ACCOUNT_CHARS) return `a command over ${MAX_ACCOUNT_CHARS / 1024 / 1024} MB that names an install`;
   return accountLine(command, dialect);
 }
@@ -4427,7 +4765,14 @@ export function dataDir(env = process.env, platform = process.platform, home = h
  * record no verdict, or none at all.
  */
 function ledgerStarted(dir) {
-  return LEDGER_FILES.some((file) => existsSync(join(dir, file)));
+  if (LEDGER_FILES.some((file) => existsSync(join(dir, file)))) return true;
+  // A ledger file the folder lists but this process cannot stat (a deny-read ACL) exists.
+  try {
+    const names = new Set(readdirSync(dir).map((n) => n.toLowerCase()));
+    return LEDGER_FILES.some((file) => names.has(file.toLowerCase()));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -4443,8 +4788,9 @@ function fileIdentity(path) {
   try {
     const st = statSync(path);
     return `${st.size}:${st.mtimeMs}:${st.ino}:${st.birthtimeMs}`;
-  } catch {
-    return "absent";
+  } catch (error) {
+    // Round 14 (R9): a deny-read ACL fails the stat itself (EPERM / EACCES): unreadable, not absent.
+    return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? "absent" : "unreadable";
   }
 }
 const OVER_BOUND = Symbol("over the bound");
@@ -4465,6 +4811,7 @@ function ledgerSnapshot(dir) {
     const before = paths.map(fileIdentity);
     const texts = paths.map((path, i) => {
       if (before[i] === "absent") return null;
+      if (before[i] === "unreadable") return UNREADABLE;
       if (Number(before[i].split(":")[0]) > MAX_LEDGER_BYTES) return OVER_BOUND;
       try {
         fault("ledger-unreadable");
@@ -4489,6 +4836,7 @@ function readLedger(dir, now) {
   // for it is set aside, so an older proceed never stands in for it. A later answer releases it.
   const unknown = [];
   let seq = 0;
+  let cutBefore = 0;
   const snapshot = ledgerSnapshot(dir);
   if (snapshot === null) {
     refuse("the check ledger changed while it was read (the server was rotating it)");
@@ -4518,6 +4866,9 @@ function readLedger(dir, now) {
       } catch {
         const pkg = /"package"\s*:\s*"((?:[^"\\]|\\.){1,214})"/.exec(line);
         if (pkg) unknown.push({ ecosystem: /"ecosystem"\s*:\s*"([^"]{1,20})"/.exec(line)?.[1] ?? null, package: pkg[1], seq });
+        // Round 14 (R9, S35): a line cut before its package could be for any package: every line
+        // before it is set aside, so no older proceed stands in for the answer it was.
+        else cutBefore = seq;
         continue;
       }
       if (!e || typeof e !== "object" || typeof e.package !== "string") continue;
@@ -4549,6 +4900,11 @@ function readLedger(dir, now) {
     for (const e of entries) {
       if (!(e.seq < (last.get(`${e.ecosystem.toLowerCase()}\0${fold(e.ecosystem, e.package)}`) ?? 0))) entries[w++] = e;
     }
+    entries.length = w;
+  }
+  if (cutBefore > 0) {
+    let w = 0;
+    for (const e of entries) if (e.seq > cutBefore) entries[w++] = e;
     entries.length = w;
   }
   // Oldest first by the time each answer was given: several servers append to one ledger, and the
@@ -5351,6 +5707,9 @@ async function main() {
     try {
       const raw = stdinText.charCodeAt(0) === 0xfeff ? stdinText.slice(1) : stdinText;
       const input = JSON.parse(raw);
+      // Round 14 (R9, S71): read from now, with 1.5 s of budget (the answer lands before Claude
+      // Code's 10 s), not from the hook's start 8 s ago, which held every call as too slow.
+      mainStartedAt = performance.now() - (READ_BUDGET_MS + 500 - 1500);
       out = respond(input);
     } catch {
       out = rawHold(stdinText);

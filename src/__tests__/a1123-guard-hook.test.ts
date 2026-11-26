@@ -248,9 +248,16 @@ describe("it fails open", () => {
     expect(hook("not json").stdout).toContain("could not read it");
   });
 
-  it("garbage and torn lines in the ledger are skipped; the good ones still count", () => {
-    writeFileSync(join(home, LEDGER_FILE), `not json\n{"t":"x"}\n{"t":"${new Date().toISOString()}","ecosystem":"npm","package":"lodash","version":"4.17.20","verdict":"proceed"}\n{"t":"2026`);
+  it("garbage and torn lines in the ledger are skipped; the good ones after them still count", () => {
+    writeFileSync(join(home, LEDGER_FILE), `not json\n{"t":"x"}\n{"t":"2026\n{"t":"${new Date().toISOString()}","ecosystem":"npm","package":"lodash","version":"4.17.20","verdict":"proceed"}\n`);
     allowed(hook(lodashEdit("4.17.20")));
+  });
+
+  // Round 14 (R9, S35): a line cut before its package could have been any package's answer: the
+  // lines before it no longer count (a proceed before it does not stand in for it).
+  it("a torn line after a proceed, cut before its package: the proceed no longer counts", () => {
+    writeFileSync(join(home, LEDGER_FILE), `{"t":"${new Date().toISOString()}","ecosystem":"npm","package":"lodash","version":"4.17.20","verdict":"proceed"}\n{"t":"2026`);
+    denied(hook(lodashEdit("4.17.20")));
   });
 
   it("an edit that changes no dependency version, or a file that is not a manifest, says nothing", () => {

@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { pnpmUnplainLine } from "../../hooks/manifest-edit.mjs";
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
 import { answerDenial, timed, timedWithin } from "./helpers/a1125-hook-run.js";
 
@@ -48,7 +49,6 @@ const contentLines = (text: string) =>
     .split("\n")
     .map((l) => l.trimEnd())
     .filter((l) => l);
-const hasBrace = (text: string) => contentLines(text).some((l) => !l.trimStart().startsWith("#") && /[{}]/.test(l.replace(/\{[ \t]*\}/g, "")));
 /**
  * Block-style spellings with no brace that 6.5.1 lets through as well, left as documented limits
  * by the lead (not flow syntax): a value with an anchor or a tag, a value on the next line, a block
@@ -94,13 +94,15 @@ describe("every bypass spelling from the three reviews is held", () => {
   });
 });
 
-describe("the reviewers' allow rows: a brace file is held exactly when its content lines change; a brace-free one is read by the block reader", () => {
+// Round 14 (R7): the line between read and held is the positive grammar (pnpmUnplainLine), no longer a
+// brace: a quoted brace is a plain scalar, an empty flow (`{}`, `[]`) is not.
+describe("the reviewers' allow rows: a file with a line that is not plain YAML is held exactly when its content lines change; a plain one is read by the block reader", () => {
   it.each(CASES.filter((c) => c.expect !== "deny").map((c) => [`${c.review}: ${c.name}`, c] as const))("%s", (_label, c) => {
     const disk = c.files["pnpm-workspace.yaml"] ?? "";
     const now = after(c, disk);
     const run = runCase(c);
     const changed = contentLines(disk).join("\n") !== contentLines(now).join("\n");
-    if (hasBrace(now)) {
+    if (pnpmUnplainLine(now) !== null) {
       expect(run.decision, run.text).toBe(changed ? "deny" : "allow");
       if (changed) expect(run.text).toContain(NOT_READ);
     } else {
@@ -148,16 +150,18 @@ describe("rule 2 in detail", () => {
   it("`catalog: {}` / `overrides: {}` added to a brace-free file, and a brace only in a `#` line: read as usual", () => {
     s.ledger([AVOID]);
     const file = s.file("pnpm-workspace.yaml", `${HEAD}catalog:\n  react: ^18.2.0\n`);
-    expect(s.edit(file, "catalog:\n", "overrides: {}\noverrides2: { }\ncatalog:\n").decision).toBe("allow");
+    // Round 14 (R7): an empty flow is no plain line: held as not read.
+    expect(s.edit(file, "catalog:\n", "overrides: {}\noverrides2: { }\ncatalog:\n").text).toContain(NOT_READ);
     expect(s.edit(file, "catalog:\n", "# catalog: { lodash: 4.17.20 }\ncatalog:\n").decision).toBe("allow");
     expect(s.edit(file, "react: ^18.2.0", "react: ^18.2.0\n  lodash: 4.17.20").text).toContain("answered avoid");
   });
 
-  it("a brace in a quoted block value (`debug: '}'`) makes a brace file: a change is held (fail closed, by design)", () => {
+  it("a brace in a simply quoted value (`debug: '}'`) is a plain scalar (round 14, R7): the file is read, the version judged", () => {
+    s.ledger([AVOID]);
     const file = s.file("pnpm-workspace.yaml", `${HEAD}overrides:\n  debug: '}'\n  lodash: ^4.17.21\n`);
-    const run = s.edit(file, "lodash: ^4.17.21", "lodash: ^4.17.22");
-    expect(run.decision).toBe("deny");
-    expect(run.text).toContain(NOT_READ);
+    const run = s.edit(file, "lodash: ^4.17.21", "lodash: 4.17.20");
+    expect(run.text).not.toContain("could not be read");
+    expect(run.text).toContain("answered avoid");
   });
 
   it("following the remedy literally passes: the same versions rewritten as block lines, the verdicts the denial then names recorded", () => {
