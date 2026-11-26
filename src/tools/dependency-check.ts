@@ -98,8 +98,8 @@ const PRIVACY_NOTE =
   "A private package name (see the README, Privacy) was sent nowhere.";
 
 const VERDICT_RULE =
-  "avoid > review > unknown > wait > proceed. unknown = a registry or OSV.dev lookup failed (never read as proceed); " +
-  "a concrete avoid/review finding still wins over a missing source.";
+  "avoid > review > unknown > wait > proceed, except that a release inside the age hold (wait) is never answered review: wait stops an install and review does not, so with a wait the order is avoid > unknown > wait > review, and the review findings are listed beside the wait. " +
+  "unknown = a registry or OSV.dev lookup failed (never read as proceed); a concrete avoid/review finding still wins over a missing source.";
 
 export const dependencyCheckTool = {
   name: "dependency_check",

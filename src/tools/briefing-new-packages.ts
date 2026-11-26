@@ -1109,6 +1109,11 @@ const nameNotFound = (f: NewPackageFinding) => !f.malicious && f.verdict === "un
 const notFound = (f: NewPackageFinding) => nameNotFound(f) || (Boolean(f.version) && !f.malicious && f.verdict === "unknown" && NO_SUCH_RELEASE.test(f.reason));
 /** Findings whose "review" is only a near-miss of the name in that ecosystem, and those whose name check is clean (nameOnlyReview, nameClean). */
 const NAME_ONLY = new WeakSet<NewPackageFinding>();
+/**
+ * A wait that also carries a review finding (dependency_check ranks wait above review since round 19
+ * of the hook lane): the briefing still reads it as not cleared, as it read the review before.
+ */
+export const WAIT_WITH_REVIEW = new WeakSet<NewPackageFinding>();
 const NAME_CLEAN = new WeakSet<NewPackageFinding>();
 
 /**
@@ -1202,6 +1207,7 @@ export async function checkNewPackages(liveIntel: NameCheckLive | null, packages
       name_finding: nameCheck?.effect === "avoid" || nameCheck?.effect === "review" ? nameCheck.effect : null,
     };
     if (nameOnlyReview(r.verdict, r.signals)) NAME_ONLY.add(out);
+    if (r.verdict === "wait" && r.signals.some((s) => s.effect === "review")) WAIT_WITH_REVIEW.add(out);
     if (nameClean(r.signals)) NAME_CLEAN.add(out);
     return out;
   };

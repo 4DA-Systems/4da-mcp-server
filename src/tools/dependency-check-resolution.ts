@@ -26,8 +26,12 @@ import { compareIn, rangeAdmits } from "./dependency-check-versions.js";
 
 const ORDER: readonly Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
 
-/** The worse of two verdicts (avoid > review > unknown > wait > proceed). */
+/**
+ * The worse of two verdicts: avoid > review > unknown > wait > proceed, except that wait is worse
+ * than review (wait stops an install, review does not), as decide orders them.
+ */
 export function worseVerdict(a: Verdict, b: Verdict): Verdict {
+  if ((a === "wait" && b === "review") || (a === "review" && b === "wait")) return "wait";
   return ORDER.indexOf(a) <= ORDER.indexOf(b) ? a : b;
 }
 

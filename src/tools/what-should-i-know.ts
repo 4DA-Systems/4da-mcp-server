@@ -150,7 +150,7 @@ import { walkBudgetNote } from "../walk-budget.js";
 import { escapeUnsafeDirs, liveUnsafeDirs, type UnsafeDirSources } from "../live/shell-safe.js";
 import * as path from "node:path";
 import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advisories.js";
-import { checkNewPackages, detectAllNewPackages, ecosystemKey, installedNames, MAX_NEW_PACKAGES, projectEcosystems, screenFor, type NewPackage, type NewPackageFinding } from "./briefing-new-packages.js";
+import { checkNewPackages, detectAllNewPackages, ecosystemKey, installedNames, MAX_NEW_PACKAGES, projectEcosystems, screenFor, WAIT_WITH_REVIEW, type NewPackage, type NewPackageFinding } from "./briefing-new-packages.js";
 import {
   getRelevantWisdom,
   type WisdomEntry,
@@ -1664,7 +1664,8 @@ function assessDelegation(input: {
   }
   // Anything else dependency_check did not clear: a near-miss name, an advisory or a withdrawal on
   // the newest release, a name the registry does not have, or a check that could not run.
-  const unclear = input.newPackages.filter((p) => p.verdict !== "proceed" && p.verdict !== "wait");
+  // A wait that also has a review finding is not cleared either (the level is what it was when that answered review).
+  const unclear = input.newPackages.filter((p) => p.verdict !== "proceed" && (p.verdict !== "wait" || WAIT_WITH_REVIEW.has(p)));
   const privateReasons = (input.privateTask ?? []).map((p) =>
     p.unreadable_file
       ? `${p.package} was not checked: ${p.unreadable_file} could not be read, so where it is installed from is not known (${p.why})`

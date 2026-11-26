@@ -101,8 +101,16 @@ export type CreatedAtFact =
   | { status: "not_found"; detail: string }
   | { status: "unreachable"; detail: string };
 
-/** Verdict precedence, strongest first. */
+/**
+ * Verdict precedence, strongest first. `wait` stops an install and `review` does not, so a release
+ * inside the age hold answers wait even when another signal asks for review (the review findings are
+ * listed beside the wait in the reason); 6.5.1 answered review, which the guard hook lets through.
+ * Otherwise the order is avoid > review > unknown > wait: a concrete review finding still wins over a
+ * missing source, and a failed lookup still outranks the age hold (a1119).
+ */
 const PRECEDENCE: Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
+/** With a wait among the signals: the verdicts that stop an install first (unknown still above wait). */
+const PRECEDENCE_WITH_WAIT: Verdict[] = ["avoid", "unknown", "wait", "review", "proceed"];
 
 export const WAIT_DAYS = 3;
 export const NEW_DEP_MIN_AGE_DAYS = 30;
@@ -726,7 +734,7 @@ function proceedReason(signals: Signal[], ecosystem?: CheckEcosystem): string {
 
 /** The item verdict and its one-line reason, from the strongest signal effect. */
 export function decide(signals: Signal[], ecosystem?: CheckEcosystem): { verdict: Verdict; reason: string } {
-  for (const verdict of PRECEDENCE) {
+  for (const verdict of signals.some((s) => s.effect === "wait") ? PRECEDENCE_WITH_WAIT : PRECEDENCE) {
     const hits = signals.filter((s) => s.effect === verdict);
     if (hits.length === 0) continue;
     if (verdict === "proceed") {
@@ -738,7 +746,7 @@ export function decide(signals: Signal[], ecosystem?: CheckEcosystem): { verdict
     const unchecked = verdict === "unknown" ? [] : signals.filter((s) => s.effect === "unknown");
     // Every avoid and review finding is in the reason (README): time 0.3.8 read only "yanked" while
     // RUSTSEC-2026-0009 (a review) affected it too (blind audit 2026-11-14).
-    const findings = verdict === "avoid" ? [...hits, ...signals.filter((s) => s.effect === "review")] : hits;
+    const findings = verdict === "avoid" || verdict === "wait" ? [...hits, ...signals.filter((s) => s.effect === "review")] : hits;
     const reason = findings.map((s) => `${s.id}: ${s.evidence}`).join(" | ");
     return {
       verdict,
