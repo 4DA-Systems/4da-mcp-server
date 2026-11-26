@@ -53,7 +53,8 @@ const NINE = ">=1,>=1,>=1,>=1,>=1,>=1,>=1,>=1,<2";
 const EXTRAS = Array.from({ length: 30 }, (_, i) => `extra${i}`).join(","); // 229 characters
 const pyproject = (dependencies: string) => `[project]\nname = "a"\nversion = "1"\ndependencies = ${dependencies}\n`;
 
-describe("a part past a bound holds a command only where the quick look sees the install", () => {
+// Round 8 (R8-1): no longer a limit: the detector reads the raw text, so a wrapped install with a part past a bound is held too.
+describe("a part past a bound holds a command wherever the detector sees the install", () => {
   it("the plain command is held as not read", () => {
     expect(bash(`pip install 'requests==${LONG}'`).decision).toBe("not read");
   });
@@ -64,17 +65,18 @@ describe("a part past a bound holds a command only where the quick look sees the
     ["after if", (i) => `if ${i}; then :; fi`],
     ["after a leading redirection", (i) => `2>/dev/null ${i}`],
   ];
-  it.each(WRAPPED)("%s: the unreadable install goes ahead, the readable one is held", (_label, wrap) => {
-    expect(bash(wrap(`pip install 'requests==${LONG}'`)).decision).toBe("allow");
+  it.each(WRAPPED)("%s: the unreadable install is held as not read, the readable one for its verdict", (_label, wrap) => {
+    expect(bash(wrap(`pip install 'requests==${LONG}'`)).decision).toBe("not read");
     expect(bash(wrap("pip install 'requests==2.31.0'")).decision).toBe("no verdict");
   });
 });
 
-describe("a requirement continued with a backslash is read as its first line", () => {
-  it("the second line's exclusion is not seen", () => {
+// Round 8: no longer a limit: pip joins a line ending in a backslash with the next, and so does the hook.
+describe("a requirement continued with a backslash is read whole", () => {
+  it("the second line's exclusion is seen", () => {
     proceed("requests", "2.31.0");
     expect(write("requirements.txt", "requests<=2.31.0,!=2.31.0\n").decision).toBe("no verdict");
-    expect(write("requirements.txt", "requests<=2.31.0,\\\n!=2.31.0\n").decision).toBe("allow");
+    expect(write("requirements.txt", "requests<=2.31.0,\\\n!=2.31.0\n").decision).toBe("no verdict");
   });
 
   it("a pin whose continuation lines hold only --hash options is read whole", () => {
@@ -85,10 +87,11 @@ describe("a requirement continued with a backslash is read as its first line", (
 });
 
 describe("a pip requirement with more than eight version clauses", () => {
-  it("goes ahead unread in a command and in a pyproject array", () => {
-    expect(bash(`pip install 'requests${NINE}'`).decision).toBe("allow");
-    expect(bash(`uv add 'requests${NINE}'`).decision).toBe("allow");
-    expect(bash(`poetry add 'requests${NINE}'`).decision).toBe("allow");
+  // Round 8 (R8-2): a command whose operand is not read is held as not read; the array is still a limit.
+  it("is held as not read in a command, and goes ahead unread in a pyproject array", () => {
+    expect(bash(`pip install 'requests${NINE}'`).decision).toBe("not read");
+    expect(bash(`uv add 'requests${NINE}'`).decision).toBe("not read");
+    expect(bash(`poetry add 'requests${NINE}'`).decision).toBe("not read");
     expect(write("pyproject.toml", pyproject(`["requests${NINE}"]`)).decision).toBe("allow");
   });
 
@@ -101,9 +104,9 @@ describe("a pip requirement with more than eight version clauses", () => {
 });
 
 describe("extras over 200 characters", () => {
-  it("the requirement is read as naming no version", () => {
+  it("the requirement is held as not read in a command (round 8), and read as naming no version in a file", () => {
     expect(bash("pip install 'requests[socks]==2.31.0'").decision).toBe("no verdict");
-    expect(bash(`pip install 'requests[${EXTRAS}]==2.31.0'`).decision).toBe("allow");
+    expect(bash(`pip install 'requests[${EXTRAS}]==2.31.0'`).decision).toBe("not read");
     expect(write("requirements.txt", `requests[${EXTRAS}]==2.31.0\n`).decision).toBe("allow");
   });
 });
@@ -117,8 +120,8 @@ describe("two TOML spellings of a pyproject requirement (no longer limits since 
 });
 
 describe("a Poetry constraint with clauses separated by a blank", () => {
-  it("is not read; with a comma it is", () => {
+  it("is held as not read (round 8); with a comma it is read", () => {
     expect(bash(`poetry add "requests@>=2.0,!=2.31.0"`).decision).toBe("no verdict");
-    expect(bash(`poetry add "requests@>=2.0 !=2.31.0"`).decision).toBe("allow");
+    expect(bash(`poetry add "requests@>=2.0 !=2.31.0"`).decision).toBe("not read");
   });
 });
