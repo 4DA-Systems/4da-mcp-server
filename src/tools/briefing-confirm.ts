@@ -103,6 +103,8 @@ export const SOURCE_HELD = "not looked up: the task names a package source of it
 
 /** The last sentence of every safe_to_delegate reason (contract K1). */
 export const RESTS_ON_DECLARATION = "This rests on your declaration: a package you did not declare was not checked.";
+/** Round 11, P1: the task-text reading is best effort. */
+export const BEST_EFFORT_READING = "The versions this briefing read in the task's commands and snippets are best effort: a version written in a spelling it does not read was not checked, so declare the version the task writes.";
 
 /** Added to next_step when more names wait than to_confirm shows (fixed wording). */
 export const MORE_WAITING =

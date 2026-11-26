@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Strict evidence of the task's packages (contract K2), on the canonical command grammar (briefing-canonical.ts):
+ * Task-text evidence of the task's packages (contract K2), best effort: the level rests on the caller's declaration,
+ * and a version written in a spelling these readers do not read is not checked (round 11, P1). It is:
  * - the operands of a command the grammar reads whole, each a (name as written, ecosystem) pair;
- * - the entries of a manifest snippet it reads whole (manifestPairs), each a pair in that manifest's ecosystem;
- * - round 8, D1(a): a token of the form name@spec, name==spec (and PEP 440's other operators, the bare `<`, `>`,
- *   `!=`, `~=`, `===` included), `name = "spec"` or `"name": "spec"` anywhere in the task, prose or code span: the
+ * - the entries of a manifest snippet the snippet readers read (manifestPairs), each a pair in that manifest's ecosystem;
+ * - round 8, D1(a): a token that ties a version to a name, for example name@spec, name==spec (and PEP 440's other
+ *   operators), `name = "spec"` or `"name": "spec"` anywhere in the task, prose or code span: the
  *   form itself ties the spec to the name written right before it, and to no other. Where the form decides the
  *   ecosystem (PEP 440: PyPI; `"name": "spec"`: npm; a Go module path: Go) it is a pair that waits; otherwise its
  *   spec is checked for every ecosystem a declaration gives that name. These are versions the briefing happens to
@@ -13,11 +14,13 @@
  * snippet") only (K3); nothing of it is offered, repeated or looked up. What the grammar consumed is consumed by
  * OCCURRENCE (D4): the same word elsewhere in the task is read by the other readers as before.
  */
+import * as path from "node:path";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { pushAll } from "../array-utils.js";
 import { canonicalCommands, MANAGER_NAMES, wordsOf, type CanonicalCommand } from "./briefing-canonical.js";
 import { checkableSpec } from "./briefing-names.js";
-import { credentialShape, looksLikeSecret } from "./briefing-task-screen.js";
+import { pep508, readSnippets, type SnippetRead } from "./briefing-snippets.js";
+export { pep508 };
 
 export interface InstallCommand {
   /** The command as written, capped: for tests and diagnosis only, never repeated in an answer (K3). */
@@ -198,6 +201,8 @@ export function strictEvidence(task: string): StrictEvidence {
   pushAll(unreadable, manifest.unreadable);
   for (const w of manifest.entryWords) wordWideNamed.add(w);
   for (const k of manifest.keys) wordWideNamed.add(k);
+  // Marker words of a requirement (`; python_version >= "3.8"`) are no packages (round 11, docs lane).
+  for (const w of manifest.consumed) wordWide.add(w);
   const pairNames = new Set(pairs.map((p) => p.name.toLowerCase()));
   for (const k of manifest.keys) if (manifestNotWhole || !pairNames.has(k)) wordWide.add(k);
   for (const p of manifest.privateNames) wordWide.add(p.name.toLowerCase());
@@ -227,13 +232,28 @@ export function strictEvidence(task: string): StrictEvidence {
     if (!formPairs.some((f) => f.name === name && f.spec === spec)) formPairs.push({ name, spec, ecosystems: ecosystems ? fits : null });
   };
   for (const m of text.matchAll(/(?<![\w@\/.-])([a-z0-9.-]+\.[a-z]{2,}\/[^\s@`'"]+)@(v[^\s,;`'")\]]+)/gi)) addForm(m[1], m[2], ["Go"]);
-  // The tying forms, exactly (round 10, G2): name@spec with the spec bare or in single or double quotes; an alias
-  // `alias@npm:name@spec` ties to name; the PEP 440 forms; `name = "spec"`; `"name": "spec"`; `"alias": "npm:name@spec"`.
+  // Forms that tie a version to a name, for example (round 11, P1: best effort, never a complete list): name@spec,
+  // the spec bare or quoted (blanks and `||` inside quotes); `alias@npm:name@spec` (tied to name); PEP 440 operators,
+  // compact or with blanks; `name = "spec"`; `"name": "spec"`; `"alias": "npm:name@spec"`.
   for (const m of text.matchAll(/(?<![\w@\/.-])((?:@[a-z0-9][\w.-]*\/)?[A-Za-z0-9][\w.-]*)@([^\s,;`'")\]@]+)/g)) if (!m[2].startsWith("npm:")) addForm(m[1], m[2], null);
-  for (const m of text.matchAll(/(?<![\w@\/.-])((?:@[a-z0-9][\w.-]*\/)?[A-Za-z0-9][\w.-]*)@(["'])([^"'\s]{1,60})\2/g)) addForm(m[1], m[3], null);
-  for (const m of text.matchAll(/(?<![\w\/.-])(?:(?:@[a-z0-9][\w.-]*\/)?[A-Za-z0-9][\w.-]*)@npm:((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)@([^\s,;`'")\]@]+)/g)) addForm(m[1], m[2], ["npm"]);
-  for (const m of text.matchAll(/"(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*"\s*:\s*"npm:((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)@([^"\n]{1,60})"/g)) addForm(m[1], m[2], ["npm"]);
+  for (const m of text.matchAll(/(?<![\w@\/.-])((?:@[a-z0-9][\w.-]*\/)?[A-Za-z0-9][\w.-]*)@(["'])([^"'\n]{1,60})\2/g)) addForm(m[1], m[3].trim(), null);
+  // An alias key is no package of its own: no reader offers it (round 11, docs lane).
+  for (const m of text.matchAll(/(?<![\w\/.-])((?:@[a-z0-9][\w.-]*\/)?[A-Za-z0-9][\w.-]*)@npm:((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)@([^\s,;`'")\]@]+)/g)) {
+    wordWide.add(m[1].toLowerCase());
+    addForm(m[2], m[3], ["npm"]);
+  }
+  for (const m of text.matchAll(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"npm:((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)@([^"\n]{1,60})"/g)) {
+    wordWide.add(m[1].toLowerCase());
+    addForm(m[2], m[3], ["npm"]);
+  }
   for (const m of text.matchAll(/(?<![\w@\/.-])([A-Za-z0-9][\w.-]*)(?:\[[\w,.-]*\])?((?:===?|~=|!=|>=|<=|<(?=\s*\d)|>(?=\s*\d))\s*[\w.*+!-]+(?:\s*,\s*(?:===?|~=|!=|>=|<=|<|>)\s*[\w.*+!-]+)*)/g)) addForm(m[1], m[2].replace(/\s+/g, ""), ["PyPI"]);
+  // Round 11, P2 #34: a blank between the name (or its extras) and the operator, `name[a, b]==1`, and blanks in a
+  // comma list. Tied only to a name the caller declares: it waits for nothing on its own ("if count < 2").
+  for (const m of text.matchAll(/(?<![\w@\/.-])([A-Za-z0-9][\w.-]*)(\s*\[[\w,. -]{0,80}\])?(\s*)((?:===?|~=|!=|>=|<=|<|>)\s*\d[\w.*+!-]*(?:\s*,\s*(?:===?|~=|!=|>=|<=|<|>)\s*\d[\w.*+!-]*)*)/g)) {
+    if (m[3] === "" && !/\s/.test(m[2] ?? "") && !/\s/.test(m[4])) continue;
+    if (/^\d[\d.]*$/.test(m[1])) continue;
+    addForm(m[1], m[4].replace(/\s+/g, ""), null);
+  }
   for (const m of text.matchAll(/(?<![\w."-])([A-Za-z0-9][\w.-]*)\s*=\s*"([^"\n]{1,60})"/g)) addForm(m[1], m[2], null);
   for (const m of text.matchAll(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"\n]{1,60})"/g)) addForm(m[1], m[2], ["npm"]);
   // A form whose ecosystem is decided is a pair that waits, unless the grammar holds every occurrence of its name
@@ -259,29 +279,59 @@ export function strictEvidence(task: string): StrictEvidence {
 const MANAGER_NAME = new RegExp(`(?:^|[^\\p{L}\\p{N}_-])(?:${[...MANAGER_NAMES].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")}|pip[\\d.]+)(?:\\.(?:cmd|exe|ps1|bat))?(?=$|[^\\p{L}\\p{N}_-])`, "iu");
 
 /**
- * Round 10, G5 (docs lane B): a line that holds a command this briefing does not read: `xargs` before a manager
- * name, or a manager name of the list followed at once (options aside) by an adding verb, on a line where the grammar
- * named no command. Raw text, no parsing beyond that: said as "a command this briefing does not read".
+ * Round 11, P5: a command this briefing does not read, in two cases only, on the raw text: (a) `xargs` followed, with
+ * only options between, by a name of MANAGER_NAMES; (b) a package manager the grammar does not read, followed at once
+ * (options between) by one of its own install verbs. Nothing else: "go up", "npm package" or "yarn lock" in prose are
+ * no command (the grammar reads npm, yarn, pip, go and the others' own commands).
  */
-const ADDING_WORDS = /^(?:install|i|add|a|get|require|update|upgrade|up|sync|lock|binstall|package)$/i;
+const UNREAD_VERBS: ReadonlyMap<string, readonly string[]> = new Map(Object.entries({
+  pipenv: ["install"],
+  pdm: ["add", "install"],
+  rye: ["add", "install"],
+  hatch: [],
+  conda: ["install", "create"],
+  mamba: ["install", "create"],
+  micromamba: ["install", "create"],
+  pixi: ["add", "install"],
+  gem: ["install"],
+  bundle: ["add", "install"],
+  composer: ["require", "install"],
+  dotnet: ["add"],
+  nuget: ["install"],
+  brew: ["install", "tap"],
+  apt: ["install"],
+  "apt-get": ["install"],
+}));
 export function unreadCommandLines(task: string): string[] {
   const found: string[] = [];
   for (const raw of task.slice(0, 200_000).normalize("NFKC").split(/\r?\n/).slice(0, 20_000)) {
     if (!MANAGER_NAME.test(raw)) continue;
     const words = raw.split(/\s+/).map((w) => w.replace(/^[`"'(&]+|[`"'),.;:!?]+$/g, "").replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|ps1|bat)$/i, "").toLowerCase());
-    const managerAt = words.findIndex((w) => MANAGER_NAMES.includes(w) || /^pip[\d.]+$/.test(w));
-    if (managerAt < 0) continue;
-    const xargs = words.slice(0, managerAt).includes("xargs");
-    let verb = false;
-    for (let k = managerAt + 1; k < words.length && k <= managerAt + 3; k++) {
-      if (words[k].startsWith("-")) continue;
-      verb = ADDING_WORDS.test(words[k]);
-      break;
+    // Whether the grammar names a command on this line: read once per line, never per word (round 11, P4).
+    let named: boolean | undefined;
+    for (let k = 0; k < words.length; k++) {
+      const w = words[k];
+      const next = () => {
+        let j = k + 1;
+        while (j < words.length && j - k <= 8 && words[j].startsWith("-")) j++;
+        return words[j] ?? "";
+      };
+      if (w === "xargs") {
+        const m = next();
+        if (MANAGER_NAMES.includes(m) || /^pip[\d.]+$/.test(m)) {
+          const name = `${m} (through xargs)`;
+          if (!found.includes(name)) found.push(name);
+        }
+        continue;
+      }
+      const verbs = UNREAD_VERBS.get(w);
+      if (verbs && verbs.includes(next())) {
+        // A manager the grammar names itself (K3: pipenv, pdm, rye, conda, mamba, micromamba, pixi) is said there.
+        named ??= canonicalCommands(raw).length > 0;
+        if (named) continue;
+        if (!found.includes(w)) found.push(w);
+      }
     }
-    if (!xargs && !verb) continue;
-    if (!xargs && canonicalCommands(raw).length > 0) continue;
-    const name = `${words[managerAt]}${xargs ? " (through xargs)" : ""}`;
-    if (!found.includes(name)) found.push(name);
   }
   return found;
 }
@@ -316,6 +366,15 @@ function shellUnits(task: string): string[] {
  * NPM_TOKEN and CI before npm, where no operand of it stands (G7c d01). One pass over the task, whatever the number of
  * words asked (round 9: 45,000 lines and 100 dismissed words took 3.6 s when each word rescanned the task).
  */
+/** A word's bare package name: `@spec`, PEP 440 operators and what follows, extras, quotes and a trailing mark off. */
+export function bareName(word: string): string {
+  let w = word.trim().replace(/^["'`(]+/, "");
+  const at = w.indexOf("@", w.startsWith("@") ? 1 : 0);
+  if (at > 0) w = w.slice(0, at);
+  w = w.replace(/\[.*$/, "").replace(/(?:===?|~=|!=|>=|<=|[<>^~]).*$/, "").replace(/["'`),.;:!?]+$/, "");
+  return w;
+}
+
 export function wordsAfterManager(task: string): (word: string) => boolean {
   const after = new Set<string>();
   for (const u of shellUnits(task.length > 200_000 ? task.slice(0, 200_000) : task)) {
@@ -325,9 +384,16 @@ export function wordsAfterManager(task: string): (word: string) => boolean {
       let e = raw.length;
       while (e > 0 && raw[e - 1] === ".") e--;
       if (e > 0) after.add(raw.slice(0, e));
+      // Round 11, P3: compared by the bare name, its decoration taken off: `x@1.0.0` x, `@s/n@1` @s/n (operators,
+      // extras and quotes already split the word above).
+      const bare = bareName(raw.slice(0, e));
+      if (bare) after.add(bare);
     }
   }
-  return (word: string) => after.has(word.normalize("NFKC").toLowerCase());
+  return (word: string) => {
+    const w = word.normalize("NFKC").toLowerCase();
+    return after.has(w) || after.has(bareName(w));
+  };
 }
 
 const asInstallCommand = (c: CanonicalCommand): InstallCommand => ({
@@ -346,221 +412,53 @@ export function scanCommands(task: string): InstallCommand[] {
 }
 
 /**
- * The packages of a requirements file the task installs with `-r` (V2), with the spec each line writes. Only a
- * file inside the project is read, at most 256 KB; `-r`/`-c` lines, options and comments are skipped.
+ * The packages of a requirements file the task installs with `-r` (V2), with the spec each line writes, as the
+ * snippet reader reads a requirements line (best effort: briefing-snippets.ts pep508). A `-r` or `-c` file it names
+ * is read too (8 files at most). Only a file inside the project is read, at most 256 KB. A line it cannot read, or a
+ * direct reference (`name @ url`, no version to check), makes the file not read whole (round 11, #72).
  */
-export function requirementsPairs(root: string, files: readonly string[], read: (path: string) => string | null): StrictPair[] {
-  const out: StrictPair[] = [];
-  for (const f of files.slice(0, 8)) {
+export function requirementsPairs(root: string, files: readonly string[], read: (path: string) => string | null): StrictPair[] & { notWhole?: boolean } {
+  const out: StrictPair[] & { notWhole?: boolean } = [];
+  const queue = [...files];
+  const done = new Set<string>();
+  while (queue.length > 0 && done.size < 8) {
+    const f = queue.shift()!;
+    if (done.has(f)) continue;
+    done.add(f);
     const text = read(f);
     if (text === null) continue;
-    for (const line of text.slice(0, 262_144).split(/\r?\n/).slice(0, 2000)) {
-      const l = line.replace(/\s+#.*$/, "").trim();
-      if (!l || l.startsWith("#") || l.startsWith("-")) continue;
-      const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*((?:===?|~=|>=|<=|!=|>|<)[^;\s]*(?:\s*,\s*(?:===?|~=|>=|<=|!=|>|<)[^;\s]*)*)?/.exec(l);
-      if (m) out.push({ ecosystem: "PyPI", name: m[1], ...(m[2] ? { version: m[2].replace(/\s+/g, "") } : {}) });
+    let line = "";
+    for (const raw of text.slice(0, 262_144).split(/\r?\n/).slice(0, 4000)) {
+      if (/\\\s*$/.test(raw)) {
+        line += `${raw.replace(/\\\s*$/, "")} `;
+        continue;
+      }
+      line += raw;
+      const l = line.replace(/(?:^|\s)#.*$/, "").trim();
+      line = "";
+      const nested = /^-(?:r|c|-requirement|-constraint)(?:\s+|=)(\S+)$/.exec(l);
+      if (nested) {
+        queue.push(path.posix.join(path.posix.dirname(f.replace(/\\/g, "/")), nested[1]));
+        continue;
+      }
+      const d = pep508(l);
+      if (d === "skip") continue;
+      if (!d || d.url) {
+        out.notWhole = true;
+        continue;
+      }
+      out.push({ ecosystem: "PyPI", name: d.name, ...(d.spec ? { version: d.spec } : {}) });
     }
   }
   return out;
 }
 
 /**
- * Round 6, item 1: every entry of a manifest snippet is a STRICT pair in that manifest's ecosystem, with the spec it
- * writes: a package.json dependencies object, requirements lines (after a requirements file is named or in a
- * fence), pyproject `dependencies = [...]`, a Poetry table, a Cargo.toml dependencies table, go.mod requires.
- * Bounded: at most 200 entries, each block read to at most 20,000 characters. Linear.
+ * The manifest snippets of the task (briefing-snippets.ts, round 11): best effort, read in one pass; a line or entry a
+ * reader notices it cannot read makes the snippet "not read whole" (review_needed at most).
  */
-/** A PEP 508 requirement line: a pair, "skip" (blank, a comment, an option line), or null (not read). */
-export function pep508(line: string): { name: string; spec?: string } | "skip" | null {
-  let l = line.trim();
-  if (!l || l.startsWith("#")) return "skip";
-  // An option line: `-r other.txt`, `-c constraints.txt`, `--index-url ...` (a C3 source spelling), `--hash` alone.
-  if (/^-(?:r|c|-requirement|-constraint|-index-url|-extra-index-url|-find-links|i|f|-pre|-trusted-host|-only-binary|-no-binary|-prefer-binary)\b/.test(l)) return "skip";
-  // `--hash=...` options after the requirement are no part of it.
-  l = l.replace(/(?:\s+--hash[= ]\S+)+\s*$/, "").trim();
-  // Environment markers after `;` qualify when it installs, not what: the requirement is what stands before.
-  const semi = l.indexOf(";");
-  if (semi >= 0) l = l.slice(0, semi).trim();
-  const m = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[\s*[A-Za-z0-9._-]+(?:\s*,\s*[A-Za-z0-9._-]+)*\s*\])?\s*((?:===|==|~=|!=|>=|<=|<|>)\s*[\w.*+!-]+(?:\s*,\s*(?:===|==|~=|!=|>=|<=|<|>)\s*[\w.*+!-]+)*)?$/.exec(l);
-  if (!m) return null;
-  const spec = m[2]?.replace(/\s+/g, "");
-  if (spec !== undefined && checkableSpec("PyPI", spec) === null) return null;
-  return { name: m[1], ...(spec ? { spec } : {}) };
-}
-
-/** The requirements blocks of a task (round 10, G1): see manifestPairs. */
-function requirementsBlocks(text: string): string[] {
-  const out: string[] = [];
-  // A ```requirements / ```pip fence is a requirements file whole (a ```txt or ```text fence is any text).
-  for (const m of text.matchAll(/```(?:requirements|pip)[^\n]*\n([\s\S]{0,20000}?)(?:```|$)/gi)) out.push(m[1]);
-  for (const m of text.matchAll(/requirements[\w.-]*\.(?:txt|in)\b[^\n]*\n/gi)) {
-    const rest = text.slice(m.index! + m[0].length, m.index! + m[0].length + 20000);
-    const fence = /^```[^\n]*\n([\s\S]*?)(?:```|$)/.exec(rest);
-    if (fence) {
-      if (!out.includes(fence[1])) out.push(fence[1]);
-      continue;
-    }
-    // The lines right after the name, up to a blank line or a fence: a snippet only when its first line is a
-    // requirement ("Update requirements.txt\nThen run pytest" holds no snippet).
-    const first = rest.split(/\r?\n/, 1)[0] ?? "";
-    const head = pep508(first.replace(/(?:^|\s)#.*$/, ""));
-    if (!head || head === "skip") continue;
-    const lines: string[] = [];
-    for (const line of rest.split(/\r?\n/)) {
-      if (!line.trim() || line.trim().startsWith("```")) break;
-      lines.push(line);
-    }
-    out.push(lines.join("\n"));
-  }
-  return out;
-}
-
-export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; entryWords: Set<string>; keys: Set<string> } {
-  const text = task.length > 200_000 ? task.slice(0, 200_000) : task;
-  const out: StrictPair[] = [];
-  const unreadable: InstallCommand[] = [];
-  const privateNames: Array<{ ecosystem: CheckEcosystem; name: string }> = [];
-  /** The words of an entry not read whole: nothing of them is offered by another reader (C2, C5). */
-  const entryWords = new Set<string>();
-  /** Every entry key the snippet grammar read, lower case (round 7c, F3). */
-  const entryKeys = new Set<string>();
-  const notWhole = (ecosystem: CheckEcosystem, why: string, entry = "") => {
-    for (const w of entry.toLowerCase().split(/[^a-z0-9@/._-]+/)) if (w) entryWords.add(w);
-    if (!unreadable.some((u) => u.unreadable === why && u.ecosystem === ecosystem)) unreadable.push({ text: "", ecosystem, operands: [], manager: "a manifest", verb: "", unreadable: why });
-  };
-  // As written (round 7, C4/C6): the spec is what dependency_check would be given for this entry.
-  const push = (ecosystem: CheckEcosystem, name: string, version?: string) => {
-    if (out.length >= 200 || !name) return;
-    if (ecosystem === "PyPI" && name.toLowerCase() === "python") return;
-    // C5: an entry is read only when its name and its spec are: a spec no checker reads (`password==hunter2`, a tag)
-    // or a name of a credential's shape makes the snippet not read whole, and the entry is never offered.
-    if (credentialShape(name) || looksLikeSecret(name) || (version !== undefined && !/^(?:latest|\*)$/i.test(version) && checkableSpec(ecosystem, version) === null)) {
-      notWhole(ecosystem, "an entry it cannot read", `${name} ${version ?? ""}`);
-      return;
-    }
-    out.push({ ecosystem, name, ...(version ? { version } : {}), seen: "manifest" });
-  };
-  // package.json: "dependencies": { "x": "1.0.0", ... } (and dev/peer/optional). A value that is no registry spec
-  // (git, a path, a URL, `workspace:`) is a source of the task's own for that name (C5).
-  // Round 8, m4: a dependencies object this reading cannot take whole (a nested object, no closing brace) is not
-  // read whole: nothing of it is offered.
-  for (const m of text.matchAll(/"(?:dev|peer|optional)?[dD]ependencies"\s*:\s*\{/g)) {
-    const rest = text.slice(m.index! + m[0].length, m.index! + m[0].length + 4000);
-    const close = rest.indexOf("}");
-    const open = rest.indexOf("{");
-    if (close < 0 || (open >= 0 && open < close)) notWhole("npm", "an entry it cannot read", rest.slice(0, close < 0 ? 4000 : rest.indexOf("}", close + 1) > 0 ? rest.indexOf("}", close + 1) : close));
-  }
-  for (const m of text.matchAll(/"(?:dev|peer|optional)?[dD]ependencies"\s*:\s*\{([^{}]{0,4000})\}/g)) {
-    const body = m[1].trim();
-    const entries = [...body.matchAll(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"]{0,200})"/gi)];
-    if (body && body.replace(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"]{0,200})"\s*,?/gi, "").trim() !== "") notWhole("npm", "an entry it cannot read", body);
-    for (const e of entries) {
-      entryKeys.add(e[1].toLowerCase());
-      // Round 8, m1: `~` followed by a digit is npm's tilde range ("~9.6.0"); a home path is `~/` or `~\`.
-      if (/^(?:git|github:|gitlab:|bitbucket:|file:|link:|workspace:|portal:|https?:|\.|\/|~[/\\])/i.test(e[2]) || e[2].includes("://") || e[2].includes("/")) privateNames.push({ ecosystem: "npm", name: e[1] });
-      else push("npm", e[1], e[2]);
-    }
-  }
-  // A TOML table: [dependencies] / [dev-dependencies] / [build-dependencies] (Cargo) or [tool.poetry.dependencies]
-  // and its groups (Poetry). `package = "real"` names the real crate; git / path / registry / workspace keys are a
-  // source of the task's own; any other entry shape is not read whole.
-  for (const m of text.matchAll(/\[((?:tool\.poetry\.(?:group\.[\w-]+\.)?)?(?:dev-|build-)?dependencies)\][^\n]*/g)) {
-    const ecosystem: CheckEcosystem = m[1].startsWith("tool.poetry") ? "PyPI" : "crates.io";
-    // The table's lines, up to the next table header (a line that starts with `[`): an inline array is no header.
-    const lines: string[] = [];
-    for (const line of text.slice(m.index! + m[0].length, m.index! + m[0].length + 20000).split(/\r?\n/).slice(1, 400)) {
-      if (/^\s*\[/.test(line)) break;
-      lines.push(line);
-    }
-    for (const line of lines) {
-      const l = line.replace(/\s+#.*$/, "").trim();
-      if (!l || l.startsWith("#") || l.startsWith("```")) continue;
-      const e = /^([A-Za-z0-9][\w.-]*)\s*=\s*(.{0,400})$/.exec(l);
-      if (e) entryKeys.add(e[1].toLowerCase());
-      if (!e) {
-        notWhole(ecosystem, "an entry it cannot read", l);
-        continue;
-      }
-      const value = e[2].trim();
-      const plain = /^"([^"]{0,100})"$/.exec(value);
-      if (plain) {
-        push(ecosystem, e[1], plain[1]);
-        continue;
-      }
-      const table = /^\{(.*)\}$/.exec(value);
-      if (!table) {
-        notWhole(ecosystem, "an entry it cannot read", l);
-        continue;
-      }
-      const keys = [...table[1].matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|true|false|\[[^\]]*\])/g)];
-      if (table[1].replace(/([\w-]+)\s*=\s*(?:"([^"]*)"|true|false|\[[^\]]*\])\s*,?/g, "").trim() !== "") {
-        notWhole(ecosystem, "an entry it cannot read", l);
-        continue;
-      }
-      const key = (k: string) => keys.find((x) => x[1] === k);
-      const name = key("package")?.[2] ?? e[1];
-      if (["git", "path", "registry", "workspace", "url", "source", "develop"].some((k) => key(k))) {
-        privateNames.push({ ecosystem, name });
-        continue;
-      }
-      if (keys.some((x) => !["version", "features", "optional", "default-features", "package", "extras", "markers", "python", "allow-prereleases"].includes(x[1]))) {
-        notWhole(ecosystem, "an entry it cannot read", l);
-        continue;
-      }
-      push(ecosystem, name, key("version")?.[2]);
-    }
-  }
-  // Round 10, G1: every line or entry of a snippet is one of three things: a pair (read in the ecosystem's full
-  // grammar), a known non-package line, or it makes the snippet NOT READ WHOLE. Nothing is dropped in silence.
-  // pyproject (PEP 621): dependencies = ["x>=1", ...] and optional groups.
-  for (const m of text.matchAll(/(?:^|\s)dependencies\s*=\s*\[([^\]]{0,4000})\]/g)) {
-    for (const e of m[1].matchAll(/["']([^"']{0,300})["']/g)) {
-      const d = pep508(e[1]);
-      if (d && d !== "skip") push("PyPI", d.name, d.spec);
-      else if (/@|:\/\//.test(e[1])) privateNames.push({ ecosystem: "PyPI", name: e[1].split(/[\s@[<>=!~]/)[0] });
-      else notWhole("PyPI", "an entry it cannot read", e[1]);
-    }
-    // Anything in the array that is no quoted entry or separator (an unquoted word) is not read.
-    if (m[1].replace(/["'][^"']{0,300}["']/g, "").replace(/[\s,]/g, "") !== "") notWhole("PyPI", "an entry it cannot read", m[1].slice(0, 300));
-  }
-  // requirements lines: after a requirements file is named (the lines right after it, up to a blank line), or the
-  // whole of a fenced block that follows the name or is a ```txt / ```requirements / ```pip fence.
-  for (const block of requirementsBlocks(text)) {
-    for (const raw of block.split(/\r?\n/).slice(0, 2000)) {
-      const d = pep508(raw.replace(/(?:^|\s)#.*$/, ""));
-      if (d === "skip") continue;
-      if (d) push("PyPI", d.name, d.spec);
-      else notWhole("PyPI", "a line it cannot read", raw.slice(0, 300));
-    }
-  }
-  // One line written after the file's name: "Add to requirements.txt: zqxdual==1.0.0".
-  for (const m of text.matchAll(/requirements[\w.-]*\.(?:txt|in)\b[^\n:]{0,40}:[ \t]*([^\n`]{1,300})/gi)) {
-    const d = pep508(m[1].replace(/[.,;]+\s*$/, ""));
-    if (d && d !== "skip") push("PyPI", d.name, d.spec);
-  }
-  // go.mod: require x v1.2.3 / require ( x v1 ... ): each line of a block is a module and a version, a comment, or
-  // it is not read whole.
-  for (const m of text.matchAll(/\brequire\s*\(([^)]{0,4000})\)|\brequire\s+([a-z0-9.-]+\.[a-z]{2,}\/[^\s]+)\s+(v[\w.+-]+)/gi)) {
-    if (m[2]) {
-      push("Go", m[2], m[3]);
-      continue;
-    }
-    for (const raw of m[1].split(/\r?\n/)) {
-      const line = raw.replace(/\/\/.*$/, "").trim();
-      if (!line) continue;
-      const e = /^([a-z0-9.-]+\.[a-z]{2,}\/\S+)\s+(v\S+)$/i.exec(line);
-      if (e && checkableSpec("Go", e[2]) !== null) push("Go", e[1], e[2]);
-      else notWhole("Go", "a line it cannot read", line);
-    }
-  }
-  const seen = new Set<string>();
-  const pairs = out.filter((p) => {
-    const key = `${p.ecosystem}\0${p.name}\0${p.version ?? ""}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return { pairs, unreadable, privateNames, entryWords, keys: entryKeys };
+export function manifestPairs(task: string): SnippetRead {
+  return readSnippets(task);
 }
 
 /**

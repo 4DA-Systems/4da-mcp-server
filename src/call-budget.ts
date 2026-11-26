@@ -146,7 +146,7 @@ export function runWithCallBudget<T>(startedAt: number, work: () => Promise<T>):
  */
 export const WORD_SCAN_CAP = 4_000;
 const WORD_SCAN_RESERVE_MS = 4_000;
-const scans = new WeakMap<object, { n: number; cut: "cap" | "deadline" | null }>();
+const scans = new WeakMap<object, { n: number; cut: "cap" | "snippets" | "deadline" | null }>();
 export function mayScanWord(): boolean {
   const budget = current.getStore();
   if (!budget) return true;
@@ -159,8 +159,32 @@ export function mayScanWord(): boolean {
   s.n++;
   return true;
 }
-/** Why the running call stopped scanning words (mayScanWord), or null when it did not. */
-export function wordScanCut(): "cap" | "deadline" | null {
+/**
+ * Round 11, P4: the task readers (snippets, commands) mark the call the same way: past their own cap on the number
+ * of snippets read (noteReadCut("snippets")), or when the synchronous budget is spent (readingStopped, checked in every
+ * reader's outer loop). Outside a call neither ever stops anything.
+ */
+export function noteReadCut(kind: "cap" | "snippets" | "deadline"): void {
+  const budget = current.getStore();
+  if (!budget) return;
+  let s = scans.get(budget);
+  if (!s) scans.set(budget, (s = { n: 0, cut: null }));
+  s.cut ??= kind;
+}
+export function readingStopped(): boolean {
+  const budget = current.getStore();
+  if (!budget) return false;
+  const s = scans.get(budget);
+  if (s?.cut) return true;
+  if (budget.deadline - Date.now() < WORD_SCAN_RESERVE_MS) {
+    noteReadCut("deadline");
+    return true;
+  }
+  return false;
+}
+
+/** Why the running call stopped scanning words or reading the task (mayScanWord, noteReadCut), or null. */
+export function wordScanCut(): "cap" | "snippets" | "deadline" | null {
   const budget = current.getStore();
   return budget ? (scans.get(budget)?.cut ?? null) : null;
 }

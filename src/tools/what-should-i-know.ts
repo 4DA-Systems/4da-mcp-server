@@ -11,55 +11,52 @@
  * - a delegation verdict that ONLY version-confirmed evidence about the task
  *   (or install drift actually running) can raise.
  *
- * THE CONTRACT OF THE LEVEL (round 8). No reader of a task's text can carry a promise about the level, so:
+ * THE CONTRACT OF THE LEVEL (round 11, P1). One promise, first: THE LEVEL RESTS ON YOUR DECLARATION. Each package
+ * you declare public is checked at the `version` you state; declare the version the task writes. Second, and
+ * promising nothing: the briefing also checks versions it happens to read in the task (on a command's operand, in a
+ * snippet, beside a name). That reading is best effort: a version written in a spelling it does not read is not
+ * checked, and its silence never says that everything was read.
  * K1. The level follows from: this project's scan; the verdicts of what was looked up (the briefing's own lookups
- *     and every package the caller declared public); whether anything still waits; and what this briefing could
- *     not read, each of which holds review_needed at least: a command or snippet not read whole (K3), a
- *     package-source spelling of the C3 list, a refused argument, a word the screen withheld where a package stands,
- *     a dismissed name that stands where a package stands or after a package manager's name on its line,
- *     continued line or fenced block (D3), a command of a tool it does not read (`xargs npm install`, `gem install`),
- *     and more candidate names than one call can declare (m7). "A package manager's name" is one of these names
- *     (briefing-canonical.ts MANAGER_NAMES, round 10, G3): npm, pnpm, yarn, bun, pip, pip3 (and pipX.Y), pipx, uv,
- *     poetry, cargo, go, npx, pnpx, bunx, uvx, deno, pipenv, pdm, rye, hatch, conda, mamba, micromamba, pixi,
- *     yarnpkg, cargo-binstall, easy_install, gem, bundle, composer, dotnet, nuget, brew, apt, apt-get, ni, nci, nr,
- *     nlx, corepack, volta, mise, asdf. A public entry
- *     without `version` leaves the declaration incomplete: confirmation_needed, whatever else holds (round 9, E1). The CALLER'S DECLARATION is the statement of what the
- *     task adds or changes: `public: true` says the name is on the public registry, and it is sent there; `public:
- *     false` is for anything from a private registry, an index of its own, git or a path. `to_confirm` is what this
- *     briefing noticed, a prompt, never a complete reading. A safe_to_delegate reason ends "This rests on your
- *     declaration: a package you did not declare was not checked."
- * K2. Strict evidence (briefing-command-check.ts strictEvidence): the operands of a command the canonical grammar
- *     reads whole, the entries of a manifest snippet it reads whole (every line or entry of it is a pair, a known
- *     non-package line, or it makes the snippet not read whole: round 10, G1), and a token of one of these forms
- *     anywhere in the task whose form decides the ecosystem: name@spec with the spec bare or in single or double
- *     quotes; `alias@npm:name@spec` (tied to name); name==spec and PEP 440's other operators, bare or spaced;
- *     `name = "spec"`; `"name": "spec"`; `"alias": "npm:name@spec"`. These are versions the briefing happens to read,
- *     never a complete reading. Each is a
- *     (name as written, ecosystem) pair that waits in to_confirm until a declaration of exactly that pair settles it;
- *     dismissed, it keeps review_needed. A prose candidate is offered once with every ecosystem the project uses, and
- *     any declaration of the name settles it. No entry carries a version. A word the grammar consumed (program,
- *     verb, switch, option, value) is consumed at that occurrence only (D4); the same word elsewhere is read as before.
- * K3. A command the grammar names but cannot read whole (an option not on its manager's list, a source or path
- *     option, a substitution, a quote problem, a comma in its list, a word that is no plain name, a redirection, a
- *     Poetry ^ or ~ spec, a runner, scaffold or lockfile verb, a package manager it does not read: pipenv, pdm, rye,
- *     hatch, conda, mamba, pixi) is said by its manager and verb only; nothing of it is offered, repeated or looked
- *     up, and the level is at most review_needed whatever is declared. A command ends only at `;`, `&&`, `||`, `|`,
- *     a lone `&`, a new line without continuation, the close of its code span or parenthesis, or its sentence's end
- *     (a word ending in `.`, `!`, `?`, `…` or a run of them before a blank); every word before that is an option or
- *     an operand. A manifest snippet with an entry it cannot read is not read whole, the same way. Limits: `xargs`
- *     beside a manager name and wrappers such as antfu's ni / nci are not commands the grammar reads.
+ *     and every package the caller declared public); whether anything still waits; and what this briefing noticed
+ *     it could not read, each of which holds review_needed at least: a command or snippet it says it did not read
+ *     whole (K3), a package-source spelling of the C3 list, a refused argument, a word the screen withheld where a
+ *     package stands, a dismissed name (compared without its version or scope decoration) that stands where a
+ *     package stands or after a package manager's name on its line, continued line or fenced block (D3), a command
+ *     of a tool it does not read (`xargs` before a manager name; a manager it does not read followed by its own
+ *     install verb, such as `gem install`, `composer require`, `brew install`), more candidate names than one call
+ *     can declare (m7), and a task longer than one call reads (too many snippets or distinct words, or the time
+ *     budget spent: "split the task"). "A package manager's name" is one of the names of briefing-canonical.ts
+ *     MANAGER_NAMES. A public entry without `version` leaves the declaration incomplete: confirmation_needed,
+ *     whatever else holds (round 9, E1). `public: true` says the name is on the public registry, and it is sent
+ *     there; `public: false` is for anything from a private registry, an index of its own, git or a path.
+ *     `to_confirm` is what this briefing noticed, a prompt, never a complete reading. A safe_to_delegate reason ends
+ *     "This rests on your declaration: a package you did not declare was not checked."; where the task holds a
+ *     fenced block, a manifest file name or a command, it also says the versions read in them are best effort.
+ * K2. Task-text evidence, best effort (briefing-command-check.ts strictEvidence): the operands of a command the
+ *     canonical grammar reads, the entries of a manifest snippet the snippet readers read (briefing-snippets.ts),
+ *     and tokens that tie a version to a name, for example name@spec (bare or quoted), `alias@npm:name@spec` (tied
+ *     to name), name==spec and PEP 440's other operators, `name = "spec"`, `"name": "spec"`. Where the form decides
+ *     the ecosystem it is a (name as written, ecosystem) pair that waits in to_confirm until a declaration of exactly
+ *     that pair settles it; dismissed, it keeps review_needed. A prose candidate is offered once with every ecosystem
+ *     the project uses, and any declaration of the name settles it. A word the grammar consumed (program, verb,
+ *     switch, option, value) is consumed at that occurrence only (D4).
+ * K3. When the briefing notices it cannot read a command the grammar names (an option not on its manager's list, a
+ *     source or path option, a substitution, a quote problem, a comma in its list, a word that is no plain name, a
+ *     redirection, a Poetry ^ or ~ spec, a runner, scaffold or lockfile verb, a package manager it does not read:
+ *     pipenv, pdm, rye, hatch, conda, mamba, micromamba, pixi), or a line or entry of a snippet, it says so by the
+ *     manager and verb (or "a manifest snippet") only; nothing of it is offered, repeated or looked up, and the
+ *     level is at most review_needed whatever is declared. That is a thing the briefing says when it notices; it
+ *     does not promise that what it did not flag was read in full.
  * C3. A courtesy check on an exact list (briefing-command-check.ts SOURCE_SPELLINGS), not a promise about sources:
  *     when the task holds one of those spellings, the names the task adds are not looked up, also when declared
  *     public, and each is said "not looked up"; the level is at most review_needed and nothing is written to the
  *     check ledger. Any other way a task names a source is not noticed: the declaration decides. The project's own
  *     private rules (its configuration on disk, FOURDA_PRIVATE_PACKAGES) override a public declaration as before.
  * C4/C6. A declared public package is checked as dependency_check would be asked for it: at its declared `version`,
- *     and in addition at every spec the briefing happens to read on that exact pair (a command's operand, a snippet
- *     entry, a form of K2 tied by position to its own name): never a complete reading. Without `version` it is
- *     checked at those specs, else at latest (also at latest where the pair is named without one), and the
- *     declaration is incomplete: confirmation_needed until each public entry states its version; that completeness
- *     depends on the declaration alone (round 9, E1). The worst answer stands, and the ledger gets dependency_check's
- *     line for each check. Build metadata and a local label
+ *     and in addition at any spec the briefing happens to read on that exact pair (best effort). Without `version`
+ *     it is checked at those specs, else at latest, and the declaration is incomplete: confirmation_needed until each
+ *     public entry states its version; that completeness depends on the declaration alone (round 9, E1). The worst
+ *     answer stands, and the ledger gets dependency_check's line for each check. Build metadata and a local label
  *     (`+x`) are dropped by dependency_check itself before any lookup (Go's `+incompatible` is kept).
  * Privacy. A declaration keeps the briefing from looking a name up for the task; it does not change this
  *     project's own scan, which reads the installed dependencies and sends their names unless the project's
@@ -75,11 +72,13 @@
  */
 
 import { WORD_SCAN_CAP, wordScanCut } from "../call-budget.js";
+import { MAX_SNIPPETS } from "./briefing-snippets.js";
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersion, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import {
   EMBEDDING_NOT_SENT_NOTE,
   RESTS_ON_DECLARATION,
+  BEST_EFFORT_READING,
   SCAN_STILL_READS,
   SOURCE_HELD,
   MAX_DECLARED,
@@ -394,7 +393,7 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. Pass the request as it was given, in the user's words: do not correct spellings or drop names (a misspelt package name may be the finding). Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in. Declare public: false for anything the task or the project takes from a private registry, an index of its own, git or a path (never looked up for the task; the project's own scan still reads installed dependencies); a name declared public: true is sent to the public registry and checked in this call, and needs `version` (the version or range you will write, or \"latest\") for a complete answer; `packages: []` for a task that changes no dependency; words of the task that are not packages go in `not_packages`. A call without `packages` answers confirmation_needed. Your declaration is the statement of what the task changes: the level follows from the project's scan, the verdicts of what was looked up (the briefing's own lookups and what you declare public), whether anything waits, and what the briefing could not read (a command or snippet not read whole, a package-source spelling it knows), which holds review_needed. to_confirm is what the briefing noticed in the text, never a complete reading: declare every package the task adds or changes, in each ecosystem. A name it noticed comes back in task_packages.to_confirm (confirmation_needed): do task_packages.next_step. For each dependency the task names (exact names from the lockfiles, plus named families: \"all tauri plugins\" adds the project's tauri-* and @tauri-apps/* packages): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the declared version, and at versions it happens to read on that package; malware is human_only. It adds the project's other confirmed findings, install drift, your recorded decisions and conflicts with them. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); only version-confirmed evidence, a finding on a checked package, running install drift or a decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
+    "Pre-task briefing built from the task outward. The level rests on your declaration: each package you declare public is checked at the `version` you state. Declare the version the task writes. The briefing also checks versions it happens to read in the task (on a command's operand, in a snippet, beside a name); that reading is best effort and promises nothing: a version written in a spelling it does not read is not checked. Pass the request as it was given, in the user's words: do not correct spellings or drop names (a misspelt package name may be the finding). Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in. Declare public: false for anything the task or the project takes from a private registry, an index of its own, git or a path (never looked up for the task; the project's own scan still reads installed dependencies); a name declared public: true is sent to the public registry and checked in this call, and needs `version` (the version or range you will write, or \"latest\") for a complete answer; `packages: []` for a task that changes no dependency; words of the task that are not packages go in `not_packages`. A call without `packages` answers confirmation_needed. The level follows from the project's scan, the verdicts of what was looked up (the briefing's own lookups and what you declare public), whether anything waits, and what the briefing noticed it could not read (a command or snippet it says it did not read whole, a package-source spelling it knows), which holds review_needed. to_confirm is what the briefing noticed in the text, never a complete reading: declare every package the task adds or changes, in each ecosystem. A name it noticed comes back in task_packages.to_confirm (confirmation_needed): do task_packages.next_step. For each dependency the task names (exact names from the lockfiles, plus named families: \"all tauri plugins\" adds the project's tauri-* and @tauri-apps/* packages): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the declared version, and at versions it happens to read on that package (best effort); malware is human_only. It adds the project's other confirmed findings, install drift, your recorded decisions and conflicts with them. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); only version-confirmed evidence, a finding on a checked package, running install drift or a decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -413,7 +412,7 @@ export const whatShouldIKnowTool = {
         type: "array",
         maxItems: 100,
         description:
-          "Packages this task adds or changes, at most 100, each with the `version` you will write (or \"latest\"): without it the answer is confirmation_needed. Versions the briefing happens to read on a package (name@1.2.3, name==1.2.3) are checked too; never a complete reading.",
+          "Packages this task adds or changes, at most 100, each with the `version` the task writes (or \"latest\"): the level rests on this, and without it the answer is confirmation_needed. Versions it happens to read in the task (e.g. name@1.2.3) are checked too, best effort: a spelling it does not read is not checked.",
         items: {
           type: "object",
           properties: {
@@ -517,6 +516,8 @@ export async function executeWhatShouldIKnow(
       })
     : [];
   pushAll(evidence.pairs, fromRequirements);
+  // Round 11, #72: a line of the file it cannot read (or a direct reference) makes the file not read whole.
+  if ((fromRequirements as { notWhole?: boolean }).notWhole) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "a line of a requirements file it cannot read" });
   const depsText = fromRequirements.length > 0 ? `${task}\n${fromRequirements.map((p) => p.name).join(" ")}` : task;
   // ── 0. The vulnerability scan — awaited, bounded, never assumed ───────
   // Round 7c, F1: a word the grammar consumed (`npm`, `install`, `-D`, an option's value) is no package of the task for
@@ -892,10 +893,8 @@ export async function executeWhatShouldIKnow(
       ...ownNamed.slice(MAX_NEW_PACKAGES).map((p) => p.name),
       ...wanted.slice(MAX_REQUESTED).map((r) => `${r.name} ${r.to}`),
       ...overflowTask,
-      // `gem install rails`, `composer require x`, `conda install numpy`: a registry this server does not
-      // read, named NOT CHECKED, never looked up in npm (pre-publish round 10, W14).
-      // The readers' cut is said by TOO_MANY, never as "1 more package" (round 9, #20/#69).
-      ...(taskVersions.foreign ?? []).filter((f) => !f.startsWith("every package after the first")),
+      // Round 11, P6: a package of a command this briefing does not read (`gem install rails`, `conda install x`) is
+      // not offered here: the command is said as such (K3, or "a command this briefing does not read").
     ]),
   ];
   // Round 9, E1: a `public: true` entry states the version the caller will write. Without `version` it is checked at
@@ -1163,7 +1162,7 @@ export async function executeWhatShouldIKnow(
     // not read in full.
     const cut = wordScanCut();
     if (cut) {
-      const said = cut === "cap" ? `This task holds more distinct words than one call reads in full (${WORD_SCAN_CAP}): split the task and ask for each part.` : "This briefing did not finish reading the task within its time budget: split the task and ask for each part.";
+      const said = cut === "cap" ? `This task holds more distinct words than one call reads in full (${WORD_SCAN_CAP}): split the task and ask for each part.` : cut === "snippets" ? `This task holds more manifest snippets than one call reads (${MAX_SNIPPETS}): split the task and ask for each part.` : "This briefing did not finish reading the task within its time budget: split the task and ask for each part.";
       if (assessed.level === "safe_to_delegate") {
         assessed.level = "review_needed";
         assessed.reason = said;
@@ -1171,7 +1170,12 @@ export async function executeWhatShouldIKnow(
     }
     // Round 10 (docs lane B): a command of a tool this briefing does not read, on the raw text (`xargs npm install`,
     // `gem install x`, `composer require x`): said as such, review_needed at most.
-    const foreignLines = unreadCommandLines(params.task);
+    const unreadLines = unreadCommandLines(params.task);
+    const foreignLines = [
+      ...unreadLines,
+      // A registry this server does not read, found by the version reader: said by its registry only (round 11, P6).
+      ...(unreadLines.length > 0 || evidence.unreadable.some((u) => u.manager !== "a manifest") ? [] : (taskVersions.foreign ?? []).map((f) => /\(([^():]+): not read by this server\)$/.exec(f)?.[1]).filter((r): r is string => Boolean(r))),
+    ].filter((x, i, all) => all.indexOf(x) === i);
     if (foreignLines.length > 0) {
       const said = `This task holds a command this briefing does not read (${foreignLines.slice(0, 5).join(", ")}): check what it installs with dependency_check.`;
       if (assessed.level === "safe_to_delegate") {
@@ -1195,7 +1199,10 @@ export async function executeWhatShouldIKnow(
       assessed.reason = `${stateVersion(versionless)}${before}`;
     } else if (versionless.length > 0) assessed.reason = `${assessed.reason} ${stateVersion(versionless)}`;
     // K1: a safe level rests on the caller's declaration, and says so.
-    if (assessed.level === "safe_to_delegate") assessed.reason = `${assessed.reason} ${RESTS_ON_DECLARATION}`;
+    // Round 11, P1: where the task holds a fenced block, a manifest file name or a command, the versions read in them
+    // are best effort; said before the reason's last sentence (nothing new is detected for it).
+    const holdsSnippetOrCommand = evidence.anyCommand || /^\s*(?:```|~~~)/m.test(params.task) || /\b(?:requirements[\w.-]*\.(?:txt|in)|pyproject\.toml|Cargo\.toml|package\.json|go\.mod)\b/i.test(params.task);
+    if (assessed.level === "safe_to_delegate") assessed.reason = `${assessed.reason}${holdsSnippetOrCommand ? ` ${BEST_EFFORT_READING}` : ""} ${RESTS_ON_DECLARATION}`;
     // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
     const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
     const delegation = withReadGaps(

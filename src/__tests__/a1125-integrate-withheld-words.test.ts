@@ -61,9 +61,12 @@ describe("words withheld from the task", () => {
     expect(r.summary).not.toMatch(/words? in the task (was|were) not looked up/);
   });
 
-  it("a package installed by a manager this server does not read is still 'more packages'", async () => {
+  // Round 11, P6: nothing of a command this briefing does not read is offered; the command is said as such.
+  it("a package installed by a manager this server does not read: the command is said, its package not offered", async () => {
     const r = await brief("gem install rails");
-    expect(r.summary).toMatch(/NOT CHECKED: 1 more package named in the task \(rails/);
+    expect(r.summary).not.toMatch(/NOT CHECKED: 1 more package named in the task \(rails/);
+    expect(r.delegation_assessment.reason).toContain("a command this briefing does not read (gem)");
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(notReadWords(r)).toBeUndefined();
   });
 });
