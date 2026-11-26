@@ -48,6 +48,11 @@ const STOPS = new Set([
   "expose", "point", "store", "add", "remove", "set", "configure", "check", "write", "rename", "refactor", "deploy", "commit", "push", "open", "start",
   "deps", "dependencies", "dependency", "packages", "package", "modules", "module", "crates", "crate", "everything", "all", "again", "locally", "globally",
   "work", "works", "working", "properly", "correctly", "fine", "succeed", "succeeds", "pass", "passes",
+  // What a sentence says about a command or a package rather than an operand of it: "npm install fails behind
+  // the proxy", "add the stripe SDK with npm" (fp16, fp20, fp50 of the third check).
+  "fails", "failed", "failing", "fail", "breaks", "broke", "broken", "hangs", "hung", "crashes", "crashed", "errors", "errored", "times", "timed",
+  "behind", "step", "steps", "command", "commands", "script", "scripts", "sdk", "sdks", "client", "clients", "cli", "plugin", "plugins", "wrapper",
+  "bindings", "library", "libraries", "lib", "libs", "tool", "tools", "version", "versions", "again", "too", "only", "instead", "later", "manually",
 ]);
 /** Long options whose value never names a registry package (a directory, a feature, a source to fetch from). */
 const VALUE_OPTIONS = new Set([
@@ -197,7 +202,10 @@ function operandRun(t: Token[], from: number): { operands: Operand[]; end: numbe
         if (INDEX_OPTIONS.has(flag) && value && !publicIndex(value)) privateIndex = true;
         if ((flag === "-r" || flag === "--requirement") && value) requirementFiles.push(w.includes("=") ? bare(t[end].raw).slice(bare(t[end].raw).indexOf("=") + 1) : bare(t[end + 1].raw));
         if (!w.includes("=") && end + 1 < t.length) end++;
-      } else if (w.includes("=")) operands.push({ text: bare(raw).replace(/^[^=]*=/, ""), ofOption: true });
+      } else if (w.includes("=")) {
+        // `--package=x`, `--with=x` name a package; another option's value (`--omit=dev`) never does.
+        if (PACKAGE_OPTIONS.has(flag)) operands.push({ text: bare(raw).replace(/^[^=]*=/, ""), ofOption: true });
+      }
       else {
         packageNext = PACKAGE_OPTIONS.has(flag);
         maybeValue = packageNext ? null : flag;
@@ -272,9 +280,20 @@ export function scanCommands(task: string): InstallCommand[] {
           const verb = v === managerAt ? manager : t[v].word;
           const runs = deno || verb === "run" || RUNNERS.has(verb) || verb === "x" || verb === "exec" || verb === "dlx";
           // A runner's script file is no package; deno reads only its `npm:` and `jsr:` operands as packages.
+          // A runner runs one package: its first operand (or an option's package); the rest are the program's
+          // arguments (`npx prisma migrate dev`: prisma).
+          const runner = RUNNERS.has(verb) || verb === "x" || verb === "exec" || verb === "dlx" || (verb === "run" && !deno && manager !== "uv");
+          const named = read.operands.some((o) => o.ofOption);
+          let firstSeen = false;
           const kept = read.operands
             .filter((o) => !(runs && !o.ofOption && SCRIPT.test(o.text) && !RUNNERS.has(verb)))
-            .filter((o) => !deno || /^(?:npm|jsr):/i.test(o.text));
+            .filter((o) => !deno || /^(?:npm|jsr):/i.test(o.text))
+            .filter((o) => {
+              if (!runner || o.ofOption) return true;
+              if (named || firstSeen) return false;
+              firstSeen = true;
+              return true;
+            });
           const operands = kept.map((o) => o.text);
           const maybeValues = kept.filter((o) => o.afterOption).map((o) => [o.text, o.afterOption!] as [string, string]);
           commands.push({

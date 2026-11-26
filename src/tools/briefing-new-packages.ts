@@ -391,6 +391,7 @@ export function dependencyOf(deps: readonly ResolvedDependency[]): (name: string
 
 /** Verbs that start a new clause after "and" or a comma in a task ("and keep node-forge at 0.10.0"): never a list item. */
 const CLAUSE_START_VERBS = new Set([
+  "port", "fix", "update", "refactor", "migrate", "switch", "replace", "use", "set", "add",
   "keep", "expose", "point", "store", "branch", "publish", "published", "wire", "run", "deploy", "push", "mount", "serve", "return", "log",
   "send", "read", "write", "move", "check", "test", "make", "build", "render", "call", "configure", "enable", "disable", "document", "remove",
   "drop", "rename", "register", "load", "save", "handle", "validate", "parse", "cache", "mock", "expose", "commit", "open", "close", "start",
@@ -890,7 +891,9 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     };
     // The verb, then only articles and package words, then the list of items.
     let start = itemStart(i + 1);
-    let afterSeparator = false;
+    // F3: the words after a command's connective start a new item, as after a list separator: a verb that starts a
+    // clause there ("uv add litestar and port the flask routes") is no item.
+    let afterSeparator = continued;
     let proseSeen = false;
     /** This list's packages, and whether anything marked each as one. */
     const listed: Array<{ pkg: NewPackage; strong: boolean }> = [];

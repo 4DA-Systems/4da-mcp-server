@@ -51,7 +51,9 @@ describe("C3: a command with unknown options and operands is never read whole un
     for (let n = 0; n < 2000; n++) {
       const form = FORMS[Math.floor(r() * FORMS.length)];
       const opts = Array.from({ length: Math.floor(r() * 4) }, () => option(r));
-      const operands = Array.from({ length: 1 + Math.floor(r() * 3) }, () => ({ name: name(r, form.ecosystem), accounted: r() < 0.5 }));
+      // A runner runs one package: the words after it are the program's arguments (round 4, contract K2).
+      const runner = /^(?:npx|pnpx|bunx|uvx|npm x|npm exec|pnpm dlx|yarn dlx|bun x|pipx run --spec|uv tool run)$/.test(form.head);
+      const operands = Array.from({ length: runner ? 1 : 1 + Math.floor(r() * 3) }, () => ({ name: name(r, form.ecosystem), accounted: r() < 0.5 }));
       const versioned = operands.map((o) => (r() < 0.3 ? (form.ecosystem === "PyPI" ? `${o.name}==1.0.1` : form.ecosystem === "Go" ? `${o.name}@v1.0.1` : `${o.name}@1.0.1`) : o.name));
       // Options and operands interleaved: an unknown option before an operand never hides it.
       const words: string[] = [];
@@ -68,10 +70,8 @@ describe("C3: a command with unknown options and operands is never read whole un
       const unread = unreadCommand(task, accounted);
       const label = `#${n}: ${task}`;
       if (operands.some((o) => !o.accounted)) expect(unread, label).not.toBeNull();
-      // Every operand accounted, and no option carrying a value of its own: the command is read whole.
-      else if (!opts.some((o) => o.hasValue)) expect(unread, label).toBeNull();
-      // Every option's value counts as an operand: one accounted for nowhere keeps the command unread.
-      else expect(unread, label).not.toBeNull();
+      // Every operand accounted: the command is read whole (an `--opt=value` value is no operand: round 4, fp39).
+      else expect(unread, label).toBeNull();
     }
   });
 
