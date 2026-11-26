@@ -162,6 +162,16 @@ describe("L1 c: a folder inside a workspace holds the name alone (the sibling ca
     expect(r.text).toContain(INSIDE);
     expect(r.text).toContain("another member");
   });
+  it.each([
+    ["pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n", "cargo add regex"],
+    ["pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n", "uv add requests"],
+    ["Cargo.toml", '[workspace]\nmembers = ["crates/*"]\n', "npm install lodash"],
+    ["pyproject.toml", '[tool.uv.workspace]\nmembers = ["py/*"]\n', "pnpm add lodash"],
+  ])("a %s workspace does not hold another ecosystem's name alone (%s)", (file, content, command) => {
+    s.file(file, content);
+    const r = run(command);
+    expect(r.decision, r.text).toBe("allow");
+  });
   it("at the root itself: held too", () => {
     s.file("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n");
     expect(run("pnpm add -D zod").text).toContain(INSIDE);
@@ -284,6 +294,14 @@ describe("L5: one path normaliser for every manifest name", () => {
     const r = s.write(`${s.project}/${name}`, "dependencies:\n  lodash: 4.17.20\n");
     expect(r.decision).toBe("deny");
     expect(r.text).toContain("write the project's manifest as package.json");
+  });
+  it.each(["package.json", "package.yaml", "Cargo.toml", "go.work", "requirements.txt", "package.json::$DATA"])("a NotebookEdit of %s is held, never read", (name) => {
+    const r = s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "NotebookEdit", tool_input: { notebook_path: `${s.project}/${name}`, new_source: '{"dependencies":{"lodash":"4.17.20"}}' } });
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("Edit or Write");
+  });
+  it("a NotebookEdit of a notebook goes ahead", () => {
+    expect(s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "NotebookEdit", tool_input: { notebook_path: `${s.project}/a.ipynb`, new_source: "x = 1" } }).decision).toBe("allow");
   });
   it("go.work::$DATA is read as go.work", () => {
     expect(s.write(`${s.project}/go.work::$DATA`, "replace golang.org/x/text => golang.org/x/text v0.3.0\n").text).toContain("answered avoid");

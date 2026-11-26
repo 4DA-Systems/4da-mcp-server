@@ -49,9 +49,10 @@
  *   directory option resolves the same way, and no prefix runs it in another folder (env -C, sudo
  *   -D, wsl --cd); (b) "a workspace option" (KEEPS_DECLARED: -w, --workspace(s), --filter, -F, -r,
  *   -p, --package, yarn workspace, ... also inside a cluster such as -Dw); (c) "this folder is
- *   inside a workspace" when its folder or one up to 12 above holds a pnpm-workspace.yaml or a
- *   go.work, a package.json whose text has a "workspaces" key, a pyproject.toml with
- *   [tool.uv.workspace] or a Cargo.toml with a [workspace table; (d) "already names" when its name
+ *   inside a workspace" when its folder or one up to 12 above is a workspace root of its
+ *   ecosystem by raw text (for npm, pnpm, Yarn and Bun a pnpm-workspace.yaml or a package.json
+ *   whose text has a "workspaces" key; for uv and Poetry a pyproject.toml with
+ *   [tool.uv.workspace]; for Cargo a Cargo.toml with a [workspace table) or holds a go.work; (d) "already names" when its name
  *   occurs as a whole word in package.json (one that parses, without the values of scripts,
  *   description, keywords, name, bin, main, files, repository, author, license and engines),
  *   package.yaml, package.json5, pnpm-workspace.yaml, .pnpmfile.cjs, bunfig.toml, Cargo.toml,
@@ -127,8 +128,8 @@
  *   PowerShell comma list or --%). Tested: a1125-w2-hook-round14-remedy.test.ts follows the twelfth
  *   check's 441 held lines to an allowed command with the same operands and placement, or to the
  *   general remedy.
- * - An edit it cannot read: a pnpm-workspace.yaml line that is not plain ("rewrite as plain
- *   `name: version` lines"), a TOML escape or multi-line string in a dependency, anything past a bound.
+ * - An edit it cannot read: a NotebookEdit whose path names a manifest ("change it with Edit or
+ *   Write"), a pnpm-workspace.yaml line that is not plain ("rewrite as plain `name: version` lines"), a TOML escape or multi-line string in a dependency, anything past a bound.
  * - Past the time budget (2 s of reading; a payload over 8 KB also under a 5 s wall clock), or when
  *   anything goes wrong (an error of its own, a worker that stops, a payload that does not parse, a
  *   payload over 8 MB that is not JSON, or one over 64 MB, neither of which is read whole),
@@ -177,7 +178,9 @@
  *   run x, pwsh -File); runners that fetch a package and run it (npx pkg@v, pnpx, npm exec / x, pnpm
  *   dlx, yarn dlx, bunx, bun x, uvx, uv tool run, uv run --with, pipx run, the init and create
  *   commands, go run mod@v, cargo binstall).
- * - Settings in files (.npmrc, pip.conf, uv.toml, [tool.uv], a hand-edited lockfile), written by a
+ * - Settings and pins in files this hook does not read, whether edited with a tool or not (.npmrc,
+ *   .yarnrc.yml, bunfig.toml, .pnpmfile.cjs, pip.conf, uv.toml, [tool.uv], Pipfile, deno.json,
+ *   requirements.in, constraints.txt, a hand-edited lockfile), written by a
  *   config command before the install, or reached through HOME, USERPROFILE, XDG_CONFIG_HOME,
  *   APPDATA, CARGO_HOME or GOENV, and Go's GOSUMDB and GONOSUMCHECK; another project folder's (-C,
  *   --prefix, --cwd, --directory), which is the same limit as `cd` to it.
@@ -4494,11 +4497,11 @@ const PREFIX_FOLDER = /^(?:-C|-D|--chdir|--cd)(?:=.*)?$|^-[CD].+$/;
 const MENTION_ONLY_KEYS = ["scripts", "description", "keywords", "name", "bin", "main", "files", "repository", "author", "license", "engines"];
 /** L1 c: the raw text that makes a folder a workspace root, per file (a file that exists is enough when null). */
 const WORKSPACE_ROOTS = [
-  ["pnpm-workspace.yaml", null],
-  ["package.json", /"workspaces"\s*:/],
-  ["pyproject.toml", /^\s*\[tool\.uv\.workspace\]/m],
-  ["Cargo.toml", /^\s*\[workspace[\].]/m],
-  ["go.work", null],
+  ["pnpm-workspace.yaml", null, "npm"],
+  ["package.json", /"workspaces"\s*:/, "npm"],
+  ["pyproject.toml", /^\s*\[tool\.uv\.workspace\]/m, "PyPI"],
+  ["Cargo.toml", /^\s*\[workspace[\].]/m, "crates.io"],
+  ["go.work", null, null],
 ];
 /** The folder the command being accounted for runs in (the payload's cwd, after `cd` earlier in the line), or null when not known. */
 let accountDir = null;
@@ -4587,11 +4590,14 @@ function projectMention(start, name, eco) {
   return null;
 }
 /** L1 c: the first workspace root at `start` or above it (raw text, PROJECT_DEPTH levels): { file } / { file, unreadable } / null. */
-function workspaceRoot(start) {
+function workspaceRoot(start, eco) {
   let dir = start;
   for (let level = 0; level <= PROJECT_DEPTH; level++) {
     tick();
-    for (const [f, re] of WORKSPACE_ROOTS) {
+    for (const [f, re, of] of WORKSPACE_ROOTS) {
+      // A workspace of another ecosystem (a pnpm workspace around a crate) pins none of this one's
+      // releases; go.work counts for every manager.
+      if (of !== null && of !== eco) continue;
       const path = join(dir, f);
       const text = projectText(path);
       if (text === null) continue;
@@ -4643,7 +4649,7 @@ function declaredHeld(key, bare) {
   const clustered = (w) => rule.letters !== "" && /^-[A-Za-z]{2,}$/.test(w) && [...w.slice(1)].some((c) => rule.letters.includes(c));
   if (has(rule.select) || after.some(clustered)) return held(name, "a workspace option: the member's own files are not read");
   // (c) inside a workspace.
-  const root = workspaceRoot(folder);
+  const root = workspaceRoot(folder, rule.eco);
   if (root?.unreadable) return held(name, `${root.file} ${root.unreadable}`);
   if (root) return held(name, `this folder is inside a workspace (${basename(root.file)} in ${root.file === join(folder, basename(root.file)) ? "this folder" : "a parent folder"}); the manager may reuse a release another member has`);
   // (d) a project file mentions it.
@@ -6017,6 +6023,15 @@ function introducedBy(input) {
   if (toolName === "Bash" || toolName === "PowerShell") {
     const found = installsIn(toolInput.command, toolName === "PowerShell" ? "powershell" : "bash");
     return { what: "command", changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null, ...(r.tag ? { tag: true } : {}) })) };
+  }
+  // Round 17 (g-kinds): a NotebookEdit whose path names a manifest (any spelling manifestBaseName
+  // reads, package.yaml and package.json5 included) writes it in a form this hook does not read.
+  if (toolName === "NotebookEdit" && typeof toolInput.notebook_path === "string") {
+    const name = manifestBaseName(toolInput.notebook_path).toLowerCase();
+    if (manifestKind(toolInput.notebook_path) === null && name !== "package.yaml" && name !== "package.json5") return null;
+    refuse(`a NotebookEdit of ${name}, a manifest this hook reads only from Edit, MultiEdit and Write`, "No dependency_check verdict releases this edit. Change the manifest with the Edit or Write tool: the versions it sets are then judged as in any other edit.");
+    unreadInstalls = true;
+    return { what: "edit", changes: [] };
   }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
   if (typeof toolInput.file_path !== "string") return null;
