@@ -723,6 +723,7 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       const commandWord = word === "uv" && words[i + 1] === "pip" ? "pip" : word;
       /** The package the command named last: Cargo's `--vers` / `--version` names its version. */
       let lastAdded: NewPackage | null = null;
+      let closedSpan = false;
       for (j++; j < words.length; j++) {
         // At most MAX_READ_PACKAGES names, here too: `npm install p1 ... p30000` returned 30,012 (re-check, item 3).
         if (found.length >= MAX_READ_PACKAGES) {
@@ -750,7 +751,14 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
           // option is known to take no value (`-D`, `-U`); after any other option it may be that option's
           // value, so it is not read, and is named as not read unless the option is known to take one
           // (re-check of the 2026-11-25 fixes, item 2). A long blank is a value the screen withheld.
-          const flag = task.slice(ws, we).replace(/[.,;:)]+$/, "");
+          const flag = task.slice(ws, we).replace(/[.,;:)`'"]+$/, "");
+          // `npm install prisma --save-dev` and ...: a closing backtick ends the command at its option (round 6, o31).
+          if (/[`;]["')]*$/.test(task.slice(ws, we))) {
+            while (j + 1 < raw.length && starts[j + 1] < we) j++;
+            j++;
+            closedSpan = true;
+            break;
+          }
           // Past every token of the option's own word.
           while (j + 1 < raw.length && starts[j + 1] < we) j++;
           const gap = j + 1 < raw.length ? task.slice(we, starts[j + 1]) : "";
@@ -818,7 +826,9 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
       }
       // F3: "npm install ky and fastifyy": the command's operands end at the connective, and what the list goes
       // on to name is read as prose after an install verb, so it waits in to_confirm (never silently dropped).
-      if (lastAdded && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;
+      // Not after a closed code span, and not when another command follows ("and `npm install x`").
+      const nextIsCommand = Object.hasOwn(MANAGERS, words[j + 1] ?? "");
+      if (lastAdded && !closedSpan && !nextIsCommand && j < words.length && LIST_WORDS.has(words[j]) && separatorAfter(j - 1) !== "clause") listAfterCommand = j;
       i = j - 1;
       continue;
     }
