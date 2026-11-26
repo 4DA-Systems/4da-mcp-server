@@ -35,8 +35,8 @@
  *     the task adds is looked up, also when declared public: each is said "not looked up", the level is at most
  *     review_needed, and nothing is written to the check ledger. A dependency the project has is the scan's.
  * C4/C6. A declared package is checked as dependency_check would be asked for it (package as declared, `to` as
- *     declared, else as written on that pair, and `latest` where the pair is named without one; a declared version
- *     replaces what the task writes), and the ledger gets exactly dependency_check's line for that item. A version
+ *     written on that pair, always, and as declared in addition, and `latest` where the pair is named without one and
+ *     no version is declared; the worst answer stands), and the ledger gets dependency_check's line for each. A version
  *     in prose attaches to no pair and holds nothing. Build metadata and a local label (`+x`) are dropped by
  *     dependency_check itself before any lookup (Go's `+incompatible` is kept), so neither tool sends them.
  * Privacy. A declaration keeps the briefing from looking a name up for the task; it does not change this
@@ -133,7 +133,7 @@ import {
   type WisdomRecallMode,
 } from "./briefing-wisdom.js";
 import { maxOf, pushAll } from "../array-utils.js";
-import { plainSpec, RAW_SOURCE, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
+import { CLEAN_COMMAND, plainSpec, RAW_SOURCE, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
 import * as fs from "node:fs";
 
 // ============================================================================
@@ -737,14 +737,15 @@ export async function executeWhatShouldIKnow(
   const declaredName = new Map<string, string>(declaredPublic.map((d) => [`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name] as const));
   const declaredNew: NewPackage[] = [];
   const declaredWanted: RequestedVersion[] = [];
-  // Round 7, C4/C6: each declared public package is checked as dependency_check would be asked for it: `package` as
-  // declared, `to` its declared version; else every spec written on that exact pair (a canonical operand or a
-  // manifest entry of that ecosystem), and also `latest` when the pair is named somewhere without a spec or no spec
-  // is written on it at all. A version in prose attaches to no pair and never narrows the check.
+  // Round 7b, C4/C6: each declared public package is checked as dependency_check would be asked for it: `package` as
+  // declared, `to` each spec written on that exact pair (a canonical operand or a manifest entry of that ecosystem),
+  // ALWAYS, and its declared version in addition; with no declared version, also `latest` when the pair is named
+  // somewhere without a spec or no spec is written on it at all. The worst answer sets the level: a task that writes
+  // lodash@4.17.20 never ends safe because 4.18.1 was declared. A version in prose attaches to no pair.
   for (const d of declaredPublic) {
     const onPair = evidence.pairs.filter((p) => p.ecosystem === d.ecosystem && p.name === d.name);
     const specs = [...new Set(onPair.flatMap((p) => (p.version ? [p.version] : [])))];
-    const versions = d.version ? [d.version] : [...specs, ...(onPair.some((p) => !p.version) || specs.length === 0 ? ["latest"] : [])];
+    const versions = d.version ? [...specs, d.version] : [...specs, ...(onPair.some((p) => !p.version) || specs.length === 0 ? ["latest"] : [])];
     declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name);
     for (const version of [...new Set(versions)]) {
       const latest = /^latest$/i.test(version);
@@ -820,16 +821,14 @@ export async function executeWhatShouldIKnow(
     ]),
   ];
   // Words withheld from the task before it was read: not "more packages", their own sentence (audit 2026-11-25).
-  const allWithheld = [...(taskVersions.withheld ?? []), ...gated.held.filter((h) => !(taskVersions.withheld ?? []).some((w) => w.shown === h.shown && w.reason === h.reason)), ...argsNotRead.map((w) => ({ ...w, argument: true as const }))];
+  // Round 7b: an option's value inside a command the grammar named is the grammar's to say: a listed option is read
+  // (its value consumed, or none), any other makes the command not read whole (K3, by manager and verb). The older
+  // reader's "the word after <option>" is then not said again (e032: `npm install --workspaces pino`).
+  const grammarSays = (w: { shown: string }) => evidence.namedWords.size > 0 && w.shown.startsWith("the word after ");
+  const allWithheld = [...(taskVersions.withheld ?? []), ...gated.held.filter((h) => !(taskVersions.withheld ?? []).some((w) => w.shown === h.shown && w.reason === h.reason)), ...argsNotRead.map((w) => ({ ...w, argument: true as const }))].filter((w) => !grammarSays(w));
   // Round 7, C3: each name not looked up because the task names a package source of its own, said once, standing.
   for (const name of sourceHeld) {
     if (!allWithheld.some((w) => w.shown === name)) allWithheld.push({ shown: name, reason: SOURCE_HELD, standing: true as const });
-  }
-  // Round 6, item 3: the word after an option not known to take no value is that option's value, in the detector as
-  // in the reader: counted as "the word after <option>" and standing in the command, never named.
-  for (const flag of evidence.hiddenValues) {
-    const shown = `the word after ${flag.slice(0, 40)}`;
-    if (!allWithheld.some((w) => w.shown === shown)) allWithheld.push({ shown, reason: "not read: that option may take it as its value (a value is never repeated: it may be a secret)", standing: true as const });
   }
   // A withheld value the caller lists in not_packages moves to dismissed (by how it is shown: the value itself is
   // never repeated), under the same position rule as a dismissed name (wave 2, change B).
@@ -1021,7 +1020,9 @@ export async function executeWhatShouldIKnow(
     }
     if (refusedEntries > 0) assessed.reason = `${assessed.reason} ${refusedEntries} of your entries ${refusedEntries === 1 ? "was" : "were"} refused (${refusedClasses(argsNotRead)}; task_packages.not_read names each by its place): fix and resend ${refusedEntries === 1 ? "it" : "them"}.`;
     if (standing.length > 0) {
-      const said = `${standing.join("; ")}.`.replace(/^y/, "Y");
+      // Round 7b, item 3: a word of a command written into a sentence was dismissed; say how to get a clean answer.
+      const inCommand = dismissedWords.some((w) => w.seen === "command" && !replacedBy(w.word));
+      const said = `${standing.join("; ")}.${inCommand ? ` ${CLEAN_COMMAND}` : ""}`.replace(/^y/, "Y");
       if (assessed.level === "safe_to_delegate") {
         assessed.level = "review_needed";
         assessed.reason = said;

@@ -31,8 +31,6 @@ export interface InstallCommand {
   ecosystem: CheckEcosystem;
   /** Its operands, as written. */
   operands: string[];
-  /** The options this module does not know whose next word it took as their value (never shown; round 6, item 3). */
-  hiddenValues?: string[];
   /** The manager word and the verb, from this module's fixed lists: what an answer may say of the command. */
   manager: string;
   verb: string;
@@ -132,7 +130,7 @@ export interface StrictPair {
  * (markup dropped, continuations joined): a credential, a substitution or a quote problem among a command's words
  * makes it not read whole, and nothing of it is offered.
  */
-export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; requirementFiles: string[]; hiddenValues: string[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; namedWords: Set<string>; manifestNotWhole: boolean } {
+export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable: InstallCommand[]; requirementFiles: string[]; privateNames: Array<{ ecosystem: CheckEcosystem; name: string }>; namedWords: Set<string>; manifestNotWhole: boolean } {
   const pairs: StrictPair[] = [];
   const unreadable: InstallCommand[] = [];
   const requirementFiles: string[] = [];
@@ -164,7 +162,7 @@ export function strictEvidence(task: string): { pairs: StrictPair[]; unreadable:
   pushAll(pairs, manifest.pairs);
   pushAll(unreadable, manifest.unreadable);
   for (const w of manifest.entryWords) namedWords.add(w);
-  return { pairs, unreadable, requirementFiles, hiddenValues: [], privateNames: manifest.privateNames, namedWords, manifestNotWhole: manifest.unreadable.length > 0 };
+  return { pairs, unreadable, requirementFiles, privateNames: manifest.privateNames, namedWords, manifestNotWhole: manifest.unreadable.length > 0 };
 }
 
 const asInstallCommand = (c: CanonicalCommand): InstallCommand => ({
@@ -328,6 +326,9 @@ export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: 
  * Round 7, C3: the task's raw text names a package source of its own. The presence of the word is the evidence;
  * which package it applies to is not parsed. Case-insensitive.
  */
+/** How an agent gets a clean answer for a command written into a sentence (round 7b, item 3). */
+export const CLEAN_COMMAND = "For a clean answer, write the command on its own line or in a code span (`npm install x y`) with only package names after the verb, and call again.";
+
 export const RAW_SOURCE =
   /--registry|registry\s*=|:registry|--index-url|(?:^|\s)-i\s+\S|--extra-index-url|--default-index|--index\b|--find-links|(?:^|\s)-f\s+\S|--source\b|--git\b|--path\b|npm_config_registry|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|UV_INDEX|GOPRIVATE|GOPROXY|GONOSUMDB|npmRegistryServer|\[\[tool\.uv\.index\]\]|\[\[tool\.poetry\.source\]\]|\[registries[.\]]|\[registry\]|\[source\.|\[patch\.|\breplace\s+\S+(?:\s+v\S+)?\s+=>/i;
 
@@ -352,4 +353,4 @@ export function unreadCommand(task: string, accounted: (ecosystem: CheckEcosyste
 export const unreadableReason = (c: InstallCommand) =>
   c.manager === "a manifest"
     ? `This task holds a manifest snippet this briefing could not read whole (${c.unreadable}): check what it adds with dependency_check.`
-    : `This task holds a command (${[c.manager, c.verb].filter(Boolean).join(" ")}) this briefing could not read whole (${c.unreadable}): check what it installs with dependency_check.`;
+    : `This task holds a command (${[c.manager, c.verb].filter(Boolean).join(" ")}) this briefing could not read whole (${c.unreadable}): check what it installs with dependency_check.${/comma|not a plain package name/.test(c.unreadable ?? "") ? ` ${CLEAN_COMMAND}` : ""}`;
