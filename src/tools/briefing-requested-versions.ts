@@ -36,6 +36,7 @@ import {
   specText,
 } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
+import { oneEditApart } from "./briefing-confirm.js";
 import { boundWords, knownPublicName, offlineNearMiss, screenedOut, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
@@ -384,7 +385,8 @@ export function gateTaskNames<
     const entry = unverified.get(key)!;
     for (const ecosystem of judgeNearMiss && !entry.note ? readAs : []) {
       const of = offlineNearMiss(name, ecosystem);
-      if (of) {
+      // Only a true one-edit neighbour gets the note: "prisma" was told "one edit from prismjs" (two edits away).
+      if (of && oneEditApart(name, of)) {
         entry.note = `one edit from ${of}: check the spelling`;
         break;
       }

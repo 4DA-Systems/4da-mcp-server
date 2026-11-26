@@ -45,7 +45,7 @@ describe("a separator ends the command's operands", () => {
   it.each([
     "npm install lodash && git push origin feature-x",
     "npm install lodash; cargo build",
-    "npm install lodash || npx tsc",
+    "npm install lodash || git push",
     "npm install lodash | tee log.txt",
     "npm install lodash & npm run dev",
     "npm install lodash > out.txt",
