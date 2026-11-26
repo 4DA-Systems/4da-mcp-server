@@ -1873,11 +1873,12 @@ function introducedByEdit(kind, toolName, toolInput, path) {
  * (the 6.5.1 candidate returned null for them, so `(cd app && npm i x@1)` went ahead unread).
  * Redirections (`2>&1`, `> out.txt`) are read and dropped; `redirects`, when given, collects their
  * targets as { target, write } (write: `>` or `>>`, not `<`). `dialect` is "bash" or "powershell".
+ * `links`, when given, gets one entry per command returned: "|" when a lone pipe follows it, else "".
  * `cap` bounds the line's size (the account of round 8 reads to MAX_ACCOUNT_CHARS).
  * `dropped`, when given, collects each PowerShell command with a comma or --% that this reader
  * does not take apart (and so does not return): { text, readings } with its two readings as words.
  */
-export function simpleCommands(line, dialect, redirects = null, dropped = null, cap = MAX_COMMAND_CHARS) {
+export function simpleCommands(line, dialect, redirects = null, dropped = null, cap = MAX_COMMAND_CHARS, links = null) {
   if (typeof line !== "string") return null;
   if (line.length > cap) return refuse(`a command over ${cap / 1024} KB`);
   const commands = [];
@@ -1893,7 +1894,7 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
   let cmdStart = 0;
   let pos = 0;
   let held = false;
-  const endCommand = () => {
+  const endCommand = (link = "") => {
     endWord();
     if (unreadCommand !== null) {
       // Not read exactly. When the command reader itself sees an install or add subcommand of a
@@ -1921,7 +1922,10 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
         }
       }
       unreadCommand = null;
-    } else if (words.length > 0) commands.push(words);
+    } else if (words.length > 0) {
+      commands.push(words);
+      links?.push(link);
+    }
     words = [];
     cmdStart = pos;
   };
@@ -1953,7 +1957,7 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
     } else if (ch === "\n" || ch === "\r" || ch === ";") {
       endCommand();
     } else if (ch === "&" || ch === "|") {
-      endCommand();
+      endCommand(ch === "|" && line[i + 1] !== "|" ? "|" : "");
       if (line[i + 1] === ch) i++;
     } else if (ch === "#" && word === null) {
       const nl = line.indexOf("\n", i);
@@ -3056,10 +3060,6 @@ const NPM_SHORT_WORDS = new Set(["-dd", "-ddd", "-ws", "-iwr", "-desc", "-reg"])
 const NPM_RESOLVING = new Set(["tag", "before"]);
 /** Environment settings before a manager that change where it installs from or what it resolves. */
 const MANAGER_SETTING = /^(?:npm_config_|yarn_|bun_config|pip_|uv_|poetry_|cargo_registr|cargo_source|goproxy|goflags|goprivate|gonoproxy|gonosumdb|goinsecure|gotoolchain)/i;
-/** Programs that take the words after them as data only (a line that mentions an install). */
-const DATA_PROGRAMS = new Set(["echo", "printf", "rg", "grep", "egrep", "fgrep", "select-string", "sls", "findstr", "cat", "write-output", "write-host", "sed", "gsed", "awk", "gawk", "mawk", "nawk", "make", "gmake", "docker", "podman", "true", ":"]);
-/** Git commands that take the words after them as data. */
-const GIT_DATA = new Set(["commit", "log", "grep", "show", "diff", "status", "tag", "notes"]);
 /** GitHub CLI commands whose words are text (a pull request's or an issue's title and body). */
 const GH_DATA = new Set(["pr", "issue", "release", "gist"]);
 const GH_DATA_VERBS = new Set(["create", "edit", "comment", "review", "view", "list", "close", "reopen"]);
@@ -3128,6 +3128,8 @@ function detectIn(text, seen) {
  */
 export function detectsInstall(text) {
   if (typeof text !== "string") return false;
+  // J3: a line continued with `\` (bash) or a backtick (PowerShell) is one line.
+  if (/[\\`]\r?\n/.test(text)) text = text.replace(/[\\`]\r?\n/g, " ");
   // A second pass with the shell's escape and quote characters taken out: `n\pm`, `np''m`, `` n`pm ``
   // are npm to the shell.
   return detectIn(text, []) || (/[\\`'"]/.test(text) && detectIn(text.replace(/[\\`'"]/g, ""), []));
@@ -3136,7 +3138,15 @@ export function detectsInstall(text) {
 /** The detector over a parsed command's words, word by word (a quoted word keeps its spaces: never re-joined). */
 function detectsInWords(words) {
   const seen = [];
-  for (const w of words) if (detectIn(w, seen)) return true;
+  for (const w of words) {
+    if (detectIn(w, seen)) return true;
+    // An option with a command glued to it (`-O'npm i x'` is the word `-Onpm i x`, `--pre=npm i x`):
+    // the word read again without its option name.
+    if (w.startsWith("-") && /\s/.test(w)) {
+      const value = w.replace(/^--?[A-Za-z0-9][A-Za-z0-9-]*=|^-[A-Za-z]/, "");
+      if (value !== w && detectIn(value, [])) return true;
+    }
+  }
   return false;
 }
 
@@ -3308,7 +3318,9 @@ function accountLine(line, dialect, depth = 0) {
     line = env.line;
   }
   const dropped = [];
-  const commands = quietly(() => simpleCommands(line, dialect, null, dropped, MAX_ACCOUNT_CHARS));
+  const redirects = [];
+  const links = [];
+  const commands = quietly(() => simpleCommands(line, dialect, redirects, dropped, MAX_ACCOUNT_CHARS, links));
   if (!commands) return dialect === "bash" && line.includes("<<") ? dataHeredoc(line) : "a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)";
   // A PowerShell command with a comma or --%: each of its two readings is accounted for.
   for (const { text, readings } of dropped) {
@@ -3322,9 +3334,14 @@ function accountLine(line, dialect, depth = 0) {
     const set = managerSettingIn(words);
     if (set) return `the setting ${set} made earlier in this call`;
   }
-  for (const words of commands) {
+  // J1 (b): a data program's text is text only when it goes nowhere that runs it: no write to a
+  // manifest or lockfile on the line, and every later stage of its pipeline a listed sink or data program.
+  const writesManifest = redirects.some((r) => r.write && manifestFile(r.target));
+  for (let k = 0; k < commands.length; k++) {
     tick();
-    const why = accountCommand(words, dialect, depth);
+    let exempt = !writesManifest;
+    for (let j = k; exempt && links[j] === "|" && j + 1 < commands.length; j++) exempt = sinkCommand(commands[j + 1]);
+    const why = accountCommand(commands[k], dialect, depth, exempt);
     if (why) return why;
   }
   return null;
@@ -3399,19 +3416,189 @@ function dataHeredoc(line) {
   return null;
 }
 
-/** Whether a simple command takes its words (and its input) as data only: DATA_PROGRAMS, or git's GIT_DATA commands. */
+/**
+ * J1 (eighth independent check): the programs whose words may hold a detector hit as text, each
+ * with the options this hook knows it to take (an option not on its list: not text, so held), and
+ * the stages a data program's output may flow into (pure sinks). A spec: `short` one-letter
+ * switches, `shortValue` one-letter options with a value (attached or the next word), `long` /
+ * `longValue` long options (a value attached with `=` or the next word), `ps` PowerShell parameters
+ * (name -> takes a value), `slash` (findstr: `/x` switches), `digits` (`grep -3`, `head -5`).
+ */
+const GREP_SPEC = {
+  short: "rRniIlLcvwxEFPGohHsqzaUbTZ",
+  shortValue: "ABCemfdD",
+  digits: true,
+  long: ["--recursive", "--dereference-recursive", "--line-number", "--ignore-case", "--no-ignore-case", "--files-with-matches", "--files-without-match", "--count", "--invert-match", "--word-regexp", "--line-regexp", "--extended-regexp", "--fixed-strings", "--perl-regexp", "--basic-regexp", "--only-matching", "--no-filename", "--with-filename", "--no-messages", "--quiet", "--silent", "--null", "--text", "--null-data", "--byte-offset", "--initial-tab", "--line-buffered", "--color", "--colour"],
+  longValue: ["--include", "--exclude", "--exclude-dir", "--exclude-from", "--regexp", "--file", "--max-count", "--context", "--after-context", "--before-context", "--color", "--colour", "--binary-files", "--devices", "--directories", "--label"],
+};
+const DATA_SPECS = {
+  echo: { short: "neE" },
+  printf: { shortValue: "v" },
+  cat: { short: "nbsAETuvet", long: ["--number", "--number-nonblank", "--squeeze-blank", "--show-all", "--show-ends", "--show-tabs", "--show-nonprinting"] },
+  grep: GREP_SPEC,
+  egrep: GREP_SPEC,
+  fgrep: GREP_SPEC,
+  rg: {
+    short: "nNiIlcvwxFUuSsHhzpPoa",
+    shortValue: "egtTABCmMjE",
+    digits: true,
+    long: ["--hidden", "--no-ignore", "--line-number", "--no-line-number", "--ignore-case", "--smart-case", "--case-sensitive", "--files", "--files-with-matches", "--files-without-match", "--count", "--count-matches", "--invert-match", "--word-regexp", "--line-regexp", "--fixed-strings", "--multiline", "--json", "--vimgrep", "--no-heading", "--heading", "--with-filename", "--no-filename", "--only-matching", "--follow", "--stats", "--trim", "--pcre2", "--text", "--no-messages", "--quiet", "--color"],
+    longValue: ["--glob", "--iglob", "--type", "--type-not", "--regexp", "--max-count", "--max-depth", "--context", "--after-context", "--before-context", "--color", "--max-filesize", "--sort", "--sortr"],
+  },
+  // sed: no -i (it writes files), and a script with no `e` (GNU sed runs it as a command) or `w`.
+  sed: { short: "nErsuz", shortValue: "e", long: ["--quiet", "--silent", "--regexp-extended", "--posix", "--separate", "--unbuffered", "--null-data", "--sandbox", "--debug"], longValue: ["--expression", "--line-length"], check: (args) => !args.some((a) => !a.startsWith("-") && /(?:^|[;{}\n]\s*)[ew]\b|s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[gpiImM0-9]*[ew]/.test(a)) },
+  // awk: no `system(`, no pipe to or from a command, no -f program file, no in-place edit.
+  awk: { shortValue: "Fv", long: ["--posix", "--traditional"], longValue: ["--field-separator", "--assign"], check: (args) => !args.some((a) => /system\s*\(|\||getline/.test(a)) },
+  // make: its recipes are the project's (a stated limit); no makefile from stdin.
+  make: { short: "knsBeiqrRSt", shortValue: "CjfoWI", digits: true, long: ["--keep-going", "--dry-run", "--just-print", "--silent", "--quiet", "--always-make", "--ignore-errors", "--question", "--no-builtin-rules", "--print-directory", "--no-print-directory"], longValue: ["--directory", "--jobs", "--file", "--makefile"], fileValue: true },
+  "write-output": { ps: { "-noenumerate": 0, "-inputobject": 1 } },
+  "write-host": { ps: { "-nonewline": 0, "-foregroundcolor": 1, "-backgroundcolor": 1, "-separator": 1, "-object": 1 } },
+  "select-string": { ps: { "-pattern": 1, "-path": 1, "-literalpath": 1, "-simplematch": 0, "-casesensitive": 0, "-context": 1, "-notmatch": 0, "-allmatches": 0, "-quiet": 0, "-list": 0, "-raw": 0, "-encoding": 1, "-include": 1, "-exclude": 1, "-inputobject": 1 } },
+  findstr: { slash: true },
+  true: {},
+  ":": {},
+};
+DATA_SPECS.gawk = DATA_SPECS.mawk = DATA_SPECS.nawk = DATA_SPECS.awk;
+DATA_SPECS.gmake = DATA_SPECS.make;
+DATA_SPECS.gsed = DATA_SPECS.sed;
+DATA_SPECS.sls = DATA_SPECS["select-string"];
+
+/** Pure sinks: a later pipeline stage that only shows, counts, sorts or saves the text. */
+const SINK_SPECS = {
+  wc: { short: "lwcmL", long: ["--lines", "--words", "--bytes", "--chars", "--max-line-length"] },
+  head: { short: "qvz", shortValue: "nc", digits: true, longValue: ["--lines", "--bytes"], long: ["--quiet", "--silent", "--verbose"] },
+  tail: { short: "qvzfF", shortValue: "nc", digits: true, longValue: ["--lines", "--bytes"], long: ["--quiet", "--silent", "--verbose", "--follow"] },
+  sort: { short: "bdfghiMnRrsuVz", shortValue: "kt", long: ["--reverse", "--numeric-sort", "--unique", "--ignore-case", "--version-sort", "--human-numeric-sort"], longValue: ["--key", "--field-separator"] },
+  uniq: { short: "cdDiuz", shortValue: "fsw", long: ["--count", "--repeated", "--unique", "--ignore-case"] },
+  cut: { short: "sn", shortValue: "dfcb", long: ["--complement", "--only-delimited"], longValue: ["--delimiter", "--fields", "--characters", "--bytes"] },
+  tr: { short: "cdsC", long: ["--delete", "--squeeze-repeats", "--complement"] },
+  less: { short: "RSNFXi" },
+  more: {},
+  tee: { short: "ai", long: ["--append", "--ignore-interrupts"], fileOperands: true },
+  "out-null": { ps: {} },
+  "select-object": { ps: { "-first": 1, "-last": 1, "-skip": 1, "-property": 1, "-expandproperty": 1, "-unique": 0, "-index": 1 } },
+  "measure-object": { ps: { "-line": 0, "-word": 0, "-character": 0, "-property": 1, "-sum": 0, "-average": 0, "-maximum": 0, "-minimum": 0 } },
+  clip: {},
+  "clip.exe": {},
+};
+SINK_SPECS.select = SINK_SPECS["select-object"];
+SINK_SPECS.measure = SINK_SPECS["measure-object"];
+for (const [k, v] of Object.entries(DATA_SPECS)) if (!(k in SINK_SPECS) && /grep|^rg$|select-string|^sls$|findstr/.test(k)) SINK_SPECS[k] = v;
+
+/** A file the hook reads as a manifest or lockfile: a shell write to it is not text. */
+const LOCKFILES = new Set(["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock", "cargo.lock", "poetry.lock", "uv.lock", "pdm.lock", "go.sum", "pipfile.lock"]);
+const manifestFile = (target) => manifestKind(String(target)) !== null || LOCKFILES.has(basename(String(target)).toLowerCase());
+
+/** Whether `args` hold only options `spec` lists (and, with `fileOperands`, no operand naming a manifest or lockfile). */
+function optionsAllowed(args, spec) {
+  for (let i = 0; i < args.length; i++) {
+    tick();
+    const a = args[i];
+    if (spec.ps) {
+      if (!a.startsWith("-") || a === "-") continue;
+      const name = a.toLowerCase().replace(/:.*$/, "");
+      if (!(name in spec.ps)) return false;
+      if (spec.ps[name] === 1 && !a.includes(":")) i++;
+      continue;
+    }
+    if (spec.slash) {
+      if (a.startsWith("/") && !/^\/[a-z](?::.*)?$/i.test(a)) return false;
+      continue;
+    }
+    if (a === "--") {
+      if (spec.fileOperands && args.slice(i + 1).some(manifestFile)) return false;
+      return true;
+    }
+    if (!a.startsWith("-") || a === "-") {
+      if (spec.fileOperands && manifestFile(a)) return false;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      const name = eq > 0 ? a.slice(0, eq) : a;
+      if (spec.longValue?.includes(name)) {
+        if (spec.fileValue && (name === "--file" || name === "--makefile") && (eq > 0 ? a.slice(eq + 1) : args[i + 1]) === "-") return false;
+        if (eq < 0 && !spec.long?.includes(name)) i++;
+        continue;
+      }
+      if (eq < 0 && spec.long?.includes(name)) continue;
+      return false;
+    }
+    if (spec.digits && /^-\d+$/.test(a)) continue;
+    for (let k = 1; k < a.length; k++) {
+      const c = a[k];
+      if (spec.shortValue?.includes(c)) {
+        const value = k + 1 < a.length ? a.slice(k + 1) : args[++i];
+        if (spec.fileValue && c === "f" && value === "-") return false;
+        break;
+      }
+      if (spec.digits && /\d/.test(c)) continue;
+      if (!spec.short?.includes(c)) return false;
+    }
+  }
+  return true;
+}
+
+/** git's commands whose words are text, with their options. */
+const GIT_SPECS = {
+  commit: { short: "aqsvpn", shortValue: "mFCc", long: ["--amend", "--no-edit", "--allow-empty", "--allow-empty-message", "--no-verify", "--signoff", "--quiet", "--all", "--verbose", "--dry-run", "--short", "--porcelain"], longValue: ["--message", "--file", "--author", "--date", "--fixup", "--squash", "--trailer", "--cleanup"] },
+  log: { short: "pi", shortValue: "nSGL", digits: true, long: ["--oneline", "--stat", "--name-only", "--name-status", "--graph", "--all", "--decorate", "--reverse", "--no-merges", "--merges", "--patch", "--follow", "--first-parent", "--regexp-ignore-case", "--all-match", "--no-patch", "--abbrev-commit"], longValue: ["--grep", "--author", "--since", "--until", "--after", "--before", "--format", "--pretty", "--max-count", "--date"] },
+  show: { short: "sp", long: ["--stat", "--name-only", "--name-status", "--oneline", "--no-patch", "--patch"], longValue: ["--pretty", "--format"] },
+  diff: { shortValue: "U", long: ["--stat", "--cached", "--staged", "--name-only", "--name-status", "--shortstat", "--numstat", "--no-color", "--color", "--word-diff", "--ignore-all-space", "--ignore-space-change", "--patch"], longValue: ["--unified", "--diff-filter"] },
+  status: { short: "sbuz", long: ["--short", "--branch", "--porcelain", "--untracked-files", "--ignored", "--long"] },
+  grep: { short: "nilwvcEFPhHIqz", shortValue: "efABC", digits: true, long: ["--cached", "--untracked", "--no-index", "--line-number", "--ignore-case", "--word-regexp", "--invert-match", "--count", "--extended-regexp", "--fixed-strings", "--perl-regexp", "--files-with-matches", "--name-only", "--full-name", "--heading", "--break", "--all-match", "--recurse-submodules"], longValue: ["--max-depth", "--context", "--after-context", "--before-context"] },
+  tag: { short: "almndfsv", shortValue: "mFu", long: ["--list", "--annotate", "--delete", "--force", "--sign"], longValue: ["--message", "--file", "--sort", "--contains"] },
+};
+/** gh's text commands (`gh pr create --body '...'`), with their options. */
+const GH_SPEC = {
+  short: "dwf",
+  shortValue: "tbFBHlamrRLSq",
+  long: ["--draft", "--web", "--fill", "--fill-first", "--fill-verbose", "--no-maintainer-edit", "--dry-run"],
+  longValue: ["--title", "--body", "--body-file", "--base", "--head", "--label", "--assignee", "--reviewer", "--milestone", "--repo", "--project", "--json", "--jq", "--template", "--state", "--limit", "--search", "--author", "--add-label", "--remove-label", "--comments", "--reason"],
+};
+
+/**
+ * Whether a simple command is a data program's, by its program and options (J1 (a)): the words are
+ * then text, not a command. `git -c`, `git grep -O`, `sed -i`, `awk 'BEGIN{system(...)}'`, `make -f -`
+ * are not.
+ */
 function dataCommand(words) {
   const start = commandStart(words);
   if (start < 0) return false;
   if (start >= words.length) return true;
   const program = programName(words[start]);
-  if (DATA_PROGRAMS.has(program)) return true;
-  // `node -e '...'` / `-p`, `python -c '...'`: code given as text (a program that runs an install is a stated limit).
-  if (program === "node" && /^(?:-e|-p|--eval|--print|-pe)$/.test(words[start + 1] ?? "")) return true;
-  if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program) && words.slice(start + 1).find((a) => a === "-c" || !a.startsWith("-")) === "-c") return true;
-  const subs = words.slice(start + 1).filter((a) => !a.startsWith("-"));
-  if (program === "gh") return GH_DATA.has(subs[0] ?? "") && GH_DATA_VERBS.has(subs[1] ?? "");
-  return program === "git" && GIT_DATA.has(subs[0] ?? "");
+  const args = words.slice(start + 1);
+  if (program === "git") {
+    let i = 0;
+    while (i < args.length && args[i].startsWith("-")) {
+      if (args[i] === "-C") i += 2;
+      else if (args[i] === "--no-pager" || args[i] === "-P") i++;
+      else return false;
+    }
+    const spec = GIT_SPECS[args[i] ?? ""];
+    return Boolean(spec) && optionsAllowed(args.slice(i + 1), spec);
+  }
+  if (program === "gh") {
+    const subs = args.filter((a) => !a.startsWith("-"));
+    return GH_DATA.has(subs[0] ?? "") && GH_DATA_VERBS.has(subs[1] ?? "") && args[0] === subs[0] && args[1] === subs[1] && optionsAllowed(args.slice(2), GH_SPEC);
+  }
+  // `node -e '...'` / `-p`, `python -c '...'`: code given as text, nothing else on the line before it
+  // (a program that runs an install is a stated limit).
+  if (program === "node") return /^(?:-e|-p|--eval|--print|-pe)$/.test(args[0] ?? "");
+  if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program)) return args[0] === "-c";
+  // docker and podman: the command runs in a container (a stated limit); their own options set it up.
+  if (program === "docker" || program === "podman") return ["run", "exec", "build", "compose", "buildx", "create"].includes(args.find((a) => !a.startsWith("-")) ?? "");
+  const spec = DATA_SPECS[program];
+  return Boolean(spec) && optionsAllowed(args, spec) && (!spec.check || spec.check(args));
+}
+
+/** A later pipeline stage that runs nothing it is given: a listed sink, or a data program. */
+function sinkCommand(words) {
+  const start = commandStart(words);
+  if (start < 0) return false;
+  if (start >= words.length) return true;
+  const spec = SINK_SPECS[programName(words[start])];
+  return (Boolean(spec) && optionsAllowed(words.slice(start + 1), spec)) || dataCommand(words);
 }
 
 /**
@@ -3422,12 +3609,12 @@ function dataCommand(words) {
 let accountTop = null;
 
 /** R8-2 for one simple command that holds a detector hit: null when read whole, else the part not read. */
-function accountCommand(words, dialect, depth) {
+function accountCommand(words, dialect, depth, exempt = true) {
   tick();
   // Past the reader's own depth the command is not read (a runner chain of any length is held, never followed).
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // A command with no hit has nothing to account for; one whose program takes the words as data neither.
-  if (!detectsInWords(words) || dataCommand(words)) return null;
+  if (!detectsInWords(words) || (exempt && dataCommand(words))) return null;
   if (depth === 0 || accountTop === null) {
     let memo = null;
     accountTop = () => (memo ??= quietly(() => commandInstalls(words, depth, dialect)));
@@ -3441,11 +3628,13 @@ function accountCommand(words, dialect, depth) {
   if (start < 0) return "a prefix or keyword this hook does not read";
   if (start >= words.length) return null;
   for (const w of words.slice(0, start)) if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && MANAGER_SETTING.test(w)) return `the setting ${w.slice(0, w.indexOf("="))}`;
+  // J2: xargs adds operands read from its input, which this hook cannot see.
+  if (words.slice(0, start).some((w) => programName(w) === "xargs")) return "operands xargs reads from its input";
   let program = programName(words[start]);
   const args = words.slice(start + 1);
   if (PACKAGE_MANAGERS.has(program.replace(/@[^@]*$/, ""))) program = program.replace(/@[^@]*$/, "");
   if (/^pip\d+(?:\.\d+)*$/.test(program)) program = "pip";
-  if (dataCommand(words)) return null;
+  if (exempt && dataCommand(words)) return null;
   if (program === "git" || program === "gh") return `a ${program} command this hook does not read`;
   if (program === "eval") return args.length > 0 ? accountLine(args.join(" "), "bash", depth + 1) : null;
   if (dialect === "powershell" && (program === "invoke-expression" || program === "iex")) {
@@ -3614,6 +3803,10 @@ function accountPip(args, table, reader) {
   const read = readOptions(head.rest, table);
   if (read.bad) return `the option ${read.bad}`;
   const values = new Map([...head.values, ...read.values]);
+  // J2: a requirements or constraints file read from stdin is not one this hook can read.
+  for (const k of ["-r", "--requirement", "--requirements", "-c", "--constraint", "--constraints"]) {
+    for (const v of values.get(k) ?? []) if (v === "-" || /^(?:\/dev\/(?:stdin|fd\/\d+)|con)$/i.test(v)) return `${k} ${v}, a file read from the command's input`;
+  }
   const index = ["-i", "--index-url", "--index", "--default-index"].flatMap((k) => values.get(k) ?? []);
   for (const v of [...index, ...(values.get("--extra-index-url") ?? [])]) if (sourceKind(v) === "unknown") return `the index ${v}`;
   if (values.has("--no-index") || (index.length > 0 && index.every((v) => sourceKind(v) === "private") && !(values.get("--extra-index-url") ?? []).some((v) => sourceKind(v) === "public"))) return null;
