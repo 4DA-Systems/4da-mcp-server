@@ -3,11 +3,12 @@
  * Strict evidence of the task's packages (contract K2), on the canonical command grammar (briefing-canonical.ts):
  * - the operands of a command the grammar reads whole, each a (name as written, ecosystem) pair;
  * - the entries of a manifest snippet it reads whole (manifestPairs), each a pair in that manifest's ecosystem;
- * - round 8, D1(a): a token of the form name@spec, name==spec (and PEP 440's other operators), `name = "spec"` or
- *   `"name": "spec"` anywhere in the task, prose or code span: the form itself is the evidence, position-free. Where
- *   the form decides the ecosystem (PEP 440: PyPI; `"name": "spec"`: npm; a Go module path: Go) it is a pair that
- *   waits; otherwise its spec is checked for every ecosystem a declaration gives that name;
- * - round 8, D1(b): whether a version-shaped token is left over that none of those ties to a package.
+ * - round 8, D1(a): a token of the form name@spec, name==spec (and PEP 440's other operators, the bare `<`, `>`,
+ *   `!=`, `~=`, `===` included), `name = "spec"` or `"name": "spec"` anywhere in the task, prose or code span: the
+ *   form itself ties the spec to the name written right before it, and to no other. Where the form decides the
+ *   ecosystem (PEP 440: PyPI; `"name": "spec"`: npm; a Go module path: Go) it is a pair that waits; otherwise its
+ *   spec is checked for every ecosystem a declaration gives that name. These are versions the briefing happens to
+ *   read on a package, checked in addition; never a complete reading: the declared `version` is (K1, round 9);
  * A command or snippet the grammar names but cannot read whole is said by its manager and verb (or "a manifest
  * snippet") only (K3); nothing of it is offered, repeated or looked up. What the grammar consumed is consumed by
  * OCCURRENCE (D4): the same word elsewhere in the task is read by the other readers as before.
@@ -115,7 +116,7 @@ export interface StrictPair {
   /** From a command that installs from the task's own private index (`-i <url>`): never sent. */
   privateIndex?: boolean;
   /** How the task gives it: an operand of a command, or an entry of a manifest snippet (round 6, item 1). */
-  seen?: "command" | "manifest";
+  seen?: "command" | "manifest" | "form";
 }
 
 /**
@@ -148,13 +149,9 @@ export interface StrictEvidence {
   anyCommand: boolean;
   /** D1(a): the written specs of the task tied to a name by their form. */
   formPairs: FormPair[];
-  /** D1(b): a version-shaped token of the task that nothing ties to a package. */
-  leftoverVersion: boolean;
 }
 
-const TOOLCHAIN = new Set(["python", "python3", "py", "node", "nodejs", "node.js", "go", "golang", "rust", "rustc", "cargo", "java", "jdk", "ruby", "php", "dotnet", ".net", "deno", "bun", "npm", "pnpm", "yarn", "pip", "msrv", "edition"]);
 const META_KEYS = new Set(["version", "name", "edition", "description", "license", "authors", "author", "python", "rust-version", "readme", "homepage", "repository", "main", "type", "module", "types", "engines", "packagemanager", "private", "requires-python"]);
-const VERSION_TOKEN = /^(?:[<>=!~^]{1,3})?v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.]+)?$/;
 
 function countInto(map: Map<string, number>, words: readonly string[]): void {
   for (const w of words) map.set(w, (map.get(w) ?? 0) + 1);
@@ -231,7 +228,7 @@ export function strictEvidence(task: string): StrictEvidence {
   };
   for (const m of text.matchAll(/(?<![\w@\/.-])([a-z0-9.-]+\.[a-z]{2,}\/[^\s@`'"]+)@(v[^\s,;`'")\]]+)/gi)) addForm(m[1], m[2], ["Go"]);
   for (const m of text.matchAll(/(?<![\w@\/.-])((?:@[a-z0-9][\w.-]*\/)?[A-Za-z0-9][\w.-]*)@([^\s,;`'")\]@]+)/g)) if (!m[2].startsWith("npm:")) addForm(m[1], m[2], null);
-  for (const m of text.matchAll(/(?<![\w@\/.-])([A-Za-z0-9][\w.-]*)(?:\[[\w,.-]*\])?((?:===?|~=|!=|>=|<=)\s*[\w.*+!-]+(?:\s*,\s*(?:===?|~=|!=|>=|<=|<|>)\s*[\w.*+!-]+)*)/g)) addForm(m[1], m[2].replace(/\s+/g, ""), ["PyPI"]);
+  for (const m of text.matchAll(/(?<![\w@\/.-])([A-Za-z0-9][\w.-]*)(?:\[[\w,.-]*\])?((?:===?|~=|!=|>=|<=|<(?=\s*\d)|>(?=\s*\d))\s*[\w.*+!-]+(?:\s*,\s*(?:===?|~=|!=|>=|<=|<|>)\s*[\w.*+!-]+)*)/g)) addForm(m[1], m[2].replace(/\s+/g, ""), ["PyPI"]);
   for (const m of text.matchAll(/(?<![\w."-])([A-Za-z0-9][\w.-]*)\s*=\s*"([^"\n]{1,60})"/g)) addForm(m[1], m[2], null);
   for (const m of text.matchAll(/"((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)"\s*:\s*"([^"\n]{1,60})"/g)) addForm(m[1], m[2], ["npm"]);
   // A form whose ecosystem is decided is a pair that waits, unless the grammar holds every occurrence of its name
@@ -242,31 +239,11 @@ export function strictEvidence(task: string): StrictEvidence {
       const key = `${ecosystem}\0${f.name}\0${f.spec}`;
       if (seen.has(key) || pairs.some((p) => p.ecosystem === ecosystem && p.name === f.name && p.version === f.spec) || pairs.length >= MAX_PAIRS) continue;
       seen.add(key);
-      pairs.push({ ecosystem, name: f.name, version: f.spec, seen: "manifest" });
+      pairs.push({ ecosystem, name: f.name, version: f.spec, seen: "form" });
     }
   }
 
-  // D1(b): a version-shaped token nothing ties to a package (not a date, an IP, a toolchain's version, nor a spec
-  // some pair, form or command already holds).
-  const held = new Set<string>([...pairs.flatMap((p) => (p.version ? [p.version] : [])), ...formPairs.map((f) => f.spec), ...commands.flatMap((c) => c.words)]);
-  const bare = (v: string) => v.replace(/^[<>=!~^]+/, "").replace(/^v/i, "");
-  const heldBare = new Set([...held].map(bare));
-  let leftoverVersion = false;
-  for (let i = 0; i < tokens.length && !leftoverVersion; i++) {
-    let t = tokens[i];
-    let a = 0;
-    let b = t.length;
-    while (a < b && "`\"'([{<".includes(t[a])) a++;
-    while (b > a && "`\"')]}>.,;:!?".includes(t[b - 1])) b--;
-    t = t.slice(a, b);
-    if (!VERSION_TOKEN.test(t)) continue;
-    if (/^\d{4}\.\d{1,2}\.\d{1,2}$/.test(t) || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(t)) continue;
-    const prev = (tokens[i - 1] ?? "").replace(/[^\w.]/g, "").toLowerCase();
-    if (TOOLCHAIN.has(prev)) continue;
-    if (held.has(t) || heldBare.has(bare(t)) || consumedHere(t)) continue;
-    leftoverVersion = true;
-  }
-  return { pairs, unreadable, requirementFiles, privateNames: manifestNotWhole ? [] : manifest.privateNames, manifestNotWhole, commands, namedHere, consumedHere, anyCommand: commands.length > 0, formPairs, leftoverVersion };
+  return { pairs, unreadable, requirementFiles, privateNames: manifestNotWhole ? [] : manifest.privateNames, manifestNotWhole, commands, namedHere, consumedHere, anyCommand: commands.length > 0, formPairs };
 }
 
 /**
@@ -301,19 +278,23 @@ function shellUnits(task: string): string[] {
 }
 
 /**
- * Whether `word` stands AFTER a package manager's name in a unit (line, continued line, fenced block) (D3). A
- * command's operands follow its program: "Set NPM_TOKEN in the CI config, then npm install ky" has NPM_TOKEN and CI
- * before npm, where no operand of it stands (G7c d01).
+ * The words that stand AFTER a package manager's name in a unit (line, continued line, fenced block) (D3), as a
+ * predicate. A command's operands follow its program: "Set NPM_TOKEN in the CI config, then npm install ky" has
+ * NPM_TOKEN and CI before npm, where no operand of it stands (G7c d01). One pass over the task, whatever the number of
+ * words asked (round 9: 45,000 lines and 100 dismissed words took 3.6 s when each word rescanned the task).
  */
-export function standsByManager(task: string, word: string): boolean {
-  const w = word.normalize("NFKC").toLowerCase();
-  if (!w) return false;
-  const esc = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const near = new RegExp(`(?:^|[^\\p{L}\\p{N}_@/.-])${esc}(?=$|[^\\p{L}\\p{N}_-])`, "iu");
-  return shellUnits(task.length > 200_000 ? task.slice(0, 200_000) : task).some((u) => {
+export function wordsAfterManager(task: string): (word: string) => boolean {
+  const after = new Set<string>();
+  for (const u of shellUnits(task.length > 200_000 ? task.slice(0, 200_000) : task)) {
     const at = u.search(MANAGER_NAME);
-    return at >= 0 && near.test(u.slice(at + 1).toLowerCase());
-  });
+    if (at < 0) continue;
+    for (const raw of u.slice(at + 1).toLowerCase().split(/[^\p{L}\p{N}_@/.\-]+/u)) {
+      let e = raw.length;
+      while (e > 0 && raw[e - 1] === ".") e--;
+      if (e > 0) after.add(raw.slice(0, e));
+    }
+  }
+  return (word: string) => after.has(word.normalize("NFKC").toLowerCase());
 }
 
 const asInstallCommand = (c: CanonicalCommand): InstallCommand => ({
@@ -490,8 +471,12 @@ export function manifestPairs(task: string): { pairs: StrictPair[]; unreadable: 
  * Round 7, C3: the task's raw text names a package source of its own. The presence of the word is the evidence;
  * which package it applies to is not parsed. Case-insensitive.
  */
-/** How an agent gets a clean answer for a command written into a sentence (round 7b, item 3). */
-export const CLEAN_COMMAND = "For a clean answer you may also pass the command on its own line or in a code span, with only package names after the verb (`npm install x y`), and call again: keep the user's words as the request and add the line, do not rewrite the request.";
+/**
+ * Round 9, E3: what is true of a command the grammar cannot read whole for its words (a comma, a word that is no
+ * plain name, a dismissed word of a command written into a sentence). No remedy is offered: none reached a clean
+ * answer (0 of 81 tries in the seventh check).
+ */
+export const STAYS_REVIEW = "This stays review_needed for the command as the task writes it: it is not an error. Check what the command installs with dependency_check before running it.";
 
 /**
  * Round 8, D2: C3 is a courtesy check on an exact list, not a promise about sources in general. When the task holds
@@ -503,13 +488,13 @@ export const CLEAN_COMMAND = "For a clean answer you may also pass the command o
 export const SOURCE_SPELLINGS: readonly string[] = [
   "--registry", "--config.registry=", "--userconfig", "registry=", ":registry", "--index-url", "--extra-index-url", "--default-index", "--index", "--find-links", "pip -i <index>", "pip -f <links>",
   "--source", "--git", "--path", "npmRegistryServer", "[[tool.uv.index]]", "[[index]] (uv.toml)", "[tool.uv.sources]", "[[tool.poetry.source]]", "[install.scopes] (bunfig.toml)",
-  "[registries]", "[registries.<name>]", "[registry]", "[source.<name>]", "[patch.<name>]", "replace <module> => (go.mod)",
+  "[registries]", "[registries.<name>]", "[registry]", "[source.<name>]", "[patch.<name>]", "a go.mod replace directive with =>, single-line or block",
   "npm_config_registry", "NPM_CONFIG_USERCONFIG", "YARN_REGISTRY", "YARN_NPM_REGISTRY_SERVER", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_FIND_LINKS", "UV_INDEX", "UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL",
   "CARGO_REGISTRIES_<NAME>_INDEX", "CARGO_REGISTRY_DEFAULT", "GOPRIVATE", "GOPROXY", "GONOSUMDB", "GONOPROXY",
 ];
 /** The options, settings and tables of SOURCE_SPELLINGS, in their own case. */
 const SOURCE_WORDS =
-  /--registry\b|--config\.registry=|--userconfig\b|(?:^|[\s"'`])registry\s*=|:registry\b|--index-url\b|--extra-index-url\b|--default-index\b|--index\b|--find-links\b|--source\b|--git\b|--path\b|npmRegistryServer|\[\[tool\.uv\.index\]\]|\[\[index\]\]|\[tool\.uv\.sources\]|\[\[tool\.poetry\.source\]\]|\[install\.scopes\]|\[registries[.\]]|\[registry\]|\[source\.|\[patch\.|\breplace\s+\S+(?:\s+v\S+)?\s+=>/;
+  /--registry\b|--config\.registry=|--userconfig\b|(?:^|[\s"'`])registry\s*=|:registry\b|--index-url\b|--extra-index-url\b|--default-index\b|--index\b|--find-links\b|--source\b|--git\b|--path\b|npmRegistryServer|\[\[tool\.uv\.index\]\]|\[\[index\]\]|\[tool\.uv\.sources\]|\[\[tool\.poetry\.source\]\]|\[install\.scopes\]|\[registries[.\]]|\[registry\]|\[source\.|\[patch\.|\breplace\s+\S+(?:\s+v\S+)?\s+=>|\breplace\s*\(\s*\n[^)]{0,2000}?=>/;
 /** The environment variables of SOURCE_SPELLINGS, in any case. */
 const SOURCE_ENV =
   /(?<![A-Za-z0-9_])(?:npm_config_registry|npm_config_userconfig|npm_config_@[\w.-]+:registry|yarn_registry|yarn_npm_registry_server|pip_index_url|pip_extra_index_url|pip_find_links|uv_index|uv_index_url|uv_default_index|uv_extra_index_url|cargo_registries_\w+_index|cargo_registry_default|goprivate|goproxy|gonosumdb|gonoproxy)(?![A-Za-z0-9_])/i;
@@ -555,4 +540,4 @@ export function unreadCommand(task: string, accounted: (ecosystem: CheckEcosyste
 export const unreadableReason = (c: InstallCommand) =>
   c.manager === "a manifest"
     ? `This task holds a manifest snippet this briefing could not read whole (${c.unreadable}): check what it adds with dependency_check.`
-    : `This task holds a command (${[c.manager, c.verb].filter(Boolean).join(" ")}) this briefing could not read whole (${c.unreadable}): check what it installs with dependency_check.${/comma|not a plain package name/.test(c.unreadable ?? "") ? ` ${CLEAN_COMMAND}` : ""}`;
+    : `This task holds a command (${[c.manager, c.verb].filter(Boolean).join(" ")}) this briefing could not read whole (${c.unreadable}): check what it installs with dependency_check.${c.unreadable === "a comma in its list of packages" || (c.unreadable ?? "").startsWith("a word that is not a plain package name") || c.unreadable === "a redirection among its words" ? ` ${STAYS_REVIEW}` : ""}`;

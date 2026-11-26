@@ -48,14 +48,8 @@ describe("a separator ends the command's operands", () => {
     "npm install lodash || git push",
     "npm install lodash | tee log.txt",
     "npm install lodash & npm run dev",
-    "npm install lodash > out.txt",
-    "npm install lodash < in.txt",
-    "npm install lodash # then commit",
     "npm install lodash\ngit push origin main",
     "run `npm install lodash` then `git push`",
-    "npm install lodash 2>&1 zqx207",
-    "npm install lodash 2> err.log",
-    "npm install lodash &> out.log",
   ])("%s", async (task) => {
     const r = await brief(task);
     expect(named(r)).toEqual(["lodash"]);
@@ -73,7 +67,8 @@ describe("a separator ends the command's operands", () => {
 // an unlisted option) is looked up by no reader, its bundled names included: nothing of it is offered, repeated or
 // looked up, and the level is review_needed at most.
 describe("round 8, m10: a command not read whole is looked up by no reader", () => {
-  it.each(["npm install lodash // the util", "npm install lodash, then build it", "npm install lodash (the util) and test", "npm install lodash — the util"])("%s", async (task) => {
+  // Round 9, E2: a redirection or a shell comment is no end of the command: not read whole, nothing looked up.
+  it.each(["npm install lodash // the util", "npm install lodash, then build it", "npm install lodash (the util) and test", "npm install lodash — the util", "npm install lodash > out.txt", "npm install lodash < in.txt", "npm install lodash # then commit", "npm install lodash 2>&1 zqx207", "npm install lodash 2> err.log", "npm install lodash &> out.log"])("%s", async (task) => {
     const r = await brief(task);
     expect(named(r)).toEqual([]);
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");

@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { executeDependencyCheck } from "../tools/dependency-check.js";
-import { RAW_SOURCE, SOURCE_SPELLINGS, CLEAN_COMMAND } from "../tools/briefing-command-check.js";
+import { RAW_SOURCE, SOURCE_SPELLINGS, STAYS_REVIEW } from "../tools/briefing-command-check.js";
 import { POETRY_SPEC } from "../tools/briefing-canonical.js";
 import { validateToolArgs } from "../tool-args.js";
 import { TOOL_REGISTRY } from "../schema-registry.js";
@@ -51,19 +51,20 @@ describe("D1: a version the task writes is checked, or holds review_needed", () 
     ["Pin zqxcrit4 to 1.0.0 in package.json.", "npm", "zqxcrit4"],
     ["Add zqxcrit4 version 1.0.0", "npm", "zqxcrit4"],
     ["Downgrade node-forge to 0.10.0", "npm", "node-forge"],
-  ])("(b) %s with no declared version is review_needed, said by the fixed reason", async (task, ecosystem, name) => {
+  ])("(round 9, E1) %s with no declared version is confirmation_needed: the declaration is incomplete", async (task, ecosystem, name) => {
     npm();
     const r = await brief({ task, packages: [{ ecosystem, name, public: true }] });
-    expect(level(r)).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toContain("The task writes a version this briefing cannot tie to a package. Declare `version` for each package you declare public");
-    expect(r.task_packages.next_step).toContain("Declare `version` for each package you declare public");
+    expect(level(r)).toBe("confirmation_needed");
+    expect(r.task_packages.status).toBe("confirmation_needed");
+    expect(r.delegation_assessment.reason).toContain('State `version` for each package you declared public: the version or range you will write, or "latest" for the newest release');
+    expect(r.task_packages.next_step).toContain(`(checked at latest so far: ${name})`);
   });
 
   it("(b) the declared version is checked: Pin zqxcrit4 to 1.0.0 declared 1.0.0 is human_only; declared latest is the caller's statement", async () => {
     npm();
     expect(level(await brief({ task: "Pin zqxcrit4 to 1.0.0 in package.json.", packages: [{ ecosystem: "npm", name: "zqxcrit4", version: "1.0.0", public: true }] }))).toBe("human_only");
     const r = await brief({ task: "Pin zqxcrit4 to 1.0.0 in package.json.", packages: [{ ecosystem: "npm", name: "zqxcrit4", version: "latest", public: true }] });
-    expect(r.delegation_assessment.reason).not.toContain("cannot tie to a package");
+    expect(r.delegation_assessment.reason).not.toContain("State `version`");
   });
 
   it.each([
@@ -84,10 +85,11 @@ describe("D1: a version the task writes is checked, or holds review_needed", () 
     expect(JSON.stringify(r.requested_versions ?? [])).not.toContain("1.0.0");
   });
 
-  it("(c) the schema says it, with no 'default: the version the task writes'", () => {
+  it("(c, round 9) the schema says `version` is needed for a complete answer, first", () => {
     const schema = JSON.stringify(TOOL_REGISTRY.what_should_i_know.definition);
     expect(schema).not.toContain("default: the version the task writes");
-    expect(schema).toContain("a version the task writes that no form ties to a package, with no `version` declared, holds review_needed");
+    expect(schema).not.toContain("no form ties to a package");
+    expect(schema).toContain("Needed for a complete answer: the version or range you will write");
   });
 });
 
@@ -99,7 +101,7 @@ describe("D2: C3 is a courtesy check on an exact list", () => {
     "--default-index": "uv add --default-index https://p.corp zqxok", "--index": "uv add --index https://p.corp zqxok", "--find-links": "pip install --find-links ./wheels zqxok", "pip -i <index>": "pip install -i https://p.corp zqxok",
     "pip -f <links>": "pip install -f ./wheels zqxok", "--source": "poetry add --source corp zqxok", "--git": "cargo install --git https://g.corp/x zqxok", "--path": "cargo install --path ../x", "npmRegistryServer": "npmRegistryServer: https://n.corp",
     "[[tool.uv.index]]": "[[tool.uv.index]]", "[[index]] (uv.toml)": "[[index]]", "[tool.uv.sources]": "[tool.uv.sources]", "[[tool.poetry.source]]": "[[tool.poetry.source]]", "[install.scopes] (bunfig.toml)": "[install.scopes]",
-    "[registries]": "[registries]", "[registries.<name>]": "[registries.corp]", "[registry]": "[registry]", "[source.<name>]": "[source.crates-io]", "[patch.<name>]": "[patch.crates-io]", "replace <module> => (go.mod)": "replace corp.example/x => ../x",
+    "[registries]": "[registries]", "[registries.<name>]": "[registries.corp]", "[registry]": "[registry]", "[source.<name>]": "[source.crates-io]", "[patch.<name>]": "[patch.crates-io]", "a go.mod replace directive with =>, single-line or block": "replace corp.example/x => ../x",
     npm_config_registry: "npm_config_registry=https://n.corp", NPM_CONFIG_USERCONFIG: "NPM_CONFIG_USERCONFIG=./x", YARN_REGISTRY: "YARN_REGISTRY=https://n.corp", YARN_NPM_REGISTRY_SERVER: "YARN_NPM_REGISTRY_SERVER=https://n.corp",
     PIP_INDEX_URL: "PIP_INDEX_URL=https://p.corp", PIP_EXTRA_INDEX_URL: "PIP_EXTRA_INDEX_URL=https://p.corp", PIP_FIND_LINKS: "PIP_FIND_LINKS=./w", UV_INDEX: "UV_INDEX=https://p.corp", UV_INDEX_URL: "UV_INDEX_URL=https://p.corp",
     UV_DEFAULT_INDEX: "UV_DEFAULT_INDEX=https://p.corp", UV_EXTRA_INDEX_URL: "UV_EXTRA_INDEX_URL=https://p.corp", "CARGO_REGISTRIES_<NAME>_INDEX": "CARGO_REGISTRIES_CORP_INDEX=https://c.corp", CARGO_REGISTRY_DEFAULT: "CARGO_REGISTRY_DEFAULT=corp",
@@ -122,7 +124,7 @@ describe("D2: C3 is a courtesy check on an exact list", () => {
   });
 });
 
-describe("D3: a dismissed word on a line with a package manager's name keeps review_needed", () => {
+describe("D3: a dismissed word after a package manager's name keeps review_needed", () => {
   it.each([
     '```\n& "C:\\Program Files\\nodejs\\npm.cmd" install zqxevil\n```',
     "```\n& 'C:\\Program Files\\nodejs\\npm.cmd' install zqxevil\n```",
@@ -136,7 +138,7 @@ describe("D3: a dismissed word on a line with a package manager's name keeps rev
     npm();
     const r = await brief({ task, packages: [], not_packages: ["zqxevil"] });
     expect(level(r)).not.toBe("safe_to_delegate");
-    expect(r.delegation_assessment.reason).toMatch(/you said zqxevil is not a package; it stands (?:on a line with a package manager's name|where a package name stands)/i);
+    expect(r.delegation_assessment.reason).toMatch(/you said zqxevil is not a package; it stands (?:after a package manager's name|where a package name stands)/i);
   });
   it("a word before the manager's name on its line is no operand of it (G7c d01)", async () => {
     npm();
@@ -235,16 +237,16 @@ describe("minors", () => {
   it("m7: 110 operands: review_needed with the fixed reason, never an unanswerable confirmation_needed", async () => {
     npm();
     const names = Array.from({ length: 110 }, (_, i) => `zqxbulk${i}`);
-    const r = await brief({ task: `\`\`\`\nnpm install ${names.join(" ")}\n\`\`\``, packages: names.slice(0, 100).map((name) => ({ ecosystem: "npm", name, public: true })) });
+    const r = await brief({ task: `\`\`\`\nnpm install ${names.join(" ")}\n\`\`\``, packages: names.slice(0, 100).map((name) => ({ ecosystem: "npm", name, version: "latest", public: true })) });
     expect(level(r)).toBe("review_needed");
     expect(r.delegation_assessment.reason).toContain("more than 100 names that may be packages");
   });
-  it("m8: CLEAN_COMMAND is not given for a command on its own line", async () => {
+  // Round 9, E3: no remedy; the truth for a command inside a sentence, a comma or a non-plain word.
+  it("E3: a dismissed word of a command inside a sentence says it stays review_needed, without a remedy", async () => {
     npm();
-    const r = await brief({ task: "npm install zqxok and", packages: [{ ecosystem: "npm", name: "zqxok", public: true }], not_packages: ["and"] });
-    expect(r.delegation_assessment.reason).not.toContain(CLEAN_COMMAND);
-    const s = await brief({ task: "Please npm install zqxok and wire it in", packages: [{ ecosystem: "npm", name: "zqxok", public: true }], not_packages: ["and", "wire", "it", "in"] });
-    expect(s.delegation_assessment.reason).toContain(CLEAN_COMMAND);
+    const s = await brief({ task: "Please npm install zqxok and wire it in", packages: [{ ecosystem: "npm", name: "zqxok", version: "latest", public: true }], not_packages: ["and", "wire", "it", "in"] });
+    expect(s.delegation_assessment.reason).toContain(STAYS_REVIEW);
+    expect(s.delegation_assessment.reason).not.toMatch(/clean answer/);
   });
   it.each(["npm ins zqxok", "npm isntall zqxok", "npm instal zqxok", "bun a zqxok"])("m9: %s is a command", async (task) => {
     npm();

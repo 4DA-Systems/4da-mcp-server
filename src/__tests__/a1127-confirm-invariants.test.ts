@@ -69,9 +69,10 @@ const KNOWN_TASKS = ["npm install crossenv", "npm install event-stream@3.3.6", "
 describe("I1: a declaration only adds checks", () => {
   const extras = [
     [],
-    [{ ecosystem: "npm", name: "fastify", public: true }],
-    [{ ecosystem: "npm", name: "zqx-extra", public: true }],
-    [{ ecosystem: "PyPI", name: "requests", public: true }],
+    // Round 9, E1: each public entry states its version (without one the call is confirmation_needed).
+    [{ ecosystem: "npm", name: "fastify", version: "latest", public: true }],
+    [{ ecosystem: "npm", name: "zqx-extra", version: "latest", public: true }],
+    [{ ecosystem: "PyPI", name: "requests", version: "latest", public: true }],
   ];
   it.each(KNOWN_TASKS.flatMap((t) => extras.map((e) => [t, e] as const)))("%s with %j: the bare call's lookups and conclusion stand", async (task, packages) => {
     const bare = await brief(task, { packages: [] });

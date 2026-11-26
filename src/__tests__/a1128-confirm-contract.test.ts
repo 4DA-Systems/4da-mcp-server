@@ -67,7 +67,7 @@ describe("K2: strict pairs wait until settled; a prose candidate is the caller's
     const entry = bare.task_packages.to_confirm.find((e: { name: string }) => e.name === "zqxdual");
     expect(entry.ecosystems.sort()).toEqual(["PyPI", "npm"]);
     expect(entry.hint).toMatch(/this project uses (npm and PyPI|PyPI and npm): declare it in each one you add it to/);
-    const r = await brief({ task: "Add zqxdual to the web app and the python worker", packages: [{ ecosystem: "PyPI", name: "zqxdual", public: true }] });
+    const r = await brief({ task: "Add zqxdual to the web app and the python worker", packages: [{ ecosystem: "PyPI", name: "zqxdual", version: "latest", public: true }] });
     expect(waiting(r)).toEqual([]);
     expect(r.delegation_assessment.reason).toContain(RESTS_ON_DECLARATION);
   });

@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { runDependencyCheck } from "../tools/dependency-check.js";
 import { SOURCE_HELD } from "../tools/briefing-confirm.js";
-import { CLEAN_COMMAND } from "../tools/briefing-command-check.js";
+import { STAYS_REVIEW } from "../tools/briefing-command-check.js";
 import { validateToolArgs } from "../tool-args.js";
 import { whatShouldIKnowTool } from "../tools/what-should-i-know.js";
 import { serverDataDir } from "../db.js";
@@ -123,7 +123,7 @@ describe("M4 (C6): the declared item goes to the engine as written, and the ledg
     npmProject();
     const file = path.join(serverDataDir(), LEDGER_FILE);
     const read = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "").split("\n").filter((l) => l.includes('"lodash"')).map((l) => JSON.stringify({ ...JSON.parse(l), t: undefined }));
-    await brief({ task: "npm install lodash@4.17.21+build7", packages: [{ ecosystem: "npm", name: "lodash", public: true }] });
+    await brief({ task: "npm install lodash@4.17.21+build7", packages: [{ ecosystem: "npm", name: "lodash", version: "4.17.21+build7", public: true }] });
     await new Promise((res) => setTimeout(res, 300));
     const briefing = read();
     fs.rmSync(file, { force: true });
@@ -215,6 +215,7 @@ describe("7b-1 (C4): the spec written on the pair is always checked; a declared 
     npmProject();
     const file = path.join(serverDataDir(), LEDGER_FILE);
     const read = () => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "").split("\n").filter((l) => l.includes('"zqxcrit4"')).map((l) => JSON.stringify({ ...JSON.parse(l), t: undefined })).sort();
+    fs.rmSync(file, { force: true });
     await brief({ task: "npm i zqxcrit4@1.0.0", packages: [{ ecosystem: "npm", name: "zqxcrit4", version: "2.0.0", public: true }] });
     await new Promise((res) => setTimeout(res, 300));
     const briefing = [...new Set(read())];
@@ -235,7 +236,7 @@ describe("7b-1 (C4): the spec written on the pair is always checked; a declared 
 describe("7b-2 (K3): an unlisted option is said by the grammar, not as 'the word after'", () => {
   it("npm install --workspaces pino", async () => {
     npmProject();
-    const r = await brief({ task: "npm install --workspaces pino", packages: [{ ecosystem: "npm", name: "pino", public: true }] });
+    const r = await brief({ task: "npm install --workspaces pino", packages: [{ ecosystem: "npm", name: "pino", version: "latest", public: true }] });
     expect(r.delegation_assessment.level).toBe("review_needed");
     expect(r.delegation_assessment.reason).toMatch(/This task holds a command \(npm install\) this briefing could not read whole \(an option this briefing does not read\)/);
     expect(JSON.stringify(r)).not.toContain("the word after");
@@ -246,8 +247,8 @@ describe("7b-3: a dismissed word of a command in a sentence says how to get a cl
   // Round 8, m8: only where it helps: the command stands inside a sentence.
   it("Then npm i zqxok and add it as middleware", async () => {
     npmProject();
-    const r = await brief({ task: "Then npm i zqxok and add it as middleware", packages: [{ ecosystem: "npm", name: "zqxok", public: true }], not_packages: ["then", "and", "add", "it", "as", "middleware"] });
+    const r = await brief({ task: "Then npm i zqxok and add it as middleware", packages: [{ ecosystem: "npm", name: "zqxok", version: "latest", public: true }], not_packages: ["then", "and", "add", "it", "as", "middleware"] });
     expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toContain(CLEAN_COMMAND);
+    expect(r.delegation_assessment.reason).toContain(STAYS_REVIEW);
   });
 });
