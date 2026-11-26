@@ -129,7 +129,7 @@ const VALUE_OPTIONS: Record<Family, ReadonlySet<string>> = {
 
 /** Whether option `flag` of a `manager` command takes the next word as its value (its value is never a package). */
 export function optionTakesValue(manager: string, flag: string): boolean {
-  const family = FAMILIES[manager.toLowerCase()];
+  const family = Object.hasOwn(FAMILIES, manager.toLowerCase()) ? FAMILIES[manager.toLowerCase()] : undefined;
   return family !== undefined && VALUE_OPTIONS[family].has(flag);
 }
 
@@ -405,7 +405,8 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
   const bare = (w: string) => strip(w, LEAD_WRAP, TRAIL_WRAP);
   for (let i = 0; i < words.length; i++) {
     const manager = bare(words[i].text).toLowerCase();
-    const family = FAMILIES[manager];
+    // Own properties only: a task word such as "constructor" is no manager (round 7, C8).
+    const family = Object.hasOwn(FAMILIES, manager) ? FAMILIES[manager] : undefined;
     if (!family || !free(words[i].start, words[i].end)) continue;
     // The command's words: to a clause break ("then", "&&", ";", a sentence end) or 40 words.
     let j = i + 1;
@@ -655,7 +656,7 @@ const SWITCHES: Record<string, ReadonlySet<string>> = (() => {
 
 /** Whether `flag` of a `manager` command is known to take no value: only then is the next word read as an operand. */
 export function isKnownSwitch(manager: string, flag: string): boolean {
-  return SWITCHES[manager.toLowerCase()]?.has(flag) ?? false;
+  return Object.hasOwn(SWITCHES, manager.toLowerCase()) ? SWITCHES[manager.toLowerCase()].has(flag) : false;
 }
 
 /**

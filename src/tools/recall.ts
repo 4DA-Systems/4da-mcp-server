@@ -71,7 +71,8 @@ export function recallTerms(query: string): string[] {
   for (const token of normalized.split(" ")) {
     if (token.length < 3 || STOP_WORDS.has(token)) continue;
     terms.add(token);
-    for (const alias of TERM_ALIASES[token] || []) {
+    // An own property only: "constructor" or "__proto__" in a task read Object.prototype members (round 7, C8).
+    for (const alias of Object.hasOwn(TERM_ALIASES, token) ? TERM_ALIASES[token] : []) {
       terms.add(alias);
     }
   }
