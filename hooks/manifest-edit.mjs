@@ -109,7 +109,7 @@
  *   `name: version` lines"), a TOML escape or multi-line string in a dependency, anything past a bound.
  * - Past the time budget (2 s of reading; a payload over 8 KB also under a 5 s wall clock), or when
  *   anything goes wrong (an error of its own, a worker that stops, a payload that does not parse, a
- *   is over 64 MB, so is not read whole),
+ *   payload over 8 MB that is not JSON, or one over 64 MB, neither of which is read whole),
  *   where a ledger exists and the guard blocks: every Bash and PowerShell call ("the hook could not
  *   finish reading this command, so the dependency versions it may install were not checked. Run it
  *   in smaller parts"), and every Edit, MultiEdit, Write and NotebookEdit whose path names a manifest
