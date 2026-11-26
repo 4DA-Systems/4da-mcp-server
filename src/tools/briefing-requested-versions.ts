@@ -372,15 +372,15 @@ export function gateTaskNames<
   const offer = (name: string, ecosystems: readonly CheckEcosystem[], version: string | undefined, judgeNearMiss = true, unreadVersion = false) => {
     const readAs = ecosystems.filter((e) => asName(name, e) !== null);
     if (readAs.length === 0) return;
-    const key = name.toLowerCase();
+    // C2: a candidate is a (name, ecosystem) pair. A name a command or manifest reads in one ecosystem and another
+    // command reads in another is two entries, each settled only by its own answer ("pip install colorsx && npm
+    // install colorsx"); a word the task gives no ecosystem for is one entry with its possible ecosystems.
+    const lower = name.toLowerCase();
+    const key = `${[...readAs].sort().join("|")}\0${lower}`;
     const written = unreadVersion ? undefined : version;
     const had = unverified.get(key);
-    if (!had) unverified.set(key, { word: name, read_as: readAs.join(" or "), ...(written ? { version: written } : {}), seen: items.seen.get(key) ?? "prose" });
-    else {
-      if (!had.version && written) had.version = written;
-      const ecos = new Set([...had.read_as.split(" or "), ...readAs]);
-      had.read_as = [...ecos].join(" or ");
-    }
+    if (!had) unverified.set(key, { word: name, read_as: readAs.join(" or "), ...(written ? { version: written } : {}), seen: items.seen.get(lower) ?? "prose" });
+    else if (!had.version && written) had.version = written;
     // A near-miss of a popular name, judged offline: a note about the spelling, not a hold.
     const entry = unverified.get(key)!;
     for (const ecosystem of judgeNearMiss && !entry.note ? readAs : []) {
@@ -681,15 +681,15 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
     return requested.map((r) => unknown(r, "the registry lookups are not available in this session"));
   }
   const deadline = Date.now() + CHECK_BUDGET_MS;
-  /** One dependency_check run within what is left of the budget; null past it. */
-  const run = async (list: RequestedVersion[]) => {
+  /** One dependency_check run of at most 25 items within what is left of the budget; null past it. */
+  const runOnce = async (list: RequestedVersion[]) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
         executeDependencyCheck(
           null,
           // In the form dependency_check reads for that ecosystem (briefing-names.ts checkableSpec; round 10, W3).
-          { items: list.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: checkableSpec(r.ecosystem, r.to) ?? r.to, ...(r.from ? { from: r.from } : {}) })) },
+          { items: list.map((x) => ({ ecosystem: x.ecosystem, package: x.name, to: checkableSpec(x.ecosystem, x.to) ?? x.to, ...(x.from ? { from: x.from } : {}) })) },
           liveIntel as LiveIntelligence,
           now ? { now } : {},
         ).then((answer) => {
@@ -705,10 +705,23 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
       if (timer) clearTimeout(timer);
     }
   };
+  /**
+   * The run in chunks of at most 25 (dependency_check's own limit), in parallel, each within the budget: a chunk
+   * the budget did not reach leaves only its items unanswered ("did not finish in time"), never the whole run
+   * (C4: a 26th declared entry made every row unknown, the bundled malware's included).
+   */
+  const run = async (list: RequestedVersion[]) => {
+    const chunks: RequestedVersion[][] = [];
+    for (let k = 0; k < list.length; k += 25) chunks.push(list.slice(k, k + 25));
+    const answers = await Promise.all(chunks.map((c) => runOnce(c)));
+    const first = answers.find((a) => a !== null);
+    if (!first) return null;
+    return { ...first, results: answers.flatMap((a, k) => (a ? a.results : chunks[k].map(() => undefined))) as typeof first.results };
+  };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (r: RequestedVersion, item: Answer["results"][number] | undefined): RequestedVersionFinding => {
     const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...own } = r;
-    if (!item) return unknown(own, "no answer");
+    if (!item) return unknown(own, "the lookups did not finish in time");
     const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
     const rc = item.range_check;
     const out: RequestedVersionFinding = {

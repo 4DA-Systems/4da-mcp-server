@@ -206,7 +206,8 @@ export function readNotPackages(raw: unknown): { words: string[]; refused: NotRe
  * another spelling.
  */
 export function forbiddenKey(name: string): string {
-  return name.trim().toLowerCase().replace(/!/g, "").replace(/[-_.]+/g, "-");
+  // A Go module's major-version suffix names the same private path: example.com/zqx/lib/v2 is example.com/zqx/lib.
+  return name.trim().toLowerCase().replace(/!/g, "").replace(/^(.+\/.+)\/v\d+$/, "$1").replace(/[-_.]+/g, "-");
 }
 
 /** Whether two names are one edit apart: one character changed, added or dropped, or two neighbours swapped (lodahs, lodash). */
@@ -287,6 +288,6 @@ export function toConfirmEntry(task: string, w: UnverifiedWord & { seen?: TaskWo
   };
 }
 
-/** Said in wisdom_recall_note when a call's task was kept from the embedding provider (invariant I6). */
-export const EMBEDDING_CUT_NOTE =
-  "The task was not sent to the embedding provider in this call: it declares names private or not packages, leaves a name waiting, declares nothing, or holds words the screen withheld. Wisdom was ranked lexically, on this machine.";
+/** Said in wisdom_recall_note when an embedding provider is configured: the briefing never sends it the task (C1). */
+export const EMBEDDING_NOT_SENT_NOTE =
+  "The task text is not sent for embedding: what_should_i_know ranks your stored decisions and memories on this machine.";

@@ -23,7 +23,7 @@
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersion, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import {
-  EMBEDDING_CUT_NOTE,
+  EMBEDDING_NOT_SENT_NOTE,
   confirmationReason,
   confirmationSummary,
   declarationFor,
@@ -92,11 +92,11 @@ import { storedAdvisoriesFor, type StoredAdvisory } from "./briefing-stored-advi
 import { checkNewPackages, detectAllNewPackages, ecosystemKey, installedNames, MAX_NEW_PACKAGES, screenFor, type NewPackage, type NewPackageFinding } from "./briefing-new-packages.js";
 import {
   getRelevantWisdom,
-  getRelevantWisdomHybrid,
   type WisdomEntry,
   type WisdomRecallMode,
 } from "./briefing-wisdom.js";
 import { maxOf, pushAll } from "../array-utils.js";
+import { unreadCommand, unreadCommandReason } from "./briefing-command-check.js";
 
 // ============================================================================
 // Types
@@ -248,7 +248,7 @@ export interface WhatShouldIKnowResult {
   scan_status: ScanStatus;
   scan: BriefingScan;
   summary: string;
-  /** How relevant_wisdom was retrieved: "hybrid" when an embedding provider is active. */
+  /** How relevant_wisdom was retrieved: always "ranked_lexical" here (the briefing sends no task text for embedding). */
   wisdom_recall_mode: WisdomRecallMode;
   /** Said when the task or stored text names a private package and was kept from the embedding provider. */
   wisdom_recall_note?: string;
@@ -345,7 +345,7 @@ export const whatShouldIKnowTool = {
         type: "array",
         items: { type: "string" },
         description:
-          "File paths involved in the task (optional). Manifest and source paths help find the packages involved. Read locally only: never sent anywhere, the embedding provider included (it gets the task with credentials, settings and the names you mark private or not_packages blanked).",
+          "File paths involved in the task (optional). Manifest and source paths help find the packages involved. Read locally only: never sent anywhere, the embedding provider included (no task text is sent for embedding).",
       },
       packages: {
         type: "array",
@@ -575,15 +575,18 @@ export async function executeWhatShouldIKnow(
   for (const t of packages) if (isForbidden(t.name)) keepOrWithhold({ name: t.name, ecosystem: t.ecosystem as CheckEcosystem });
   // I2 and I8: every declared public entry is checked, at the version the task writes AND the declared one.
   const declaredKeys = new Set(declaredPublic.map((d) => `${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`));
+  const readVersions = taskVersions;
   const declaredNew: NewPackage[] = [];
   const declaredWanted: RequestedVersion[] = [];
   const sameAs = (d: DeclaredPackage) => (x: { name: string; ecosystem: CheckEcosystem }) => x.ecosystem === d.ecosystem && sameName(x.name, d.name, d.ecosystem);
   for (const d of declaredPublic) {
-    const word = gated.unverified.find((w) => sameName(w.word, d.name, d.ecosystem));
+    const words = gated.unverified.filter((w) => sameName(w.word, d.name, d.ecosystem) && w.read_as.split(" or ").includes(d.ecosystem));
     const knownNew = lookedUp.filter(sameAs(d));
     const knownWanted = wanted.filter(sameAs(d));
-    const taskVersions = [word?.version, ...knownNew.map((k) => k.version), ...knownWanted.map((k) => k.to)].filter((v): v is string => typeof v === "string" && v !== "");
-    const versions = [...new Set([...(taskVersions.length > 0 ? taskVersions : [undefined]), ...(d.version ? [d.version] : [])])];
+    // C2: EVERY version the task writes for the pair (each operand, each manifest entry), plus a declared one.
+    const written = readVersions.requested.filter((r) => [r.ecosystem, ...(r.alternatives ?? [])].includes(d.ecosystem) && sameName(r.name, d.name, d.ecosystem)).map((r) => r.to);
+    const writtenVersions = [...words.map((w) => w.version), ...written, ...knownNew.map((k) => k.version), ...knownWanted.map((k) => k.to)].filter((v): v is string => typeof v === "string" && v !== "");
+    const versions = [...new Set([...(writtenVersions.length > 0 ? writtenVersions : [undefined]), ...(d.version ? [d.version] : [])])];
     for (const version of versions) {
       if (!installed(d.name, d.ecosystem) && !knownNew.some((k) => k.version === version) && !declaredNew.some((x) => sameAs(d)(x) && x.version === version)) {
         declaredNew.push({ name: d.name, ecosystem: d.ecosystem, ...(version ? { version } : {}) });
@@ -619,13 +622,14 @@ export async function executeWhatShouldIKnow(
     return closed.length > 0 ? { ...p, closed: [...new Set([...(p.closed ?? []), ...closed])] } : p;
   };
   const ownNamed = lookedUp.map(closedFor);
-  const named = [...declaredNew.map(closedFor), ...ownNamed.slice(0, MAX_NEW_PACKAGES)];
+  // The briefing's own rows first: they are never degraded by how many entries the caller declared (C4, I1).
+  const named = [...ownNamed.slice(0, MAX_NEW_PACKAGES), ...declaredNew.map(closedFor)];
   const newPackages = [...(await checkNewPackages(liveIntel, named, undefined, recordDeclared))];
   // Past the cap a name is not checked, and says so: never a silent cut (fails closed, as an unread version does).
   // The versions the task names, judged at exactly that version or constraint, as dependency_check
   // judges them ("add lodash 4.17.20" was judged at latest; black-box re-run, 2026-11-14). Past their
   // own cap they are named NOT CHECKED too: the sixth version a task named was dropped without a word (r8).
-  const wantedVersions = [...declaredWanted, ...wanted.slice(0, MAX_REQUESTED)];
+  const wantedVersions = [...wanted.slice(0, MAX_REQUESTED), ...declaredWanted];
   const requestedVersions = await checkRequestedVersions(liveIntel, wantedVersions, undefined, recordDeclared);
   // I8: a declared package the call's budget did not reach keeps the briefing confirmation_needed: call again.
   const unreached = [
@@ -843,6 +847,24 @@ export async function executeWhatShouldIKnow(
         assessed.reason = `${confirmationReason(waiting.length)}${before}`;
       }
     }
+    // C3: the reader is not trusted for safe. A command (or prose install) in the raw task whose every operand the
+    // briefing did not account for (checked, declared, already a dependency, or a path/URL/file/version) keeps the
+    // level at review_needed, whatever the reader made of it. A not_packages word is no account of an operand.
+    if (assessed.level === "safe_to_delegate") {
+      const accountedFor = new Set<string>();
+      const add = (ecosystem: string, name: string) => accountedFor.add(`${ecosystem} ${ecosystemKey(name, ecosystem as CheckEcosystem)}`);
+      for (const d of declared.entries) add(d.ecosystem, d.name);
+      for (const r of newPackages) add(r.ecosystem, r.name);
+      for (const r of requestedVersions) add(r.ecosystem, r.name);
+      for (const r of privateTask) add(r.ecosystem, r.package);
+      for (const r of taskDependencies) add(r.ecosystem, r.package);
+      const fold = (n: string) => n.replace(/^(.+\/.+)\/v\d+$/, "$1");
+      const unread = unreadCommand(task, (ecosystem, name) => accountedFor.has(`${ecosystem} ${ecosystemKey(name, ecosystem)}`) || accountedFor.has(`${ecosystem} ${ecosystemKey(fold(name), ecosystem)}`));
+      if (unread) {
+        assessed.level = "review_needed";
+        assessed.reason = unreadCommandReason(unread);
+      }
+    }
     // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
     const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
     const delegation = withReadGaps(
@@ -878,21 +900,11 @@ export async function executeWhatShouldIKnow(
     }, liveUnsafeDirs(liveIntel as UnsafeDirSources | null));
   };
 
-  // Wisdom retrieval is lexical by default and hybrid when an embedding
-  // provider is configured.
+  // C1: what_should_i_know sends no task text to an embedding provider, ever: a task can hold what the screen
+  // cannot know is private (a name a whole private registry serves, a credential written as a word). Wisdom is
+  // ranked on this machine; with a provider configured the answer says once that the task was not sent.
   if (!db) return finalize([], "ranked_lexical");
-  const embedConfig = getEmbeddingConfig();
-  if (!embedConfig) {
-    return finalize(getRelevantWisdom(db, task, files), "ranked_lexical");
-  }
-  // I6: embeddings are cut, never repaired. A call that carries a `public: false` entry or a not_packages word,
-  // that leaves a name waiting, that declared nothing, or whose screen withheld a word sends the task to no
-  // embedding provider: the wisdom is ranked lexically, on the machine, and the answer says so.
-  if (forbidden.size > 0 || waiting.length > 0 || params.packages === undefined || withheldWords.length > 0 || withheldDismissed.length > 0 || argsNotRead.length > 0) {
-    return finalize(getRelevantWisdom(db, task, files), "ranked_lexical", EMBEDDING_CUT_NOTE);
-  }
-  const { wisdom, recall_mode, recall_note } = await getRelevantWisdomHybrid(db, task, files, embedConfig, screenFor(task, ecosystemDeps()).forEmbedding);
-  return finalize(wisdom, recall_mode, recall_note);
+  return finalize(getRelevantWisdom(db, task, files), "ranked_lexical", getEmbeddingConfig() ? EMBEDDING_NOT_SENT_NOTE : undefined);
 }
 
 // ============================================================================

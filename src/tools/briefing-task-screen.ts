@@ -65,11 +65,6 @@ export interface TaskScreen {
   scopes: Set<string>;
   /** Ecosystems whose public registry the task replaces: none of their names is looked up. */
   ecosystems: Map<CheckEcosystem, string>;
-  /**
-   * `text` with the values of a command's options and its words with a colon inside blanked too: the readers
-   * never read those, and this copy is what an embedding provider may be sent (sixth blind check, item 4).
-   */
-  forEmbedding: string;
 }
 
 const LEAD_QUOTES = "\"'`";
@@ -299,8 +294,6 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     hold(name, `not looked up: the task takes it from ${kind}`, start, end, true);
     packageHolds.add(withheld[withheld.length - 1]);
   };
-  /** Spans the readers never read but `text` keeps: option values and colon words (blanked in `forEmbedding`). */
-  const quiet: Array<{ start: number; end: number }> = [];
   const closeEcosystem = (ecosystem: CheckEcosystem, what: string, start: number, end: number) => {
     if (!ecosystems.has(ecosystem)) ecosystems.set(ecosystem, what);
     blank(start, end);
@@ -457,12 +450,9 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
         const flag = eq > 0 ? text.slice(0, eq) : text;
         const value = eq > 0 ? text.slice(eq + 1) : args[k + 1] ? bare(args[k + 1].text) : undefined;
         source ??= sourceOption(family, flag, value);
-        if (eq > 0) quiet.push({ start: args[k].start + args[k].text.indexOf("=") + 1, end: args[k].end });
-        else if (args[k + 1] && !bare(args[k + 1].text).startsWith("-") && !isKnownSwitch(manager, flag)) quiet.push({ start: args[k + 1].start, end: args[k + 1].end });
         if (eq < 0 && VALUE_OPTIONS[family].has(flag)) k++;
         continue;
       }
-      if (/:[^\s/]/.test(text) && !specSource(text, family)) quiet.push({ start: args[k].start, end: args[k].end });
       operands.push(args[k]);
     }
     // The subcommand (`install`, `add`, `pip install`) is no package. Only an install's operands are
@@ -561,10 +551,8 @@ export function screenTask(task: string, isDependency?: (name: string) => boolea
     })
     .replace(/(^|\s)(?:\d?>&\d|\d>>?|&>>?)/g, (m: string, pre: string) => `${pre};${" ".repeat(m.length - pre.length - 1)}`)
     .replace(/(^|[\s"'`(])([A-Za-z0-9][\w.-]{0,200})\[[\w.,\s-]{1,400}\](\S{0,300})/g, (m: string, pre: string, name: string, rest: string) => `${pre}${name}${rest}${" ".repeat(m.length - pre.length - name.length - rest.length)}`);
-  const embed = text.split("");
-  for (const q of quiet) for (let k = Math.max(0, q.start); k < Math.min(q.end, embed.length); k++) if (embed[k] !== "\n") embed[k] = " ";
   for (const w of withheld) if (packageHolds.has(w) || commandArgs.some(([a, b]) => w.start >= a && w.start < b)) w.standing = true;
-  return { text, withheld, names, scopes, ecosystems, forEmbedding: embed.join("") };
+  return { text, withheld, names, scopes, ecosystems };
 }
 
 /** The task with only its over-long words blanked: what the readers read with no screen, bounded. */

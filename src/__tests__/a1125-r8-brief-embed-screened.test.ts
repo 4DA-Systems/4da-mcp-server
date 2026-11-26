@@ -122,9 +122,11 @@ describe("the embedding provider gets the screened task", () => {
     expect(JSON.stringify(notReadWords(brief) ?? [])).not.toContain(secret);
   });
 
-  it("a clean declared call is embedded", async () => {
+  it("a clean declared call is not embedded either (wave 2, C1: no task text, ever)", async () => {
     await recordDecision("Component library", "Use the shared component library for every screen");
-    await call("what_should_i_know", { task: "then npm install pg", packages: [] });
-    expect(promptsSent().some((p) => p.includes("npm install pg"))).toBe(true);
+    const brief = await call("what_should_i_know", { task: "then npm install pg", packages: [] });
+    expect(promptsSent().filter((p) => p.includes("npm install pg") || p.includes("pg"))).toEqual([]);
+    expect(brief.wisdom_recall_mode).toBe("ranked_lexical");
+    expect(String(brief.wisdom_recall_note)).toMatch(/^The task text is not sent for embedding/);
   });
 });
