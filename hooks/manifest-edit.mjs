@@ -27,7 +27,8 @@
  *   clip). A first word that begins with a quote (PowerShell's `'text' | Out-File notes.txt`), a
  *   comment, and a heredoc fed to such a program or sink are text, and so is an argument written
  *   `"$(cat <<'EOF'` newline, body, `EOF` newline, `)"` with the delimiter quoted (read as the
- *   body's text; it ends at the first line that is exactly the delimiter, as the shell ends it); or
+ *   body's text; it ends at the first line that is exactly the delimiter, as the shell ends it; with a
+ *   CR, NEL, LS, PS, FF, VT or NUL anywhere in it the form is not read as text); or
  * - read whole: its program and prefixes known (sudo, env, timeout, nice, nohup, time, command,
  *   exec, busybox, wsl, a shell keyword, subshell or group; a shell's -c, eval, pwsh -Command, npx,
  *   bunx, pnpx, npm exec, pnpm exec / dlx, yarn exec / dlx / run, bun run / x, uv run, uv tool run /
@@ -36,18 +37,28 @@
  *   list (NAMED_OPTIONS: placement, output, scripts off, a dry run, each with its reason); and every
  *   operand one of: a public name with an exact version (on `proceed` or `review`), with a range in
  *   its registry's grammar (on a verdict for that constraint, or for exactly the release its
- *   inclusive ceiling names), alone or `@latest` (on a verdict for `latest`; with npm, pnpm, uv add,
- *   poetry add and cargo add held instead when the manifest of the folder the command runs in
- *   already declares the name, since those managers keep the declared release); a public registry's
- *   own file URL (read as that name and version); a requirements file named with -r; or a form that
- *   names no public release (a path, a local archive, git, a URL on a host that is no public
- *   registry). One index or registry option that replaces the public index (-i, --index-url,
- *   --default-index, --registry, cargo --index), with nothing else naming a source and a host that
- *   is positively not public, lets the install go ahead unjudged as the project's own source (the
- *   registries' aliases, such as pypi.io, and the public mirrors npmmirror, the Tsinghua and Aliyun
- *   PyPI mirrors, goproxy.io and goproxy.cn, are public hosts).
+ *   inclusive ceiling names), `@latest` with npm, pnpm, Yarn or Bun (on a verdict for `latest`), or
+ *   alone (on a verdict for `latest`, but held "name the version" with npm, pnpm, Yarn, Bun, uv add,
+ *   poetry add and cargo add when its name occurs as a whole word anywhere in package.json,
+ *   package.yaml, package.json5, pnpm-workspace.yaml, .pnpmfile.cjs, bunfig.toml, Cargo.toml,
+ *   pyproject.toml or uv.toml in the command's folder or any folder above it, up to 12 levels, or in
+ *   a folder a directory option names: no section is parsed, and a file it cannot read holds); a
+ *   public registry's own file URL (read as that name and version); a requirements file named with
+ *   -r; or a form that names no public release (a path, a local archive, git, an http(s) URL on a
+ *   host that is private by its shape). One index or registry option that replaces the public index
+ *   (-i, --index-url, --default-index, --registry, cargo --index), with nothing else naming a source,
+ *   lets the install go ahead unjudged as the project's own source only when its host is private by
+ *   its shape (localhost or a loopback address, an IP literal in 10/8, 172.16/12, 192.168/16,
+ *   169.254/16, fc00::/7 or fe80::/10, a single-label host, or a name under .internal, .local, .lan,
+ *   .corp, .home.arpa, .test, .example, .invalid or .localhost); on any other host, and with a Cargo
+ *   registry or Poetry source named by its config name, the names are judged on the ledger, and a
+ *   denial for a missing verdict says how a private name is released (FOURDA_PRIVATE_PACKAGES or the
+ *   registry's configuration, so the server records it private).
  * A command that names no package (`npm ci`, `pip install -r r.txt`, `uv sync`) goes ahead; what the
- * manager then chooses is a limit. A tool installed from the registry (`cargo install x`, `go install
+ * manager then chooses is a limit. After a Bash or PowerShell command whose own program is a package
+ * manager with one of those words (PostToolUse), where a ledger exists and the guard is on or
+ * advising, the hook adds one line of advice, never a denial: "The package manager decides the
+ * releases actually installed. Run vulnerability_scan to check them." A tool installed from the registry (`cargo install x`, `go install
  * x@v`, `yarn global add x`, `uv tool install x`, `poetry self add x`) and a link of a registry name
  * are read as an add.
  *
@@ -56,14 +67,18 @@
  * folder; the path resolved as Windows opens it, the name matched case-insensitively) goes ahead on
  * the verdicts of the versions it changes. Only dependency declarations count, each section compared
  * on its own (dependencies of every kind, overrides, resolutions, catalogs, dependency groups and
- * extras, pnpm's packageExtensions); a dependency from a path, git, a URL or a non-public source
- * goes ahead. A declaration that bounds nothing (`*`, `""`, `x`, a name alone in a requirements
- * file or a pyproject array, Poetry or Cargo `*`, a Cargo table with no version) is the request
- * latest; a dist-tag word other than latest is held "name the version"; an npm specifier in none of
- * the known forms is held as not read. pnpm-workspace.yaml is read only when every line of the file
+ * extras, pnpm's packageExtensions and configDependencies); a dependency from a path, git or another
+ * source goes ahead, and an http(s) URL goes ahead only on a host private by its shape. Every npm
+ * specifier is one of: latest (`latest`, or a range one `||` alternative of which is empty or only
+ * wildcard comparators, by npm's grammar: `*`, `x`, `x.x`, `=*`, `^*`, `>=*`, `x || *`, an `npm:`
+ * alias with no version), a range with at least one numbered bound, a dist-tag word (held "name the
+ * version"), a non-registry form, or held as not read; a name alone in a requirements file or a
+ * pyproject array, Poetry `*` and Cargo wildcards or a table with no version are latest too.
+ * package.yaml and package.json5, manifests pnpm reads, are held ("write it as package.json"). pnpm-workspace.yaml is read only when every line of the file
  * is plain (a `key:` header, a `- 'entry'` item, or `key: value` with a plain or simply quoted
  * value), and a change under a top-level key that is neither read (catalog, catalogs, overrides,
- * packageExtensions) nor on the list of settings known to install nothing is held. A package a private-registry
+ * packageExtensions, configDependencies) nor on PNPM_INERT_LIST (settings known to put no registry
+ * release into node_modules or the lockfile, each with its reason) is held. A package a private-registry
  * rule covers goes ahead at any version unless an avoid or wait for that version came first.
  *
  * WHAT IS HELD
@@ -93,7 +108,7 @@
  * - An edit it cannot read: a pnpm-workspace.yaml line that is not plain ("rewrite as plain
  *   `name: version` lines"), a TOML escape or multi-line string in a dependency, anything past a bound.
  * - Past the time budget (2 s of reading; a payload over 8 KB also under a 5 s wall clock), or when
- *   anything goes wrong (an error of its own, a worker that stops, a payload that does not parse or
+ *   anything goes wrong (an error of its own, a worker that stops, a payload that does not parse, a
  *   is over 64 MB, so is not read whole),
  *   where a ledger exists and the guard blocks: every Bash and PowerShell call ("the hook could not
  *   finish reading this command, so the dependency versions it may install were not checked. Run it
@@ -115,14 +130,15 @@
  *   pieces, `cd` / pushd / Set-Location to the data folder in an earlier call, a junction or symlink,
  *   a wildcard, a command on a folder above the data folder (`rm -rf` of its parent), a manager
  *   name the shell assembles or decodes.
- * - A name alone not declared in the folder's manifest is judged at the registry's newest release;
- *   the manager may still install an older one when the newest does not fit this Node, Python or
- *   Rust (`engines`, `requires-python`, `rust-version`), when the `latest` tag is not the highest
- *   version, or when pip finds the name already installed (`pip install x` keeps it). Yarn 1 and Bun
- *   move to the newest even beside a declaration; npm, pnpm, Yarn and Bun do not keep an older
- *   release that is only installed or locked (measured); for uv, Poetry and Cargo a release only in
- *   the lockfile was not measured, and go (`go get x` moves to the newest, per its documentation)
- *   was not measured here.
+ * - Overrides, resolutions, catalogs, [patch] and workspace pins in the project can make the
+ *   manager install another release than the one the command names; the hook judges those entries
+ *   when they are edited, not when a command meets them.
+ * - A name alone that no project file here or above names is judged at the registry's newest
+ *   release; the manager may still install an older one when the newest does not fit this Node,
+ *   Python or Rust (`engines`, `requires-python`, `rust-version`), when the `latest` tag is not the
+ *   highest version, or when pip finds the name already installed (`pip install x` keeps it); a
+ *   lockfile is not read (npm, pnpm, Yarn and Bun were measured not to keep a release only installed
+ *   or locked; uv, Poetry, Cargo and go were not measured).
  * - The allow lists are lists, not proofs: the tested property is that none of their options changes
  *   the named release in the tool versions tested (a1125-w2-hook-round14-options.test.ts).
  * - Commands that let the manager choose versions without naming a package: npm audit fix, pnpm audit
