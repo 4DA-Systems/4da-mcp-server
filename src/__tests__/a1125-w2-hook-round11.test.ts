@@ -9,7 +9,7 @@ import { realpathSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
-import { answerDenial } from "./helpers/a1125-hook-run.js";
+import { followRemedy, answerDenial } from "./helpers/a1125-hook-run.js";
 
 let s: Sandbox;
 beforeEach(() => {
@@ -101,8 +101,10 @@ describe("3: a constraints or overrides file beside a named package, on every re
   ])("%s: held, name the version; the named version, checked, goes ahead", (command) => {
     const r = run(command);
     expect(r.decision, r.text).toBe("deny");
-    expect(r.text).toContain("name the version on the command line");
-    releasedByTheCall(command.startsWith("uv tool") ? "uv tool install ruff==0.8.0" : "pip install requests==2.32.3");
+    // Round 13: the remedy names the file option; removed, the named package is judged on its own.
+    const remedy = followRemedy(command, r.text);
+    expect(remedy).toBe(command.replace(/\s+(?:-c|--constraints?|--overrides?)\s+\S+/, ""));
+    releasedByTheCall(remedy as string);
   });
 });
 

@@ -75,3 +75,41 @@ export function timedWithin(home: string, payload: unknown, limit: number): Time
   if (r.ms >= limit) expect(r.cpu, `CPU time (wall clock ${r.ms.toFixed(0)} ms against ${limit} ms)`).toBeLessThan(2 * limit);
   return r;
 }
+
+/** A name without its version: `lodash@x` -> `lodash`, `@s/p@1` -> `@s/p`, `requests[socks]>=2 ` -> `requests[socks]`. */
+function bareName(token: string): string {
+  const t = token.trim();
+  if (/^@?[^@\s]+@/.test(t)) return t.slice(0, t.indexOf("@", 1));
+  return t.replace(/\s*(?:[=<>!~;]|@).*$/s, "").trim();
+}
+
+/**
+ * Round 13: the not-read remedy followed mechanically. "Run the same command without `X`" removes X
+ * (and, for find, the `;` / `+` that ends -exec); "with `X` written as <form>" writes X in that form
+ * (`value` stands for a variable's or substitution's value). Null when the denial names no part.
+ */
+export function followRemedy(command: string, text: string, value = "lodash"): string | null {
+  const tidy = (c: string) => c.replace(/[ \t]{2,}/g, " ").trim();
+  // The named part as a whole word (`--pre` is not the start of `--prefix`).
+  const word = (token: string) => new RegExp(`(^|[\\s'"(])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s'";|&)]|$)`);
+  const without = /Run the same command without `([^`]+)`( and the ; or \+ that ends -exec)?/.exec(text);
+  if (without) {
+    let c = command.replace(word(without[1]), "$1");
+    if (without[2]) c = c.replace(/\s+(?:\\;|';'|";"|;|\+)\s*$/, "");
+    return tidy(c);
+  }
+  const w = /Run the same command with `([^`]+)` written as (.+?): the hook then reads it/s.exec(text);
+  if (!w) return null;
+  const [, token, form] = w;
+  if (form.startsWith("an exact version")) return tidy(command.replace(token, bareName(token)));
+  if (form.startsWith("one module path")) return tidy(command.replace(token, token.replace(/\/\.\.\.$/, "")));
+  if (form.startsWith("its value written out")) return tidy(command.replace(token, value));
+  if (form.startsWith("the command inside it")) return tidy(token.replace(/^\$\(|^`|\)$|`$/g, ""));
+  // A setting written as the option it stands for: the setting left out, the option on the command.
+  const option = /^`([^`]+)` on the package manager's command$/.exec(form);
+  if (option) return tidy(`${command.replace(token, "")} ${option[1]}`);
+  // An option spelled another way (`--optional=<extra name>`): the placeholder stands for `value`.
+  const spelled = /^`([^`]+)`$/.exec(form);
+  if (spelled) return tidy(command.replace(word(token), `$1${spelled[1].replace(/<[^>]+>/g, value)}`));
+  return tidy(command.replace(token, form));
+}

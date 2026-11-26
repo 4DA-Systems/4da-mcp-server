@@ -191,7 +191,7 @@ describe(`${ORDINARY.length} ordinary commands go ahead with an empty ledger`, (
   });
 });
 
-const ACCOUNT_REMEDY = "Run it as a plain command of its own";
+const ACCOUNT_REMEDY = "Run the same command without `--frozen-lockfile`";
 
 /**
  * Round 8 (R8-2): an option npm does not know (`--frozen-lockfile` is Yarn's and pnpm's) is held as

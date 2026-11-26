@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
-import { answerDenial } from "./helpers/a1125-hook-run.js";
+import { answerDenial, followRemedy } from "./helpers/a1125-hook-run.js";
 
 let s: Sandbox;
 beforeEach(() => {
@@ -128,11 +128,17 @@ describe("4: one outermost handler: nothing goes silent", () => {
   });
 
   const POINTS = ["stdin", "parse", "respond", "ledger-guard", "reader", "detector", "account", "ledger-read", "denial", "worker-start", "worker"];
-  it.each(POINTS)("a fault injected at %s: an install is held, a plain command is not", (point) => {
+  // Round 13: on a failure every Bash / PowerShell call is held, and an edit only of a manifest or the ledger.
+  it.each(POINTS)("a fault injected at %s: an install is held, so is a plain command; an edit of a README is not", (point) => {
     for (const pad of [0, 9000]) {
-      const held = spawnHook(JSON.stringify(install(pad)), { FOURDA_HOOK_FAULT: point });
-      expect(held, `${point} pad ${pad}`).toContain('"deny"');
-      expect(spawnHook(JSON.stringify(plain(pad)), { FOURDA_HOOK_FAULT: point }), `${point} pad ${pad}`).toBe("");
+      expect(spawnHook(JSON.stringify(install(pad)), { FOURDA_HOOK_FAULT: point }), `${point} pad ${pad}`).toContain('"deny"');
+      // A plain command meets the fault only where its path passes that point (it reads no ledger, makes no denial; the worker points are past 8 KB).
+      const reached = !["ledger-read", "denial"].includes(point) && (pad > 0 || !["worker-start", "worker"].includes(point));
+      const out = spawnHook(JSON.stringify(plain(pad)), { FOURDA_HOOK_FAULT: point });
+      if (reached) expect(out, `${point} pad ${pad}`).toContain('"deny"');
+      else expect(out, `${point} pad ${pad}`).toBe("");
+      const readme = { session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: `${s.project}/README.md`, content: `npm install ${"x".repeat(pad)}` } };
+      expect(spawnHook(JSON.stringify(readme), { FOURDA_HOOK_FAULT: point }), `${point} README pad ${pad}`).toBe("");
     }
   });
 
@@ -157,8 +163,8 @@ describe("4: one outermost handler: nothing goes silent", () => {
 
 /**
  * 6: for every manager and every verb in the detector, a command held as not read (an option no
- * table knows) prints a remedy command; that command, run as printed (and its dependency_check call
- * answered when it names one), goes ahead.
+ * table knows) names the option; the same command without it (round 13: the remedy prints no other
+ * command), its dependency_check call answered when it names one, goes ahead.
  */
 describe("6: the remedy each denial prints releases", () => {
   const Z = "--zz-not-an-option";
@@ -186,7 +192,6 @@ describe("6: the remedy each denial prints releases", () => {
     `bun install ${Z} typescript@5.6.3`,
     `bun i ${Z} typescript@5.6.3`,
     `bun update ${Z} typescript@5.6.3`,
-    "bun update typescript@5.6.3",
     `bun link ${Z} typescript`,
     `pip install ${Z} requests==2.32.3`,
     `python -m pip install ${Z} requests==2.32.3`,
@@ -209,14 +214,16 @@ describe("6: the remedy each denial prints releases", () => {
     const r = run(command);
     expect(r.decision, r.text).toBe("deny");
     expect(r.text).toContain("could not be read");
-    const remedy = /plain command of its own: `([^`]+)`/.exec(r.text)?.[1];
-    expect(remedy, r.text).toBeDefined();
-    expect(remedy).not.toBe(command);
-    const first = run(remedy as string);
+    const remedy = followRemedy(command, r.text);
+    expect(remedy, r.text).toBe(command.replace(` ${Z}`, ""));
+    // A second part not read is named the same way (`npm update x@v`: the version, written as the name alone).
+    let next = remedy as string;
+    for (let step = 0; step < 2 && run(next).text.includes("could not be read"); step++) next = followRemedy(next, run(next).text) ?? next;
+    const first = run(next);
     if (first.decision === "deny") {
-      expect(first.text, remedy).not.toContain("could not be read");
+      expect(first.text, next).not.toContain("could not be read");
       answerDenial(s, first, "proceed");
-      expect(run(remedy as string).decision, remedy).toBe("allow");
+      expect(run(next).decision, next).toBe("allow");
     }
   });
 });
@@ -269,8 +276,10 @@ describe("6 (follow-up): the tenth check's three ordinary holds release through 
   ])("%s", (command, tool) => {
     const r = run(command, tool);
     expect(r.decision).toBe("deny");
-    const remedy = /plain command of its own: `([^`]+)`/.exec(r.text)?.[1];
-    expect(remedy, r.text).toBeDefined();
+    // Round 13: the remedy names the part not read; followed mechanically (a variable's value written out).
+    // (`bun update x@v` is read since round 13: it is the command itself, released by its call.)
+    const remedy = r.text.includes("could not be read") ? (followRemedy(command, r.text, "/work/app") ?? (tool === "PowerShell" ? "npm install" : null)) : command;
+    expect(remedy, r.text).not.toBeNull();
     releases(remedy as string);
     expect(run(remedy as string).decision).toBe("allow");
   });
