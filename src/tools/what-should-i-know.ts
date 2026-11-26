@@ -16,7 +16,9 @@
  *     briefing's own lookups and every package the caller declared public), and whether anything still waits.
  *     The CALLER'S DECLARATION is the statement of what the task adds or changes. `to_confirm` is what this
  *     briefing noticed in the task text: a prompt, never a complete reading. A safe_to_delegate reason ends
- *     "This rests on your declaration: a package you did not declare was not checked."
+ *     "This rests on your declaration: a package you did not declare was not checked." A declaration keeps the
+ *     briefing from looking a name up for the task; it does not change this project's own scan, which reads the
+ *     installed dependencies and sends their names unless the project's configuration marks them private.
  * K2. Positional evidence is strict, prose is the caller's word. Strict: an operand of an explicit command (a
  *     manager or runner word, its verb, only options between; the contiguous operand run), an entry of a manifest
  *     snippet, a name tied by the sentence to a named manifest file or an ecosystem label (briefing-command-
@@ -41,7 +43,9 @@ import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../
 import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersion, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import {
   EMBEDDING_NOT_SENT_NOTE,
+  poetrySpec,
   RESTS_ON_DECLARATION,
+  SCAN_STILL_READS,
   confirmationReason,
   confirmationSummary,
   declarationFor,
@@ -351,14 +355,14 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. Pass the request as it was given, in the user's words: do not correct spellings or drop names (a misspelt package name may be the finding). Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in, public: true if it is on the public registry (checked in this call), public: false if it comes from a private registry, git, a path or the workspace (never sent); `packages: []` for a task that changes no dependency; words of the task that are not packages go in `not_packages`. A call without `packages` answers confirmation_needed. Your declaration is the statement of what the task adds or changes: the level rests on this project's scan, the verdicts of what was looked up (the briefing's own lookups and every package you declare public) and whether anything still waits. to_confirm is what the briefing noticed in the task text, a prompt, never a complete reading: declare every package the task adds or changes, in each ecosystem, listed or not. A name it noticed is not looked up: it comes back in task_packages.to_confirm, the level is confirmation_needed, and task_packages.next_step says what to call; do it. For each dependency the task names (exact names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases, only for a package the feed follows). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the version written, else latest; malware is human_only. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); only version-confirmed evidence, a finding on a checked package, running install drift or a decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
+    "Pre-task briefing built from the task outward. Pass the request as it was given, in the user's words: do not correct spellings or drop names (a misspelt package name may be the finding). Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in, public: true if it is on the public registry (checked in this call), public: false if it comes from a private registry, git, a path or the workspace (never looked up for the task; the project's own scan still reads installed dependencies); `packages: []` for a task that changes no dependency; words of the task that are not packages go in `not_packages`. A call without `packages` answers confirmation_needed. Your declaration is the statement of what the task changes: the level rests on the project's scan, the verdicts of what was looked up (the briefing's own lookups and what you declare public) and whether anything waits. to_confirm is what the briefing noticed in the text, never a complete reading: declare every package the task adds or changes, in each ecosystem. A name it noticed is not looked up: it comes back in task_packages.to_confirm, the level is confirmation_needed, and task_packages.next_step says what to call; do it. For each dependency the task names (exact names from this project's lockfiles, plus the families it names: \"all tauri plugins\" adds the tauri-*, tauri-plugin-* and @tauri-apps/* packages the project declares): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases, only for a package the feed follows). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the version written, else latest; malware is human_only. It adds this project's other confirmed findings (counted, scope \"project\"), install drift, your recorded decisions and any conflict with them, and judge-accepted reading. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); only version-confirmed evidence, a finding on a checked package, running install drift or a decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
   inputSchema: {
     type: "object" as const,
     properties: {
       task: {
         type: "string",
         description:
-          "The request as it was given, in the user's words (e.g. \"upgrade fastembed from 5 to 7\"): do not correct spellings, rephrase, or drop names; a misspelt package name may be the finding.",
+          "The request in the user's words (\"upgrade fastembed from 5 to 7\"): do not correct spellings or drop names; a misspelt name may be the finding.",
       },
       files: {
         type: "array",
@@ -370,13 +374,13 @@ export const whatShouldIKnowTool = {
         type: "array",
         maxItems: 100,
         description:
-          "Packages this task adds or changes, at most 100. public: true = on the public registry: checked in this call at `version` (default: the version the task writes, else latest), verdict recorded as dependency_check records it. public: false = private registry, git, path or workspace: never sent. Names the task does not mention are accepted.",
+          "Packages this task adds or changes, at most 100. public: true = on the public registry: checked in this call at `version` (default: the version the task writes, else latest), verdict recorded as dependency_check records it. public: false = private registry, git, path or workspace: not looked up for the task. Names the task does not mention are accepted.",
         items: {
           type: "object",
           properties: {
             ecosystem: { type: "string", enum: ["npm", "PyPI", "crates.io", "Go"], description: "Package registry." },
             name: { type: "string", description: "Package name as published." },
-            version: { type: "string", description: "Version, constraint or dist-tag the task will write." },
+            version: { type: "string", description: "Exact version, latest or a constraint the task writes; a dist-tag other than latest is refused." },
             public: { type: "boolean" },
           },
           required: ["ecosystem", "name", "public"],
@@ -641,7 +645,9 @@ export async function executeWhatShouldIKnow(
   const notPackages = readNotPackages(params.not_packages);
   const refusedEntries = declared.refused.length + notPackages.refused.length;
   const argsNotRead: TaskWordWithheld[] = [...declared.refused, ...notPackages.refused];
-  const forbidden = new Set([...declared.entries.filter((d) => !d.public).map((d) => forbiddenKey(d.name)), ...notPackages.words.map(forbiddenKey)]);
+  // A refused `public: false` entry still forbids its name (round 6, item 4b: a refused `!`-escaped Go path let its
+  // public sibling be sent).
+  const forbidden = new Set([...declared.entries.filter((d) => !d.public).map((d) => forbiddenKey(d.name)), ...declared.forbidOnly.map(forbiddenKey), ...notPackages.words.map(forbiddenKey)]);
   const isForbidden = (name: string) => forbidden.size > 0 && forbidden.has(forbiddenKey(name));
   const declaredPrivate: PrivateIndex[] = [];
   const declaredPublic: DeclaredPackage[] = [];
@@ -675,7 +681,7 @@ export async function executeWhatShouldIKnow(
   // Marked private by the caller: weighed as the project's own private packages are (once per name).
   for (const d of declaredPrivate) {
     if (d.basis === "marked private by you" && !privateTask.some((x) => forbiddenKey(x.package) === forbiddenKey(d.name))) {
-      privateTask.push({ package: d.name, ecosystem: d.ecosystem as CheckEcosystem, installed: [], why: "marked private by the caller: never looked up" });
+      privateTask.push({ package: d.name, ecosystem: d.ecosystem as CheckEcosystem, installed: [], why: installedNames(ecosystemDeps())(d.name, d.ecosystem as CheckEcosystem) ? "marked private by the caller: not looked up for the task (this project's own scan still reads it with the installed dependencies unless the project's configuration marks it private)" : "marked private by the caller: never looked up" });
     }
   }
   const installed = installedNames(ecosystemDeps());
@@ -712,7 +718,9 @@ export async function executeWhatShouldIKnow(
     const writtenVersions = [...words.map((w) => w.version), ...onOperand, ...written, ...knownNew.map((k) => k.version), ...knownWanted.map((k) => k.to)].filter((v): v is string => typeof v === "string" && v !== "");
     // A build or local label (`1.0.0+zqxlocalbuild`) can name a private build: it is not sent. The plain version
     // is checked, and the answer says so (the same screen the task text gets).
-    const plainOf = (v: string) => {
+    const plainOf = (given: string) => {
+      // Item 7: a Poetry caret or tilde the task writes for PyPI is judged as the PEP 440 range it means.
+      const v = d.ecosystem === "PyPI" ? (poetrySpec(given) ?? given) : given;
       const plus = v.indexOf("+");
       if (plus <= 0) return v;
       labelCut.add(`${d.name} ${v.slice(0, plus)}`);
@@ -751,12 +759,12 @@ export async function executeWhatShouldIKnow(
     const mine = results.flatMap((r) => {
       if (typeof r.package !== "string") return [];
       const key = `${r.ecosystem}\0${ecosystemKey(r.package, r.ecosystem as CheckEcosystem)}`;
-      const spelled = declaredName.get(key);
-      if (spelled === undefined) return [];
+      if (!declaredName.has(key)) return [];
       const line = `${key}\0${r.to}\0${r.to_requested ?? ""}\0${r.verdict}`;
       if (recorded.has(line)) return [];
       recorded.add(line);
-      return [{ ...r, package: spelled }];
+      // As the engine wrote it, never renamed: the line dependency_check writes for the same item (round 6, item 5).
+      return [r];
     });
     if (mine.length > 0) void recordVerdicts(mine, { privateRule: privateRule ? (e, n) => privateRule.call(liveIntel, e, n) : null });
   };
@@ -824,7 +832,16 @@ export async function executeWhatShouldIKnow(
     if (near) return [`you said ${w.word} is not a package; it is one edit from ${near}: make sure nothing installs it`];
     return [];
   })
-    .concat(withheldByCaller.filter((w) => !w.malicious).map((w) => `${w.name} was not sent because you marked it private or not a package, but this briefing would have checked it (${w.dependency ? "a dependency of this project" : "a well-known name"}): it is unchecked; make sure nothing installs it unchecked`))
+    // Round 6, item 4a: the text is true for an installed dependency too, which the project's own scan reads whatever a call declares.
+    .concat(
+      withheldByCaller
+        .filter((w) => !w.malicious)
+        .map((w) =>
+          w.dependency
+            ? `you marked ${w.name} private or not a package, so this briefing did not look it up for the task, though it would have (a dependency of this project): it is unchecked for the task; make sure nothing installs it unchecked. ${SCAN_STILL_READS}`
+            : `${w.name} was not sent because you marked it private or not a package, but this briefing would have checked it (a well-known name): it is unchecked; make sure nothing installs it unchecked`,
+        ),
+    )
     .concat(withheldDismissed.filter((w) => w.standing).map((w) => `you said ${w.shown} is not a package; it stands where a package name stands in the task's command: make sure nothing installs it`));
   // A bundled known-malicious name is known without a lookup: human_only whatever the caller says (I1).
   const maliciousWithheld = withheldByCaller.filter((w) => w.malicious);
@@ -959,7 +976,7 @@ export async function executeWhatShouldIKnow(
     // from every checked row, so a confirmed typosquat or critical pin is human_only again (wave 2, P4/P5).
     if (maliciousWithheld.length > 0) {
       assessed.level = "human_only";
-      assessed.reason = `${maliciousWithheld.map((w) => w.name).join(", ")} ${maliciousWithheld.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list): ${maliciousWithheld.length === 1 ? "it was" : "they were"} not sent because you marked ${maliciousWithheld.length === 1 ? "it" : "them"} private or not a package, and ${maliciousWithheld.length === 1 ? "it stands" : "they stand"} in the task: a human decides. ${assessed.reason}`;
+      assessed.reason = `${maliciousWithheld.map((w) => w.name).join(", ")} ${maliciousWithheld.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list): ${maliciousWithheld.length === 1 ? "it was" : "they were"} not looked up for the task because you marked ${maliciousWithheld.length === 1 ? "it" : "them"} private or not a package, and ${maliciousWithheld.length === 1 ? "it stands" : "they stand"} in the task: a human decides. ${assessed.reason}`;
     }
     if (refusedEntries > 0) assessed.reason = `${assessed.reason} ${refusedEntries} of your entries ${refusedEntries === 1 ? "was" : "were"} refused (task_packages.not_read): fix and resend ${refusedEntries === 1 ? "it" : "them"}.`;
     if (standing.length > 0) {
