@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { gateFindings, prepareCommand, tokenize, totals, yarnFlavorFor, type ProjectResult } from "../../bench/plan-exec/lib.mjs";
+import { gateFindings, predictionCheck, prepareCommand, tokenize, totals, yarnFlavorFor, type ProjectResult } from "../../bench/plan-exec/lib.mjs";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -53,6 +53,19 @@ describe("Yarn workspace steps", () => {
   });
 });
 
+describe("a step that falls short of its fix", () => {
+  it("counts a planned copy that moved to a release still carrying its advisory as planned but remained, not as a new copy (crewAI cryptography)", () => {
+    const r = (pkg: string, version: string, id: string) => ({ ecosystem: "PyPI", package: pkg, current_version: version, vuln_id: id });
+    const got = predictionCheck({
+      beforeRows: [r("cryptography", "43.0.3", "GHSA-old-1"), r("cryptography", "43.0.3", "GHSA-old-2")],
+      afterRows: [r("cryptography", "45.0.7", "GHSA-old-2"), r("cryptography", "45.0.7", "GHSA-new-1"), r("pillow", "11.0.0", "GHSA-p")],
+      steps: [{ n: 1, fixes: ["PyPI:cryptography"], rows: [{ package: "cryptography", ecosystem: "PyPI", currentVersion: "43.0.3", targetVersion: "50.0.0" }], actions: [{ type: "run" as const, dir: ".", run: "uv lock" }] }],
+    });
+    expect(got.planned_but_remained).toEqual(["PyPI|cryptography|43.0.3 -> 45.0.7"]);
+    expect(got.new_vulnerable_copies).toBe(1);
+  });
+});
+
 describe("per-project floors", () => {
   const project = (id: string, before: number, after: number, failed = 0): ProjectResult => ({
     id,
@@ -70,5 +83,20 @@ describe("per-project floors", () => {
       "formik: 1 step(s) failed (allowed there: 0)",
       "formik: advisories 400 -> 160: 0.6 cleared, below its floor 0.62",
     ]);
+  });
+});
+
+describe("groups", () => {
+  const project = (id: string, before: number, after: number, lowering = 0): ProjectResult => ({
+    id,
+    order_source: "run_order",
+    counts: { steps: 10, steps_run: 10, steps_failed: 0, steps_refused: 0, steps_without_effect: 0, steps_lowering: lowering, steps_lowering_earlier: 0 },
+    advisories: { before, after },
+    prediction: { vulnerable_copies_before: 10, predicted_remaining: 1, remaining: 1, vulnerable_copies_after: 1, planned_but_remained: [] },
+  });
+  it("holds a group of projects to its own numbers inside a larger corpus", () => {
+    const thresholds = { min_net_cleared_ratio: 0.4, groups: { original: { ids: ["a", "b"], min_net_cleared_ratio: 0.77, max_lowering_steps: 1 } } };
+    const ps = [project("a", 100, 20, 1), project("b", 100, 30), project("c", 1000, 600)];
+    expect(gateFindings(totals(ps), thresholds, ps)).toEqual(["original: advisories 200 -> 50: 0.75 cleared, below the group's 0.77"]);
   });
 });
