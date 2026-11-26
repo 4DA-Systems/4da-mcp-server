@@ -1051,25 +1051,10 @@ function pnpmContentLines(text) {
 }
 
 /**
- * Whether pnpm-workspace.yaml content lines hold a flow mapping the hook does not read: a `{` or `}`
- * on a line that is not a `#` line, once each exact empty mapping (`{}`, `{ }`) is taken out. No
- * quote or comment is read: a reader of YAML's flow syntax could not be made right in small steps
- * (three blind checks of the a1125 hook lane: `''` escapes, tags and anchors before a quote,
- * carried quotes, block scalars holding braces), so a brace anywhere stands for one.
- */
-function pnpmHasBrace(lines) {
-  for (const line of lines) {
-    tick();
-    if (!line.trimStart().startsWith("#") && /[{}]/.test(line.replace(/\{[ \t]*\}/g, ""))) return true;
-  }
-  return false;
-}
-
-/**
  * pnpm-workspace.yaml: the versions its `catalog`, named `catalogs` and `overrides` set, keyed by
  * name and section (the same package in two catalogs is two entries). Only plain `key: value`
  * lines are read (a value `npm:name@version` as the package and version it names); flow mappings
- * are not (wholeFileChanges holds a changed file that has one).
+ * are not (wholeFileChanges holds a changed file with a line that is not plain, R7).
  */
 function pnpmWorkspaceVersions(text, out) {
   let top = null;

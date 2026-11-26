@@ -49,7 +49,6 @@ const contentLines = (text: string) =>
     .split("\n")
     .map((l) => l.trimEnd())
     .filter((l) => l);
-const hasBrace = (text: string) => contentLines(text).some((l) => !l.trimStart().startsWith("#") && /[{}]/.test(l.replace(/\{[ \t]*\}/g, "")));
 /**
  * Block-style spellings with no brace that 6.5.1 lets through as well, left as documented limits
  * by the lead (not flow syntax): a value with an anchor or a tag, a value on the next line, a block
