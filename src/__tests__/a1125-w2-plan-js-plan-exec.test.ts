@@ -100,3 +100,24 @@ describe("groups", () => {
     expect(gateFindings(totals(ps), thresholds, ps)).toEqual(["original: advisories 200 -> 50: 0.75 cleared, below the group's 0.77"]);
   });
 });
+
+describe("a group's two copy counts together", () => {
+  it("fails when their sum passes max_planned_and_new_copies even though each is inside its own cap", () => {
+    const p = (id: string, pbr: number, newc: number): ProjectResult => ({
+      id,
+      order_source: "run_order",
+      counts: { steps: 1, steps_run: 1, steps_failed: 0, steps_refused: 0, steps_without_effect: 0, steps_lowering: 0, steps_lowering_earlier: 0 },
+      advisories: { before: 10, after: 1 },
+      prediction: { vulnerable_copies_before: 1, predicted_remaining: 0, remaining: 0, vulnerable_copies_after: 0, planned_but_remained: Array.from({ length: pbr }, (_, i) => `npm|x|${i}`), new_vulnerable_copies: newc },
+    });
+    const thresholds = { groups: { original: { ids: ["a"], max_planned_but_remained: 28, max_new_vulnerable_copies: 22, max_planned_and_new_copies: 50 } } };
+    const ps = [p("a", 28, 22), p("b", 0, 0)];
+    expect(gateFindings(totals(ps), thresholds, ps)).toEqual([]);
+    const over = [p("a", 28, 22), p("b", 0, 0)];
+    over[0].prediction.new_vulnerable_copies = 23;
+    expect(gateFindings(totals(over), thresholds, over)).toEqual([
+      "original: 23 vulnerable copies the run brought in that were not there before (allowed in the group: 22)",
+      "original: 51 vulnerable copies a step ran for that stayed, or the run brought in, together (allowed in the group: 50)",
+    ]);
+  });
+});
