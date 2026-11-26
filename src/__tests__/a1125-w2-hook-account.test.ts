@@ -324,3 +324,34 @@ describe("the remedy releases", () => {
     for (const c of ["pip install -Ur requirements.txt requests==9", "uv pip install -qr requirements.txt"]) expect(run(c).text).not.toMatch(/"requirements/);
   });
 });
+
+/** D4: a manager subcommand that runs another command is read as that command, then released by the call its denial names. */
+describe("D4: what a runner subcommand runs is read", () => {
+  it.each([
+    "bun run npm i lodash@4.17.20",
+    "bun x npm@10 i lodash@4.17.20",
+    "pnpm npm i lodash@4.17.20",
+    "yarn npm i lodash@4.17.20",
+    "yarn run npm i lodash@4.17.20",
+    "yarn exec npm i lodash@4.17.20",
+    "pnpm exec npm i lodash@4.17.20",
+    "npm exec -- npm i lodash@4.17.20",
+    "npx -y npm@10.9.2 install lodash@4.17.20",
+    "uv tool run uv add requests==2.5.0",
+    "uvx uv add requests==2.5.0",
+    "python -m uv add requests==2.5.0",
+    "python -m poetry add requests==2.5.0",
+    "python -X utf8 -m pip install requests==2.5.0",
+    "hatch env run -e test -- pip install requests==2.5.0",
+    "pdm run pip install requests==2.5.0",
+  ])("%s: held, and the call its denial names releases it", (command) => {
+    s.ledger([]);
+    const r = run(command);
+    expect(r.decision, r.text).toBe("deny");
+    releases(command);
+  });
+
+  it("python -m <a module this hook does not read> with an install in its words is held", () => {
+    expect(run("python -m pipx run uv add requests==2.5.0").text).toContain("could not be read");
+  });
+});

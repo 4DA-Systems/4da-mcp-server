@@ -2270,7 +2270,8 @@ const JS_VALUES = {
 // it, as `add` (alias `a`) does.
 const JS_SUBCOMMANDS = { npm: new Set(["install", "install-test"]), pnpm: new Set(["add", "install", "i", "up", "update", "upgrade"]), yarn: new Set(["add", "up", "upgrade"]), bun: new Set(["add", "a", "install", "i"]) };
 /** Package-manager subcommands that run another command or package: what they run is read as a command. */
-const JS_RUNNERS = { npm: new Set(["exec"]), pnpm: new Set(["dlx", "exec"]), yarn: new Set(["dlx", "exec"]), bun: new Set(["x"]) };
+// `bun run` and `yarn run` run a script, a binary or (Bun, classic Yarn) a command: what they run is read too.
+const JS_RUNNERS = { npm: new Set(["exec"]), pnpm: new Set(["dlx", "exec"]), yarn: new Set(["dlx", "exec", "run"]), bun: new Set(["x", "run", "exec"]) };
 /** The package managers whose installs this hook reads. */
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
 /** Programs that run a package's binary (npx, bunx, pnpx = `pnpm dlx`): what they run is read as a command. */
@@ -2735,6 +2736,29 @@ function npmPkgSet(words, json) {
 
 /** Tools whose `run` runs the command after it. */
 const RUN_TOOLS = new Set(["poetry", "pipenv", "pdm", "rye", "hatch", "pixi"]);
+/** Python modules that are package managers this hook reads (`python -m uv add x`). */
+const PYTHON_MANAGER_MODULES = new Set(["uv", "poetry"]);
+
+/**
+ * The command a `<tool> run` runs (`pdm run pip install x`, `hatch env run -e test -- pip install
+ * x`): after `--` when there is one, else the words after `run` when no option stands first.
+ * [] for a bare `run`; null when the words are not a `run`, or an option stands first and no `--`.
+ */
+function runInner(program, args) {
+  let rest = program === "hatch" && args[0] === "env" && args[1] === "run" ? args.slice(1) : args;
+  if (rest[0] !== "run") return null;
+  rest = rest.slice(1);
+  if (rest.length === 0) return [];
+  if (!rest[0].startsWith("-")) return rest;
+  const dd = rest.indexOf("--");
+  return dd >= 0 ? rest.slice(dd + 1) : null;
+}
+
+/** `uvx [options] <command>` / `uv tool run`: the command it runs, when uv tool install's table reads the options. */
+function toolRunInstalls(args, depth, dialect) {
+  const read = quietly(() => readOptions(args, ACCOUNT_TABLES.uvtool, "", true));
+  return read.bad || read.at < 0 ? [] : commandInstalls(args.slice(read.at), depth + 1, dialect);
+}
 
 /** `go install mod@v`: the module at that release (`@latest` the request "latest"; a branch is a tag). */
 function goSpecInstalls(w) {
@@ -2809,6 +2833,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       return runnerInstalls(["--shell-mode", ...args.slice(at + 1)], depth);
     }
     if (at >= 0 && isRunnerCommand(program, args[at])) return runnerInstalls(args.slice(at + 1), depth);
+    // pnpm and Yarn run a command they do not know as a script or a binary (`pnpm npm i x`): a manager there is read.
+    if ((program === "pnpm" || program === "yarn") && at >= 0 && managerWord(programName(args[at]))) return wrappedInstalls(args.slice(at), depth);
     // `yarn global add x`: an add, into Yarn's global folder.
     if (program === "yarn" && at >= 0 && args[at] === "global" && args[at + 1] === "add") return jsInstalls(program, [...args.slice(0, at), ...args.slice(at + 1)]);
     return jsInstalls(program, args);
@@ -2837,7 +2863,12 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
       const a = args[j];
       // `python -m piptools compile ... --upgrade-package "x==v"` is pip-compile.
       if (a === "-m" && args[j + 1] === "piptools") return args[j + 2] === "compile" ? upgradePackages(args.slice(j + 3)) : [];
-      if (a === "-m") return /^pip(?:\d+(?:\.\d+)*)?$/.test(args[j + 1] ?? "") ? pipInstalls(args.slice(j + 2)) : [];
+      if (a === "-m") {
+        const module = args[j + 1] ?? "";
+        if (/^pip(?:\d+(?:\.\d+)*)?$/.test(module)) return pipInstalls(args.slice(j + 2));
+        // `python -m uv add x`, `python -m poetry add x`: the manager the module is.
+        return PYTHON_MANAGER_MODULES.has(module) ? commandInstalls([module, ...args.slice(j + 2)], depth + 1, dialect) : [];
+      }
       if (a === "-c" || a === "-" || !a.startsWith("-")) return [];
       if (a === "-X" || a === "-W" || a === "--check-hash-based-pycs") j++;
     }
@@ -2848,6 +2879,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     const at = subcommandAt(args, UV_GLOBAL_VALUES);
     if (at >= 0 && args[at] === "pip") return args[at + 1] === "compile" ? upgradePackages(args.slice(at + 2)) : pipInstalls(args.slice(at + 1));
     if (at >= 0 && args[at] === "tool" && args[at + 1] === "install") return uvToolInstall(args.slice(at + 2));
+    // `uv tool run [options] <command>` (uvx spelled out): the command it runs, read as any other.
+    if (at >= 0 && args[at] === "tool" && args[at + 1] === "run") return toolRunInstalls(args.slice(at + 2), depth, dialect);
     // `uv run [options] <command>`: the command, read as any other.
     if (at >= 0 && args[at] === "run") {
       const inner = readOptions(args.slice(at + 1), ACCOUNT_TABLES.uvadd, "", true);
@@ -2863,8 +2896,12 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
   if (program === "pip-compile") return upgradePackages(args);
   // `uvx pip-compile ...`: uv runs the pip-tools command named first.
   if (program === "uvx" && args[0] === "pip-compile") return upgradePackages(args.slice(1));
+  if (program === "uvx") return toolRunInstalls(args, depth, dialect);
   // `poetry run <command>`, `pipenv run`, `pdm run`, `rye run`, `hatch run`, `pixi run`: the command, read as any other.
-  if (RUN_TOOLS.has(program) && args[0] === "run") return args.length > 1 && !args[1].startsWith("-") ? commandInstalls(args.slice(1), depth + 1, dialect) : [];
+  if (RUN_TOOLS.has(program)) {
+    const inner = runInner(program, args);
+    if (inner !== null) return inner.length > 0 ? commandInstalls(inner, depth + 1, dialect) : [];
+  }
   if (program === "poetry") {
     const all = operands(args, { values: POETRY_VALUES, refuse: new Set(["--source"]) });
     if (!all || all[0] !== "add") return [];
@@ -3300,9 +3337,11 @@ function accountCommand(words, dialect, depth) {
     return inner === null ? `${program} with options this hook does not read` : accountLine(inner, "powershell", depth + 1);
   }
   if (PACKAGE_RUNNERS.has(program)) return accountRunner(args, dialect, depth);
+  if (program === "uvx") return accountToolRun(args, dialect, depth);
   if (RUN_TOOLS.has(program) && program !== "poetry") {
-    if (args[0] !== "run") return null;
-    return args.length > 1 && !args[1].startsWith("-") ? accountCommand(args.slice(1), dialect, depth + 1) : `${program} run with an option this hook does not read`;
+    const inner = runInner(program, args);
+    if (inner === null) return `${program} with a command this hook does not read`;
+    return inner.length > 0 ? accountCommand(inner, dialect, depth + 1) : null;
   }
   if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program)) return accountPython(program, args, reader);
   if (PACKAGE_MANAGERS.has(program)) return accountJs(program, args, dialect, depth, reader);
@@ -3320,6 +3359,13 @@ function judgedByReader(names, reader, ecosystem) {
   const read = new Set(reader().map((r) => nameKey(r.ecosystem, r.name)));
   for (const n of names) if (!read.has(nameKey(ecosystem, n))) return `${n}, which this hook did not read as a version to check`;
   return null;
+}
+
+/** `uvx` / `uv tool run`: the command it runs, read again, its options read with uv tool install's table. */
+function accountToolRun(args, dialect, depth) {
+  const read = readOptions(args, ACCOUNT_TABLES.uvtool, "", true);
+  if (read.bad) return `the option ${read.bad}`;
+  return read.at < 0 ? null : accountCommand(args.slice(read.at), dialect, depth + 1);
 }
 
 /** npx, bunx, pnpx, `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x`: the command they run, read again. */
@@ -3355,7 +3401,9 @@ function accountPython(program, args, reader) {
     if (glued) {
       const module = glued[1] ?? args[i + 1] ?? "";
       const rest = args.slice(i + (glued[1] ? 1 : 2));
-      return /^pip\d*(?:\.\d+)?$/.test(module) ? accountPip(rest, ACCOUNT_TABLES.pip, reader) : null;
+      if (/^pip\d*(?:\.\d+)?$/.test(module)) return accountPip(rest, ACCOUNT_TABLES.pip, reader);
+      if (PYTHON_MANAGER_MODULES.has(module)) return accountCommand([module, ...rest], "bash", 1);
+      return `${program} -m ${module.slice(0, 60)}, a module this hook does not read`;
     }
     if (/^-(?:\d+(?:\.\d+)?(?:-\d+)?|[uBOsSEIbdqvRP]+|V:\S+)$/.test(a)) continue;
     if (a === "-X" || a === "-W") {
@@ -3384,7 +3432,8 @@ function accountJs(manager, args, dialect, depth, reader) {
   if (manager === "yarn" && sub === "workspace") return rest.length > 1 ? accountJs("yarn", rest.slice(1), dialect, depth, reader) : null;
   if (manager === "yarn" && sub === "workspaces") return rest[0] === "foreach" ? accountJs("yarn", rest.slice(1), dialect, depth, reader) : null;
   const verb = manager === "npm" ? (npmCommand(sub) ?? sub) : sub;
-  if ((manager === "npm" && verb === "exec") || ((manager === "pnpm" || manager === "yarn") && (verb === "dlx" || verb === "exec")) || (manager === "bun" && verb === "x")) return accountRunner(rest, dialect, depth);
+  if (isRunnerCommand(manager, sub)) return accountRunner(rest, dialect, depth);
+  if ((manager === "pnpm" || manager === "yarn") && managerWord(programName(sub))) return accountCommand([sub, ...rest], dialect, depth + 1);
   if (manager === "npm" && verb === "pkg") return accountNpmPkg(rest);
   const adds = { npm: ["install", "install-test"], pnpm: ["add", "install", "i"], yarn: ["add"], bun: ["add", "a", "install", "i"] }[manager];
   const moves = { npm: ["update"], pnpm: ["up", "update", "upgrade"], yarn: ["up", "upgrade"], bun: ["update"] }[manager];
@@ -3472,6 +3521,7 @@ function accountUv(args, dialect, depth, reader) {
     return inner.at < 0 ? null : accountCommand(rest.slice(inner.at), dialect, depth + 1);
   }
   if (sub === "tool") {
+    if (rest[0] === "run") return accountToolRun(rest.slice(1), dialect, depth);
     if (rest[0] !== "install") return null;
     const tool = readOptions(rest.slice(1), ACCOUNT_TABLES.uvtool);
     if (tool.bad) return `the option ${tool.bad}`;
