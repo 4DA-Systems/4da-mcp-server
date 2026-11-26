@@ -3566,7 +3566,8 @@ function accountLine(line, dialect, depth = 0) {
   const commands = quietly(() => simpleCommands(line, dialect, redirects, dropped, MAX_ACCOUNT_CHARS, links));
   if (!commands) {
     if (dialect === "bash" && line.includes("<<")) return dataHeredoc(line);
-    const span = /\$\([^()]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`/.exec(line)?.[0];
+    // (a backquote span is not named: it cannot be quoted inside the remedy's own backquotes)
+    const span = /\$\([^()]*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*/.exec(line)?.[0];
     // A substitution that holds the install itself: the command inside it, run on its own.
     const inner = span && /^(?:\$\(|`)/.test(span) ? span.replace(/^\$\(|^`|\)$|`$/g, "") : "";
     const form = inner && detectsInstall(inner) ? "the command inside it, run as a command of its own" : "its value written out in single quotes, not a variable or substitution";
@@ -4010,8 +4011,46 @@ function accountCommand(words, dialect, depth, exempt = true) {
 }
 
 /** Each package the account named must be one the reader judges (the two read the same command). */
+/**
+ * Round 14 (R10c): whether a version or constraint is one dependency_check can answer: an exact
+ * version, latest, or a range in the registry's own grammar (npm semver ranges, PEP 440 specifiers
+ * without ===, Cargo requirements, Go versions and queries). Anything else (`ms@^^2`, `2.x.y`,
+ * `1.0.200.1`, `===1.0x`) would ask for a call that can never pass.
+ */
+function versionReadable(ecosystem, spec) {
+  const v = String(spec).trim();
+  if (v === "" || v.toLowerCase() === LATEST) return true;
+  if (ecosystem === "npm") {
+    const part = String.raw`(?:\*|x|X|\d+)`;
+    const partial = String.raw`v?${part}(?:\.${part}(?:\.${part}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)?)?`;
+    const one = new RegExp(`^(?:(?:<=|>=|<|>|=|~>?|\\^)?${partial})$`);
+    const hyphen = new RegExp(`^${partial}\\s+-\\s+${partial}$`);
+    return v.split("||").every((alt) => {
+      const a = alt.trim().replace(/(<=|>=|<|>|=|~>?|\^)\s+/g, "$1");
+      return a === "" || hyphen.test(a) || a.split(/\s+/).every((c) => one.test(c));
+    });
+  }
+  if (ecosystem === "PyPI") {
+    // (Poetry's `^` / `~` as the reader passes them on; an epoch `1!`)
+    const clause = /^(?:~=|==|!=|<=|>=|<|>|\^|~)\s*v?(?:\d+!)?\d+(?:\.\d+)*(?:\.\*)?(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?(?:post|rev|r)[-_.]?\d*)?(?:[-_.]?dev[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+    return v === "*" || /^v?(?:\d+!)?\d+(?:\.\d+)*$/.test(v) || v.split(",").every((c) => clause.test(c.trim()));
+  }
+  if (ecosystem === "crates.io") {
+    const req = /^(?:=|>=|<=|>|<|~|\^)?\s*(?:\*|\d+(?:\.(?:\d+|\*|x|X)(?:\.(?:\d+|\*|x|X))?)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/;
+    return v.split(",").every((c) => req.test(c.trim()));
+  }
+  if (ecosystem === "Go") return /^(?:v\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|upgrade|patch|none|[<>]=?v\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?)$/.test(v) || !/^v\d/.test(v);
+  return true;
+}
+
 function judgedByReader(names, reader, ecosystem) {
   if (names.length === 0) return null;
+  for (const r of reader()) {
+    if (r.ecosystem !== ecosystem || r.tag || specTooLong(String(r.spec)) || versionReadable(ecosystem, r.spec)) continue;
+    const lower = String(r.name).toLowerCase();
+    const written = accountWords.find((w) => w.replace(/^['"]|['"]$/g, "").toLowerCase().startsWith(lower));
+    return notReadAt(`${r.name} ${r.spec}, not a version this hook reads; write an exact version`, written ?? null, OPERAND_FORM);
+  }
   const read = new Set(reader().map((r) => nameKey(r.ecosystem, r.name)));
   // R1: and the account names every name the reader would judge (an option's value read as a package
   // `bun add --os linux` would ask for a call that can never pass).
@@ -4157,7 +4196,7 @@ function accountPip(args, table, reader) {
   const values = new Map([...head.values, ...read.values]);
   // J2: a requirements or constraints file read from stdin is not one this hook can read.
   for (const k of ["-r", "--requirement", "--requirements", "-c", "--constraint", "--constraints"]) {
-    for (const v of values.get(k) ?? []) if (v === "-" || /^(?:\/dev\/(?:stdin|fd\/\d+)|con)$/i.test(v)) return notReadAt(`${k} ${v}, a file read from the command's input`, optionToken(k), "a file name");
+    for (const v of values.get(k) ?? []) if (v === "-" || /^(?:\/dev\/(?:stdin|fd\/\d+)|con)$/i.test(v)) return notReadAt(`${k} ${v}, a file read from the command's input`, accountWords.includes(`${k}=${v}`) ? `${k}=${v}` : `${k} ${v}`, "a file name");
   }
   const index = ["-i", "--index-url", "--index", "--default-index"].flatMap((k) => values.get(k) ?? []);
   for (const v of index) if (sourceKind(v) === "unknown") return `the index ${v}`;

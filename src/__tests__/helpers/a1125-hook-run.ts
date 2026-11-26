@@ -98,7 +98,7 @@ export const TAKES_VALUE = new Set(
  * (and, for find, the `;` / `+` that ends -exec); "with `X` written as <form>" writes X in that form
  * (`value` stands for a variable's or substitution's value). Null when the denial names no part.
  */
-export function followRemedy(command: string, text: string, value = "lodash"): string | null {
+export function followRemedy(command: string, text: string, value = "lodash", valueAfter?: (option: string, next: string) => boolean): string | null {
   const tidy = (c: string) => c.replace(/[ \t]{2,}/g, " ").replace(/^\s*(?:;|&&)\s*/, "").trim();
   // The named part as a whole word (`--pre` is not the start of `--prefix`).
   const word = (token: string) => new RegExp(`(^|[\\s'"(])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s'";|&)]|$)`);
@@ -107,7 +107,9 @@ export function followRemedy(command: string, text: string, value = "lodash"): s
   const named = /Run the same command without the option `([^`]+)`; if that option takes a value, remove its value too/.exec(text);
   if (named) {
     const o = named[1];
-    const tail = !o.includes("=") && TAKES_VALUE.has(o) ? String.raw`(?:\s+(?:'[^']*'|"[^"]*"|[^\s'";|&)]+))?` : "";
+    const next = command.slice(command.indexOf(o) + o.length).trim().split(/\s+/)[0] ?? "";
+    const takes = valueAfter ? valueAfter(o, next) : TAKES_VALUE.has(o);
+    const tail = !o.includes("=") && takes ? String.raw`(?:\s+(?:'[^']*'|"[^"]*"|[^\s'";|&)]+))?` : "";
     const re = new RegExp(`(^|[\\s'"(])${o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}(?=[\\s'";|&)]|$)`);
     return tidy(command.replace(re, "$1"));
   }
@@ -123,6 +125,7 @@ export function followRemedy(command: string, text: string, value = "lodash"): s
   if (form.startsWith("an exact version")) return tidy(command.replace(token, bareName(token)));
   if (form.startsWith("one module path")) return tidy(command.replace(token, token.replace(/\/\.\.\.$/, "")));
   if (form.startsWith("its value written out")) return tidy(command.replace(token, value));
+  if (form === "a file name") return tidy(command.replace(token, token.replace(/\s+\S+$/, " r.txt")));
   if (form.startsWith("the command inside it")) return tidy(token.replace(/^\$\(|^`|\)$|`$/g, ""));
   // A setting written as the option it stands for: the setting left out, the option on the command.
   const option = /^`([^`]+)` on the package manager's command$/.exec(form);
