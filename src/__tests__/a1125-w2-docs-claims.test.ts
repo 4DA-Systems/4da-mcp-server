@@ -14,7 +14,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
-import { MAX_DECLARED, MAX_TO_CONFIRM, SCAN_STILL_READS } from "../tools/briefing-confirm.js";
+import { canonicalCommands } from "../tools/briefing-canonical.js";
+import { RAW_SOURCE, unreadableReason } from "../tools/briefing-command-check.js";
+import { MAX_DECLARED, MAX_TO_CONFIRM, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -88,6 +90,59 @@ describe("what_should_i_know: the caps and levels the docs state", () => {
   it("the README's example hint is the wording to_confirm builds", () => {
     expect(text("src/tools/briefing-confirm.ts")).toContain("`one edit from ${near}: if you mean ${near}, confirm ${near} instead`");
     expect(readme).toContain('"hint": "one edit from lodash: if you mean lodash, confirm lodash instead"');
+  });
+});
+
+describe("what_should_i_know after confirmation round 7: the command grammar and the wordings the docs quote", () => {
+  const operands = (task: string) => canonicalCommands(task).flatMap((c) => (c.canonical ? c.operands.map((o) => o.name) : []));
+
+  it("a command inside a sentence holds the words after it; its own line, a code span or a parenthesis does not", () => {
+    expect(operands("Use npm install msw for tests")).toEqual(["msw", "for", "tests"]);
+    expect(operands("Please npm install x and then run the tests")).toEqual(["x", "and", "then", "run", "the", "tests"]);
+    expect(operands("Add a test helper.\nnpm install msw")).toEqual(["msw"]);
+    expect(operands("Use `npm install msw` for tests")).toEqual(["msw"]);
+    expect(operands("Add a helper (npm install msw) for tests")).toEqual(["msw"]);
+    for (const doc of [readme, next]) expect(doc).toContain('"Use npm install msw for tests" holds msw, for and tests');
+    expect(next).toContain('"Please npm install x and then run the tests" holds x, and, then, run, the and tests');
+  });
+
+  it("a command not read whole is said by its manager and verb, with the wordings the CHANGELOG quotes", () => {
+    const comma = canonicalCommands("pip install requests, x")[0]!;
+    expect(comma.canonical).toBe(false);
+    expect(unreadableReason({ ...comma, unreadable: comma.why as never, operands: [] })).toBe("This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check.");
+    expect(next).toContain("(\"This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check.\")");
+    expect(canonicalCommands("npm create vite")[0]!.why).toBe("it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check");
+    expect(next).toContain('"it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check"');
+    expect(canonicalCommands("npm install --before 2020-01-01 x")[0]!.why).toBe("an option this briefing does not read");
+    expect(next).toContain('("an option this briefing does not read")');
+    for (const runner of ["npx x", "pnpm dlx x", "uv tool run x", "go run example.com/x@v1.0.0", "deno run npm:x"]) expect(canonicalCommands(runner)[0]!.canonical, runner).toBe(false);
+  });
+
+  it("a package source of the task's own: the not_read wording, and the -F limit the CHANGELOG states", () => {
+    expect(SOURCE_HELD).toBe("not looked up: the task names a package source of its own; if it is on the public registry, check it with dependency_check");
+    expect(next).toContain(`"${SOURCE_HELD}"`);
+    expect(RAW_SOURCE.test("cargo add -F derive serde")).toBe(true);
+    expect(RAW_SOURCE.test("cargo add --features derive serde")).toBe(false);
+    expect(next).toContain("`cargo add -F derive serde` names a package source of its own");
+  });
+
+  it("the safe_to_delegate reason's last sentence, and the task length limit", () => {
+    expect(RESTS_ON_DECLARATION).toBe("This rests on your declaration: a package you did not declare was not checked.");
+    expect(next).toContain(`"${RESTS_ON_DECLARATION}"`);
+    expect(/^const MAX_TEXT_ARG_LENGTH = 200_000;$/m.test(text("src/tool-args.ts"))).toBe(true);
+    expect(next).toContain("the error for a `task` over 200,000 characters repeats nothing of the task");
+  });
+
+  it("build metadata: the wording dependency_check gives, quoted without the label", () => {
+    expect(text("src/tools/dependency-check.ts")).toContain('"Build metadata in %s was ignored, as npm ignores it when it orders versions"');
+    expect(next).toContain('("Build metadata in "4.17.20+..." was ignored ... and the metadata was not sent")');
+  });
+
+  it("to_confirm entries carry no version, and the docs say so", () => {
+    expect(text("src/tools/what-should-i-know.ts")).toContain("for (const w of gated.unverified) delete w.version;");
+    expect(readme).not.toContain("the `version` the task writes");
+    expect(next).not.toContain("the `version` the task writes");
+    expect(readme).toContain("a `hint` or `caution` for the agent, never a version");
   });
 });
 
