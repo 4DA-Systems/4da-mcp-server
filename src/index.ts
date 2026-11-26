@@ -40,7 +40,7 @@ import { FourDAServer, ownHandler } from "./mcp-server.js";
 import { parseCliArgs } from "./cli-args.js";
 import { installProcessGuards } from "./process-guards.js";
 import { warnUnreadableEnvFlags } from "./env-flags.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -73,6 +73,9 @@ import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { shutdown } from "./shutdown.js";
 import { closeServerCacheDb } from "./live/cache.js";
+import { lockfileCandidates } from "./live/lockfile-parsers.js";
+import { mapEcosystem } from "./live/version-resolver.js";
+import { callBudgetMs, secondsText, settleWithin } from "./call-budget.js";
 import { ledgerWritesSettled, startLedger } from "./check-ledger.js";
 import { systemDirectoryProblem } from "./tools/project-scope.js";
 import { MAX_DEPTH, MAX_PROJECTS } from "./project-tree.js";
@@ -202,8 +205,35 @@ async function resolveInSteps(step: { db: FourDADatabase; live: LiveIntelligence
   const cwd = resolveProjectDir();
   const tree = projectTreeFor(cwd);
   if (tree.entries.length === 0) return { cwd, tree, resolved: false };
-  const resolved = await step.live.initFromProjectTreeYielding(cwd, treeResolutionGroups(tree.entries), tree.discovery);
+  const groups = treeResolutionGroups(tree.entries);
+  loading = { projects: groups.length, bytes: lockfileBytes(groups) };
+  const resolved = await step.live.initFromProjectTreeYielding(cwd, groups, tree.discovery);
   return { cwd, tree, resolved };
+}
+
+/** What the init in steps is reading, for the answer of a call whose budget ended first. */
+let loading: { projects: number; bytes: number } | null = null;
+
+/** The size of the lockfiles the groups resolve from (stat calls only). */
+function lockfileBytes(groups: ReturnType<typeof treeResolutionGroups>): number {
+  let bytes = 0;
+  for (const file of new Set(groups.flatMap((g) => lockfileCandidates(g.dir, mapEcosystem(g.language))))) {
+    try {
+      bytes += statSync(file).size;
+    } catch {
+      // Not there.
+    }
+  }
+  return bytes;
+}
+
+/** A call whose budget ended while the project's lockfiles were still being read (the init goes on). */
+function stillReadingAnswer(): { content: Array<{ type: "text"; text: string }>; isError: true } {
+  const what = loading ? ` (${Math.max(1, Math.round(loading.bytes / 1048576)).toLocaleString("en-US")} MB of lockfiles in ${loading.projects} project${loading.projects === 1 ? "" : "s"})` : "";
+  const error =
+    `NOT CHECKED: this project's lockfiles${what} were still being read when this call's ${secondsText(callBudgetMs())} ran out, ` +
+    "so nothing was checked and nothing was stored. The server goes on reading them and answers pings meanwhile: call again in a minute for the full answer.";
+  return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
 }
 
 function finishInit(step: { db: FourDADatabase; live: LiveIntelligence }, prepared: PreparedTree | null = null): void {
@@ -437,7 +467,11 @@ export function buildServer(): Server {
       // The first call's init gives the event loop a turn before and inside it (prepareDatabase),
       // so a ping sent with it is answered first (pre-publish round 10, W9). An error it meets is
       // met again, and answered, by databaseFor.
-      await prepareDatabase().catch(() => undefined);
+      // An init still running when the call's budget ends (20 lockfiles of 62 MB took over a minute,
+      // audit 2026-11-25, F-M1) is not finished synchronously here: the call says so plainly and the
+      // init goes on, so a later call gets the whole answer.
+      const ready = await settleWithin(prepareDatabase().then(() => true, () => true), startedAt + callBudgetMs() - Date.now(), () => false);
+      if (!ready) return stillReadingAnswer();
       const { database, note: unavailableNote } = databaseFor(name);
       // A changed .npmrc, .yarnrc.yml, go env file or environment re-reads which names are private (stat calls only).
       liveIntel?.refreshPrivateRules();
