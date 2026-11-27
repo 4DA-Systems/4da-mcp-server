@@ -90,6 +90,7 @@ import { ECOSYSTEMS } from "./dependency-check-items.js";
 import { checkableSpec } from "./briefing-names.js";
 import { recordVerdicts, type CheckedItem } from "../check-ledger.js";
 import { withRequestVeto } from "../live/private-guard.js";
+import { CREDENTIAL_REFUSAL } from "../argument-screen.js";
 import { checkAndRecord, type DependencyCheckParams } from "./dependency-check.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { ADVISORY_SUMMARY_MAX, quoteThirdParty } from "../untrusted-text.js";
@@ -779,7 +780,7 @@ async function executeBriefing(
       continue;
     }
     if (credentialShape(d.name)) {
-      argsNotRead.push({ shown: `packages[${d.at}]`, reason: "not read: it looks like a credential; if it is a package after all, call dependency_check on it" });
+      argsNotRead.push({ shown: `packages[${d.at}]`, reason: CREDENTIAL_REFUSAL("package name") });
       continue;
     }
     // Round 7, C3: the task names a package source of its own: no name it adds is looked up by this call, also when

@@ -16,6 +16,7 @@
  * matching a declaration to a name the task gives, and the wording the agent acts on.
  */
 
+import { CREDENTIAL_REFUSAL } from "../argument-screen.js";
 import { hasCredentialShape } from "../output-screen.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { credentialShape, looksLikeSecret } from "./briefing-task-screen.js";
@@ -142,7 +143,8 @@ export function refusedClasses(refused: readonly NotRead[]): string {
     [/unknown field/, "with a field this tool does not define"],
     [/`public` must be/, "without public: true or false"],
     [/`ecosystem` must be/, "with an unknown ecosystem"],
-    [/`version` looks like a credential/, "with a version shaped like a credential"],
+    [/credential.s shape is not a version|`version` looks like a credential/, "with a version shaped like a credential"],
+    [/credential.s shape is not an? (?:package name|ecosystem)/, "with a name shaped like a credential"],
     [/`version`/, "with a version dependency_check cannot read"],
     [/`name`/, "with a name its registry cannot have"],
     [/declared public, and private/, "declared both public and private"],
@@ -192,7 +194,8 @@ export function readDeclarations(raw: unknown): { entries: DeclaredPackage[]; re
     }
     const problem = declarationProblem(item);
     if (problem) {
-      refused.push({ shown: where, reason: `refused: ${problem}; nothing in it was sent` });
+      const credential = /credential.s shape is not an? ([^;]+);/.exec(problem);
+      refused.push({ shown: where, reason: credential ? CREDENTIAL_REFUSAL(credential[1]) : `refused: ${problem}; nothing in it was sent` });
       const o = (item ?? {}) as Record<string, unknown>;
       // A refused entry that says private (`false`, or the string "false": round 7, C9c) still forbids its name.
       if (typeof item === "object" && (o.public === false || (typeof o.public === "string" && o.public.trim().toLowerCase() === "false")) && typeof o.name === "string" && o.name.trim() && o.name.length <= MAX_NAME_ARG_LENGTH) forbidOnly.push(goUnescaped(o.name.trim()));
@@ -244,9 +247,9 @@ function declarationProblem(item: unknown): string | null {
   if (lengthProblem("name", "package", o.name) || o.name.length > MAX_NAME_ARG_LENGTH) return "`name` is longer than any package name";
   // Round 12, R4: a name of a credential's shape (the task screen's own test) is refused whatever `public` says, and
   // never repeated; a `public: false` one still forbids its name.
-  if (credentialShape(o.name.trim()) || looksLikeSecret(o.name.trim())) return "`name` has the shape of a credential, not a package name";
+  if (credentialShape(o.name.trim()) || looksLikeSecret(o.name.trim())) return CREDENTIAL_REFUSAL("package name").replace(/^refused: /, "");
   // Round 14b: nor an ecosystem (CREDENTIAL_SHAPES, as the output screen); a version is refused below, as dependency_check refuses it.
-  if (typeof o.ecosystem === "string" && hasCredentialShape(o.ecosystem)) return "refused: a value of a credential's shape is not an ecosystem";
+  if (typeof o.ecosystem === "string" && hasCredentialShape(o.ecosystem)) return CREDENTIAL_REFUSAL("ecosystem").replace(/^refused: /, "");
   const ecosystem = ECOSYSTEMS.find((e) => e.toLowerCase() === String(o.ecosystem).trim().toLowerCase())!;
   // The ecosystem's own name grammar, the screen dependency_check applies (dependency-check-screen.ts), and then
   // dependency_check's own entry rule on the name as written (round 7c, F6): a Go path in the proxy's `!`-escaped
@@ -266,7 +269,7 @@ function declarationProblem(item: unknown): string | null {
     // too): what the check ledger records for a declared entry is what dependency_check would record for it.
     // Item 4c: the credential screen covers the whole entry: a version whose label has a credential shape is refused.
     // The same screen dependency_check applies to `to` (dependency-check-screen.ts versionLooksSecret).
-    if (v && versionLooksSecret(v)) return "`version` looks like a credential (it is not recorded either)";
+    if (v && versionLooksSecret(v)) return CREDENTIAL_REFUSAL("version").replace(/^refused: /, "");
     if (v) {
       try {
         validateItem({ ecosystem, package: o.name.trim(), to: v }, 0);

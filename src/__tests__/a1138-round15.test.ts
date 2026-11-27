@@ -153,3 +153,38 @@ describe("the near-miss word cap counts the call's own distinct words", () => {
     expect(counted).toBe(WORD_SCAN_CAP);
   });
 });
+
+describe("round 15b: the coverage limit in tools/list, and one refusal form", () => {
+  it.skipIf(!fs.existsSync(serverEntry))("tools/list from the built server names the coverage in what_should_i_know's text", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "a1138b-"));
+    const child = spawn(process.execPath, [serverEntry], { cwd: process.cwd(), env: { ...process.env, FOURDA_MCP_HOME: home, FOURDA_DATA_DIR: path.join(home, "none"), FOURDA_OFFLINE: "true" }, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    const send = (m: unknown) => child.stdin.write(`${JSON.stringify(m)}\n`);
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } });
+    await new Promise((r) => setTimeout(r, 1500));
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+    await new Promise((r) => setTimeout(r, 3000));
+    child.stdin.end();
+    await new Promise((r) => child.once("exit", r));
+    const line = out.split("\n").find((l) => /"id":2/.test(l))!;
+    const tool = (JSON.parse(line).result.tools as Array<{ name: string; description: string }>).find((t) => t.name === "what_should_i_know")!;
+    expect(tool.description).toContain("(npm, PyPI, crates.io and Go packages only)");
+  }, 60_000);
+  it("a token as a version, a name or an ecosystem is refused in the one form", async () => {
+    const { CREDENTIAL_REFUSAL } = await import("../argument-screen.js");
+    const { validateItem } = await import("../tools/dependency-check.js");
+    const tok = SHAPES[0];
+    for (const item of [{ ecosystem: "npm", package: "lodash", to: tok }, { ecosystem: "npm", package: tok, to: "1.0.0" }, { ecosystem: tok, package: "lodash", to: "1.0.0" }]) {
+      let msg = "";
+      try {
+        validateItem(item, 0);
+      } catch (e) {
+        msg = (e as Error).message;
+      }
+      expect(msg).toMatch(/refused: a value of a credential's shape is not an? (?:version|package name|ecosystem); nothing was sent or stored/);
+    }
+    expect(CREDENTIAL_REFUSAL("path")).toBe("refused: a value of a credential's shape is not a path; nothing was sent or stored");
+  });
+});
