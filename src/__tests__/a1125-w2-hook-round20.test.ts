@@ -132,15 +132,16 @@ describe("Q2: a verdict for latest is honoured for 1 hour", () => {
 
 describe("Q3: a private record applies in its own project; a listed name everywhere", () => {
   const priv = (extra: Record<string, string>) => ({ ecosystem: "PyPI", package: "requests", version: "latest", verdict: "unknown", reason: "NOT CHECKED (private)", not_checked: "private", ...extra });
-  it("a record made in project A does not release in project B", () => {
+  // (Round 22, S2: a "project" record is gone; a "named" one applies in its config folder only, see round22.)
+  it("a named record made in project A does not release in project B", () => {
     const b = mkdtempSync(join(tmpdir(), "a1125-q3-b-"));
     try {
-      lines([priv({ private_rule: "project", project_root: s.project })]);
-      expect(run("pip install requests==2.19.0").decision).toBe("allow");
+      s.file("package.json", '{"name":"a"}');
+      lines([{ ecosystem: "npm", package: "@acme/x", version: "latest", verdict: "unknown", reason: "NOT CHECKED (private)", not_checked: "private", private_rule: "named", config_dir: s.project }]);
+      expect(run("npm install @acme/x@1.0.0").decision).toBe("allow");
       s.file("sub/.keep", "");
-      expect(run("pip install requests==2.19.0", join(s.project, "sub")).decision).toBe("allow");
-      expect(run("pip install requests==2.25.0", b).decision).toBe("deny");
-      expect(s.run({ session_id: "s", cwd: b, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: join(b, "requirements.txt"), content: "requests==2.19.0\n" } }).decision).toBe("deny");
+      expect(run("npm install @acme/x@1.0.0", join(s.project, "sub")).decision).toBe("allow");
+      expect(run("npm install @acme/x@1.0.0", b).decision).toBe("deny");
     } finally {
       rmSync(b, { recursive: true, force: true });
     }
@@ -157,7 +158,7 @@ describe("Q3: a private record applies in its own project; a listed name everywh
   it("an older line with no scope applies nowhere; an avoid for the version still holds a scoped one", () => {
     lines([priv({})]);
     expect(run("pip install requests==2.19.0").decision).toBe("deny");
-    lines([priv({ private_rule: "project", project_root: s.project }), { ecosystem: "PyPI", package: "requests", version: "2.19.0", verdict: "avoid", reason: "test avoid" }]);
+    lines([priv({ private_rule: "listed" }), { ecosystem: "PyPI", package: "requests", version: "2.19.0", verdict: "avoid", reason: "test avoid" }]);
     expect(run("pip install requests==2.19.0").decision).toBe("deny");
   });
 

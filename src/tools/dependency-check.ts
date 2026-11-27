@@ -50,6 +50,7 @@
  */
 
 import type { FourDADatabase } from "../db.js";
+import { goModuleContaining } from "../live/go-path.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
@@ -408,7 +409,9 @@ interface Pass {
 async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, opts: { now?: Date }): Promise<Pass> {
   const now = opts.now ?? new Date();
   const checkedAt = now.toISOString();
-  const { requested, privateMeta, inOrder, inOrderOf } = await screenItems(all, liveIntel);
+  const screened = await screenItems(all, liveIntel);
+  let requested = screened.requested;
+  const { privateMeta, inOrder, inOrderOf } = screened;
   const pass = (results: ItemResult[], meta: PassMeta, npmAlso: Array<{ highest: string; why: NpmWhy } | null> = []): Pass => ({
     checkedAt,
     results: inOrder(results),
@@ -425,6 +428,26 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
     return pass(results, { offline: true, osvCached, ...privateMeta });
   }
 
+  // Round 22 (F3): a Go package path (`<module>/cmd/<tool>`) is judged as the module that contains
+  // it, at the version asked: the module is what go downloads. The answer stays the path's.
+  const goModuleOf = new Map<number, string>();
+  await Promise.all(
+    requested.map(async (r, i) => {
+      if (r.ecosystem !== "Go") return;
+      const version = r.target.kind === "exact" ? r.target.version : null;
+      const isPrivate = (p: string) => Boolean((liveIntel.lookupPrivateReason ?? liveIntel.privateReason)?.call(liveIntel, "Go", p));
+      const module = await goModuleContaining(r.package, version, isPrivate);
+      if (module && module !== r.package) goModuleOf.set(i, module);
+    }),
+  );
+  const asked = requested;
+  if (goModuleOf.size > 0) {
+    requested = requested.map((r, i) => {
+      const m = goModuleOf.get(i);
+      return m ? { ...r, package: m, notes: [...(r.notes ?? []), `${r.package} is a package of module ${m}: the module is what go downloads, so the module is judged at this version.`] } : r;
+    });
+  }
+  const answerFor = (results: ItemResult[]): ItemResult[] => (goModuleOf.size === 0 || results.length !== asked.length ? results : results.map((res, i) => (goModuleOf.has(i) ? { ...res, package: asked[i].package, go_module: goModuleOf.get(i)! } : res)));
   const ctx = passContext(liveIntel, requested, now);
   const lookups = await firstLookups(ctx);
   await adoptPublishedCrateNames(ctx, lookups);
@@ -451,7 +474,7 @@ async function checkPass(all: Requested[], liveIntel: LiveIntelligence | null, o
   const results = itemResults(plans, { ctx, lookups, advisoriesFor, findings, created });
   nameCrateSpellings(results, items);
   await noteNewerRust(results, liveIntel.getProjectRoot(), ctx.fixSources);
-  return pass(results, { offline: batch.scan.offline, osvCached: batch.scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
+  return pass(answerFor(results), { offline: batch.scan.offline, osvCached: batch.scan.cached, ...privateMeta }, items.map((i) => i.npmAlso ?? null));
 }
 
 /** An item refused as written: why, and its fields as given (capped) for the answer in its place. */

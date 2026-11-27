@@ -51,6 +51,8 @@ export interface ItemResult {
   unreadable_file?: string;
   /** not_checked "module_path": the path the module declares, or the one the spelling most likely means. */
   canonical_module_path?: string;
+  /** Round 22 (F3): Go: the module that contains the package path asked, judged in its place. */
+  go_module?: string;
   /** Unknown because this server's own request limit held a registry read back: seconds until asking again can read it. */
   retry_after_seconds?: number;
   /** The OSV.dev answer behind this verdict came from the local cache: its age in whole minutes (absent when read live; dependency-check-age.ts). */

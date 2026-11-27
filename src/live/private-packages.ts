@@ -922,6 +922,11 @@ function settingFor(list: readonly ScopedSetting[], dir: string | null): Private
   return hit ? { url: hit.url, from: hit.from } : null;
 }
 
+/** Round 22 (S1): the first setting that applies to `dir`, with the folder of the file that holds it (null: user-level or environment). */
+function scopedSettingFor(list: readonly ScopedSetting[], dir: string): ScopedSetting | null {
+  return list.find((s) => within(path.resolve(dir), s.scope)) ?? null;
+}
+
 /** The environment the rules depend on, as one string. */
 const envKeyOf = (env: NodeJS.ProcessEnv): string =>
   [
@@ -947,6 +952,8 @@ export function ancestorsOf(dir: string): string[] {
 /** The rules for one project: what its files, the user's files and the environment say is private. */
 export class PrivatePackageRules {
   private readonly npmScopes = new Map<string, string>();
+  /** Round 22 (S1): the folder whose file maps each scope, or null for the environment or a user-level file. */
+  private readonly npmScopeDirs = new Map<string, string | null>();
   private readonly goPatterns: Array<{ key: string; value: string; from: string }> = [];
   private readonly listed: Array<{ ecosystem: string | null; pattern: string; re: NameMatcher; rePypi: NameMatcher; reCrates: NameMatcher }> = [];
   /** FOURDA_PUBLIC_MIRRORS: hosts the user declares mirror only the public registries; their packages are checked. */
@@ -1104,39 +1111,57 @@ export class PrivatePackageRules {
 
     // npm, yarn, bun.
     const npmDefaults: ScopedSetting[] = [];
-    for (const { scope, from } of npmEnv.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, from);
+    for (const { scope, from } of npmEnv.scopes) if (!this.npmScopes.has(scope)) {
+      this.npmScopes.set(scope, from);
+      this.npmScopeDirs.set(scope, null);
+    }
     if (npmEnv.registry) npmDefaults.push({ ...npmEnv.registry, scope: null });
     const seen = new Set<string>();
     for (const { file, scope } of npmrcs) {
       if (seen.has(file)) continue;
       seen.add(file);
       const rc = npmrcRead(read(file, "npm", scope));
-      for (const s of rc.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      for (const s of rc.scopes) if (!this.npmScopes.has(s)) {
+        this.npmScopes.set(s, file);
+        this.npmScopeDirs.set(s, scope);
+      }
       if (rc.defaultRegistry && !isPublicNpmRegistry(rc.defaultRegistry)) npmDefaults.push({ url: rc.defaultRegistry, from: file, scope });
     }
     for (const { file, scope } of yarnrcs) {
       if (seen.has(file)) continue;
       seen.add(file);
       const text = read(file, "npm", scope);
-      for (const s of yarnrcPrivateScopes(text)) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      for (const s of yarnrcPrivateScopes(text)) if (!this.npmScopes.has(s)) {
+        this.npmScopes.set(s, file);
+        this.npmScopeDirs.set(s, scope);
+      }
       const server = yarnrcRegistry(text);
       if (server && !isPublicNpmRegistry(server)) npmDefaults.push({ url: server, from: file, scope });
     }
     const yarnEnv = yarnEnvConfig(env, (text) => parseFlow(text).value);
-    for (const { scope, from } of yarnEnv.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, from);
+    for (const { scope, from } of yarnEnv.scopes) if (!this.npmScopes.has(scope)) {
+      this.npmScopes.set(scope, from);
+      this.npmScopeDirs.set(scope, null);
+    }
     if (yarnEnv.registry) npmDefaults.push({ ...yarnEnv.registry, scope: null });
     for (const { file, scope } of bunfigs) {
       if (seen.has(file)) continue;
       seen.add(file);
       const bunfig = bunfigRegistries(read(file, "npm", scope));
-      for (const s of bunfig.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      for (const s of bunfig.scopes) if (!this.npmScopes.has(s)) {
+        this.npmScopes.set(s, file);
+        this.npmScopeDirs.set(s, scope);
+      }
       if (bunfig.registry && !isPublicNpmRegistry(bunfig.registry)) npmDefaults.push({ url: bunfig.registry, from: file, scope });
     }
     for (const { file, scope } of pnpmWorkspaces) {
       if (seen.has(file)) continue;
       seen.add(file);
       const workspace = pnpmWorkspaceRegistries(read(file, "npm", scope));
-      for (const s of workspace.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      for (const s of workspace.scopes) if (!this.npmScopes.has(s)) {
+        this.npmScopes.set(s, file);
+        this.npmScopeDirs.set(s, scope);
+      }
       if (workspace.registry && !isPublicNpmRegistry(workspace.registry)) npmDefaults.push({ url: workspace.registry, from: file, scope });
       // A registry setting this reader cannot follow fails closed: pnpm may fetch any name from a
       // registry it names, so npm under this folder is registry-private (pre-publish round 10, W10).
@@ -1216,6 +1241,43 @@ export class PrivatePackageRules {
    * repository text (a spec, a folder name) that can spell any rule's wording (round 3 of the hook
    * review, item 2).
    */
+  /**
+   * Round 22 (S1): why a name is private, for the check ledger (the privacy decision itself is not
+   * changed by this). "listed": FOURDA_PRIVATE_PACKAGES names it. "named": a rule that names this
+   * package or its scope (an npm scope mapped to a registry, a GOPRIVATE pattern), with the folder
+   * whose file holds it, or "environment" for an environment or user-level rule. "registry-wide":
+   * anything else, above all an ecosystem's default registry, index or proxy on a host this server
+   * does not know as public (every name is then private, public ones too), with that folder and host
+   * when one is known.
+   */
+  privateRuleKind(ecosystem: string, name: string, dirs: string[]): { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null } {
+    if (this.listedCovers(ecosystem, name)) return { rule: "listed", dir: null, host: null };
+    if (ecosystem === "npm" && name.startsWith("@")) {
+      const scope = name.slice(0, name.indexOf("/") > 0 ? name.indexOf("/") : undefined).toLowerCase();
+      if (this.npmScopes.has(scope)) {
+        const d = this.npmScopeDirs.get(scope) ?? null;
+        return { rule: "named", dir: d === null ? "environment" : path.resolve(d), host: null };
+      }
+    }
+    if (ecosystem === "Go" && this.goPatterns.some((g) => goPrivateMatch(g.value, name))) return { rule: "named", dir: "environment", host: null };
+    for (const d of dirs) {
+      const setting =
+        ecosystem === "npm"
+          ? scopedSettingFor(this.npmDefaults, d)
+          : ecosystem === "PyPI"
+            ? (scopedSettingFor(this.pythonIndexes, d) ?? this.pipIndex ?? this.pipExtraFrom)
+            : ecosystem === "crates.io"
+              ? this.cargoMirrorFor(d)
+              : ecosystem === "Go"
+                ? this.goProxy
+                : null;
+      if (!setting) continue;
+      const scoped = (setting as { scope?: string | null }).scope;
+      return { rule: "registry-wide", dir: typeof scoped === "string" ? path.resolve(scoped) : "environment", host: hostOf(setting.url) };
+    }
+    return { rule: "registry-wide", dir: null, host: null };
+  }
+
   /** Q3: whether the user's own list (FOURDA_PRIVATE_PACKAGES) covers this name: private in every project. */
   listedCovers(ecosystem: string, name: string): boolean {
     return this.listed.some((l) => (l.ecosystem === null || l.ecosystem === ecosystem) && (ecosystem === "PyPI" ? l.rePypi.test(pep503(name)) : ecosystem === "crates.io" ? l.reCrates.test(normName("crates.io", name)) : l.re.test(name)));
