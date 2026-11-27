@@ -651,7 +651,7 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
     if (m) out.push(["PyPI", m[1]]);
   } else if (host === "proxy.golang.org" || host === "sum.golang.org") {
     const path = goUnescape(segments.join("/"));
-    const module = path.replace(/\/@(v|latest)(\/.*)?$/, "").replace(/^lookup\//, "");
+    const module = path.replace(/\/@(v|latest)(\/.*)?$/, "").replace(/^lookup\//, "").replace(/\/+$/, "");
     if (module) out.push(["Go", module.replace(/@.*$/, "")]);
   } else if (host === "rubygems.org" || host === "index.rubygems.org") {
     // /api/v1/gems/<name>.json, /api/v1/versions/<name>.json, /gems/<name>-<v>.gem, /info/<name>
@@ -662,6 +662,10 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
     // /p2/<vendor>/<name>.json, /packages/<vendor>/<name>.json
     const at = segments.findIndex((s) => s === "p2" || s === "p" || s === "packages");
     if (at >= 0 && segments[at + 2]) out.push(["Packagist", `${segments[at + 1]}/${segments[at + 2].replace(/(~dev)?\.json$/, "")}`]);
+  } else if (host === "api.github.com" || host === "github.com" || host === "raw.githubusercontent.com") {
+    // Round 15, A1: a repository the request is about, as a Go path names it (`github.com/owner/repo`).
+    const at = host === "api.github.com" ? segments.indexOf("repos") + 1 : 0;
+    if (segments[at] && segments[at + 1]) out.push([null, `github.com/${segments[at]}/${segments[at + 1].replace(/\.git$/, "")}`]);
   } else if (host === "hn.algolia.com") {
     for (const term of (u.searchParams.get("query") ?? "").split(/[\s"]+/)) if (term) out.push([null, term]);
   }
@@ -691,8 +695,30 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
   return out;
 }
 
-/** Throws PrivateRequestRefused when the request names a private package; returns otherwise. */
+/**
+ * Round 15, A1: a call's own never-send set (what_should_i_know: its not_packages words and `public: false`
+ * entries), held for the call's requests. `forbids(ecosystem, name)` says whether a name, or for a path any prefix of
+ * it at a `/` boundary, is in the set (the caller folds names as the set is folded).
+ */
+export interface RequestVeto {
+  forbids(ecosystem: string | null, name: string): boolean;
+}
+const vetoes = new AsyncLocalStorage<RequestVeto>();
+/** Run `fn`, and every request it makes, under the call's never-send set. */
+export function withRequestVeto<T>(veto: RequestVeto, fn: () => T): T {
+  return vetoes.run(veto, fn);
+}
+/** The text a request refused by the call's never-send set is answered with (the lookup is not checked). */
+export const VETOED = "not checked: it would have named something you marked private";
+
+/**
+ * Throws PrivateRequestRefused when the request names a private package, or a name of the call's never-send set (or a
+ * path under one); returns otherwise. THE choke point: every registry, proxy, OSV.dev and search request passes it
+ * (http-utils.ts fetchWithTimeout, each redirect hop too).
+ */
 export function refusePrivateRequest(url: string, init?: { body?: unknown }): void {
+  const veto = vetoes.getStore();
+  if (veto) for (const [eco, name] of namesInRequest(url, init?.body)) if (veto.forbids(eco, name)) throw new PrivateRequestRefused(VETOED);
   if (sources.size === 0 && byKey.size === 0 && remembered.size === 0 && !context.getStore()) return;
   for (const [eco, name] of namesInRequest(url, init?.body)) {
     const why = privateWhy(eco, name);

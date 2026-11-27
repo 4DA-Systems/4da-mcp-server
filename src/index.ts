@@ -35,7 +35,7 @@
  */
 // First, before any other module runs: below Node.js 22 the process stops here with one line (node-gate.ts).
 import "./node-gate.js";
-import { screenText, screenToolResult } from "./output-screen.js";
+import { screenJsonRpc, screenText, screenToolResult, screenWireText } from "./output-screen.js";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { StdioGate } from "./stdio-gate.js";
 import type { Server } from "@modelcontextprotocol/server";
@@ -673,11 +673,12 @@ async function main() {
   // `server/discover` opening gets the stateless modern protocol.
   // Parse errors and requests before initialize are answered here, per JSON-RPC and MCP (stdio-gate.ts).
   // A JSON-RPC batch is served on a 2025-03-26 connection and answered as one array (stdio-gate.ts).
+  // Round 15, A2: every JSON-RPC message the server writes (any method's result or error) passes the output screen.
   const gate = new StdioGate((message) => {
-    process.stdout.write(`${JSON.stringify(message)}\n`);
+    process.stdout.write(`${JSON.stringify(screenJsonRpc(message))}\n`);
   });
   const output = gate.output((text) => {
-    process.stdout.write(text);
+    process.stdout.write(screenWireText(text));
   });
   output.on("error", () => undefined);
   process.stdin.pipe(gate);

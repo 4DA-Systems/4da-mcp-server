@@ -12,22 +12,23 @@
  *
  * THE CONTRACT (round 14). Each numbered sentence ends with the tests that pin it; nothing outside this block is.
  * 1. The level rests on the caller's declaration: each package declared public is checked at the `version` it states, and a public entry without `version` never leaves the answer at safe_to_delegate. [tests: a1137-confirm-review12 (generated), a1132-round9]
- * 2. A name the briefing read and reported (a seen kind marked "read" in `SEEN_KINDS`) that the caller dismissed holds the answer from safe_to_delegate, with its `DISMISSED_READ` text. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
- * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), is never in a request the task's lookups make, and a public entry in that set is refused. [tests: a1137-round14 (property), a1137-confirm-review12 (generated)]
- * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) is never in a tool result or error the server returns (`screenToolResult`), outside the `task` field of a what_should_i_know answer. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
- * 5. That `task` field is the reading copy of the caller's task: markup dropped, line continuations joined, each run of blanks one space, a line over `MAX_READ_LINE` characters left out. [tests: a1136-round13]
+ * 2. A name the briefing read and reported (a seen kind marked "read" in `SEEN_KINDS`) that the caller dismissed holds the answer from safe_to_delegate, with its `DISMISSED_READ` text, or `DISMISSED_INSTEAD` where the call declared a name one edit from it instead. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
+ * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), and for a path any prefix of it at a `/`, is never in a request the call makes: `refusePrivateRequest`, the choke point every registry, proxy, OSV.dev and GitHub request passes, refuses it under the call's `withRequestVeto`, and a public entry in or under that set is refused. [tests: a1138-round15 (generated), a1137-round14 (property)]
+ * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`), whole, is never in any response the server returns (`screenJsonRpc`, at the transport's send), outside the `task` field of a what_should_i_know answer. [tests: a1138-round15 (generated), a1137-round14 (generated)]
+ * 5. That `task` field is the reading copy of the caller's task: markup dropped, line continuations joined, NFKC-folded with default-ignorable characters removed, each run of blanks one space, a line over `MAX_READ_LINE` characters left out; where it differs from the caller's task in more than blanks the answer carries `TASK_FOLDED`. [tests: a1138-round15, a1136-round13]
  * 6. A declared item's check ledger line is the line dependency_check writes for the same item: its engine and `recordVerdicts` for a looked-up item, `checkAndRecord` for one the project's configuration makes private. [tests: a1136-round13]
  * 7. The briefing also checks versions it happens to read in the task, for example on a command's operand, in a snippet or beside a name; that reading is best effort, and a version written in a spelling it does not read is not checked. [tests: a1134-round11, a1135-round12]
  * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of the project, running install drift, a decision conflict, a name waiting in to_confirm, or something the briefing noticed it could not read. [tests: a1135-confirm-review10, a1137-confirm-review12]
  * 9. When the briefing notices it cannot read a command or a snippet whole, for example a quote problem, a source option, or a line over `MAX_READ_LINE` characters, it says so with `unreadableReason` and the answer is not safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
- * 10. A command of a manager the briefing does not read, for example gem, brew or composer at a command position with its own verb, is said and holds the answer from safe_to_delegate; its words are not offered or looked up. [tests: a1137-round14, a1136-round13]
+ * 10. When the briefing notices a command of a manager it does not read, for example gem, brew or composer at a command position with its own verb, it says so, its words are not offered or looked up, and the answer is not safe_to_delegate; it does not promise to notice each such command. [tests: a1138-round15, a1137-round14]
  * 11. With a package-source spelling of `SOURCE_SPELLINGS` in the task, the names the task adds are not looked up (`SOURCE_HELD`); the answer is held from safe_to_delegate when that held a name, and a task that holds such a spelling but no name to hold can be safe. [tests: a1137-confirm-review12 (generated), a1127-confirm-promises]
- * 12. A call reads at most `MAX_SNIPPETS` snippets and checks at most `WORD_SCAN_CAP` distinct words for near-miss names, and checks its deadline between stages and lines; past a bound the answer says which and is not safe_to_delegate. [tests: a1133-round10, a1134-round11]
+ * 12. A call reads at most `MAX_SNIPPETS` snippets and checks at most `WORD_SCAN_CAP` distinct words of its own for near-miss names, and checks its deadline between stages and lines; past a bound the answer says which and is not safe_to_delegate. [tests: a1133-round10, a1134-round11]
  * 13. The cost bounds are measured, not enforced by the dispatcher: the CPU tests keep each generated input of up to 200,000 characters under 3 s of child CPU. [tests: a1134-round11, a1135-round12, a1136-round13]
  * 14. A text constant is said only where its rule in `TEXT_RULES` holds, for example `RESTS_ON_DECLARATION` ends a safe reason, `BEST_EFFORT_READING` precedes it in a call that declared a package, and `STAYS_REVIEW` is not said with safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
  * 15. `to_confirm` lists names the briefing noticed: a prompt for the caller, not a complete reading. [tests: a1134-round11]
  * 16. The project's own scan reads the installed dependencies and sends their names unless the project's configuration marks them private; a declaration does not change that, and no task text goes to an embedding provider. [tests: a1127-confirm-promises, a1136-round13]
  * 17. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) in an argument of any tool is not sent to any host and not stored: `screenArguments` refuses a name, version, ecosystem or path holding one, and masks it in the free text a tool stores or sends on purpose. [tests: a1137-round14b (generated)]
+ * 18. The briefing checks npm, PyPI, crates.io and Go packages: what a task installs through any other manager or tool is outside what its answer covers, whatever the level, and a safe reason says so (`OUTSIDE_COVERAGE`). [tests: a1138-round15, a1137-confirm-review12 (generated)]
  * END OF THE CONTRACT.
  *
  * NOTES: how it reads; not part of the contract. The readers are briefing-command-check.ts (commands and forms),
@@ -50,6 +51,8 @@ import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWo
 import {
   EMBEDDING_NOT_SENT_NOTE,
   RESTS_ON_DECLARATION,
+  OUTSIDE_COVERAGE,
+  TASK_FOLDED,
   BEST_EFFORT_READING,
   SCAN_STILL_READS,
   SOURCE_HELD,
@@ -60,6 +63,7 @@ import {
   refusedClasses,
   dismissedBy,
   DISMISSED_READ,
+  DISMISSED_INSTEAD,
   SEEN_KINDS,
   MAX_TO_CONFIRM,
   NEXT_STEP,
@@ -85,6 +89,7 @@ import { nameProblem } from "./dependency-check-screen.js";
 import { ECOSYSTEMS } from "./dependency-check-items.js";
 import { checkableSpec } from "./briefing-names.js";
 import { recordVerdicts, type CheckedItem } from "../check-ledger.js";
+import { withRequestVeto } from "../live/private-guard.js";
 import { checkAndRecord, type DependencyCheckParams } from "./dependency-check.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { ADVISORY_SUMMARY_MAX, quoteThirdParty } from "../untrusted-text.js";
@@ -250,6 +255,8 @@ export interface BriefingScan {
 
 export interface WhatShouldIKnowResult {
   task: string;
+  /** TASK_FOLDED, when the reading copy differs from the caller's task in more than blanks (round 15, A5). */
+  task_note?: string;
   files: string[];
   /** The project the briefing read dependencies from. */
   project_path: string | null;
@@ -370,7 +377,7 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. The level rests on your declaration and on your statement of which words are not packages: each package you declare public is checked at the `version` you state. Declare the version the task writes. The briefing also checks versions it happens to read in the task (on a command's operand, in a snippet, beside a name); that reading is best effort and promises nothing: a version written in a spelling it does not read is not checked. Pass the request as it was given, in the user's words: do not correct spellings or drop names (a misspelt package name may be the finding). Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in. Declare public: false for anything the task or the project takes from a private registry, an index of its own, git or a path (never looked up for the task; the project's own scan still reads installed dependencies); a name declared public: true is sent to the public registry and checked in this call, and needs `version` (the version or range you will write, or \"latest\") for a complete answer; `packages: []` for a task that changes no dependency; words of the task that are not packages go in `not_packages`. A call without `packages` answers confirmation_needed, or human_only when something it looked up on its own is malicious or critical. The level follows from the project's scan, the verdicts of what was looked up (the briefing's own lookups and what you declare public), whether anything waits, and what the briefing noticed it could not read (a command or snippet it says it did not read whole, a package-source spelling it knows), which holds review_needed. to_confirm is what the briefing noticed in the text, never a complete reading: declare every package the task adds or changes, in each ecosystem. A name it noticed comes back in task_packages.to_confirm (confirmation_needed): do task_packages.next_step. For each dependency the task names (exact names from the lockfiles, plus named families: \"all tauri plugins\" adds the project's tauri-* and @tauri-apps/* packages): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the declared version, and at versions it happens to read on that package (best effort); malware is human_only. It adds the project's other confirmed findings, install drift, your recorded decisions and conflicts with them. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); it is raised, for example, by version-confirmed evidence, a finding on a checked package, running install drift, a decision conflict or something it could not read, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
+    "Pre-task briefing built from the task outward, for npm, PyPI, crates.io and Go packages (what a task installs through any other manager or tool is outside its answer). The level rests on your declaration and on your statement of which words are not packages: each package you declare public is checked at the `version` you state. Declare the version the task writes. The briefing also checks versions it happens to read in the task (on a command's operand, in a snippet, beside a name); that reading is best effort and promises nothing: a version written in a spelling it does not read is not checked. Pass the request as it was given, in the user's words: do not correct spellings or drop names (a misspelt package name may be the finding). Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in. Declare public: false for anything the task or the project takes from a private registry, an index of its own, git or a path (never looked up for the task; the project's own scan still reads installed dependencies); a name declared public: true is sent to the public registry and checked in this call, and needs `version` (the version or range you will write, or \"latest\") for a complete answer; `packages: []` for a task that changes no dependency; words of the task that are not packages go in `not_packages`. A call without `packages` answers confirmation_needed, or human_only when something it looked up on its own is malicious or critical. The level follows from the project's scan, the verdicts of what was looked up (the briefing's own lookups and what you declare public), whether anything waits, and what the briefing noticed it could not read (a command or snippet it says it did not read whole, a package-source spelling it knows), which holds review_needed. to_confirm is what the briefing noticed in the text, never a complete reading: declare every package the task adds or changes, in each ecosystem. A name it noticed comes back in task_packages.to_confirm (confirmation_needed): do task_packages.next_step. For each dependency the task names (exact names from the lockfiles, plus named families: \"all tauri plugins\" adds the project's tauri-* and @tauri-apps/* packages): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the declared version, and at versions it happens to read on that package (best effort); malware is human_only. It adds the project's other confirmed findings, install drift, your recorded decisions and conflicts with them. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); it is raised, for example, by version-confirmed evidence, a finding on a checked package, running install drift, a decision conflict or something it could not read, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -462,8 +469,13 @@ export async function executeWhatShouldIKnow(
   params: WhatShouldIKnowParams,
   liveIntel: BriefingLiveIntel | null = getLiveIntelligence(),
 ): Promise<WhatShouldIKnowResult> {
-  return executeBriefing(db, params, liveIntel);
+  // Round 15, A1: the call's never-send set, held at the request choke point (private-guard.ts refusePrivateRequest).
+  const holder: { forbidden: (name: string, eco?: string | null) => boolean } = { forbidden: () => false };
+  NEVER_SEND.set(params, holder);
+  return withRequestVeto({ forbids: (eco, name) => holder.forbidden(name, eco) }, () => executeBriefing(db, params, liveIntel));
 }
+/** The call's never-send set, by its params object (filled once the declarations are read). */
+const NEVER_SEND = new WeakMap<object, { forbidden: (name: string, eco?: string | null) => boolean }>();
 
 async function executeBriefing(
   db: FourDADatabase | null,
@@ -722,7 +734,15 @@ async function executeBriefing(
   // A refused `public: false` entry still forbids its name (round 6, item 4b: a refused `!`-escaped Go path let its
   // public sibling be sent).
   const forbidden = new Set([...declared.entries.filter((d) => !d.public).map((d) => forbiddenKey(d.name)), ...declared.forbidOnly.map(forbiddenKey), ...notPackages.words.map(forbiddenKey)]);
-  const isForbidden = (name: string) => forbidden.size > 0 && forbidden.has(forbiddenKey(name));
+  // A name, or (a Go path, an npm scope) any prefix of it at a `/` boundary (round 15, A1).
+  const isForbidden = (name: string) => {
+    if (forbidden.size === 0) return false;
+    if (forbidden.has(forbiddenKey(name))) return true;
+    const parts = name.split("/");
+    for (let k = parts.length - 1; k >= 1; k--) if (forbidden.has(forbiddenKey(parts.slice(0, k).join("/")))) return true;
+    return false;
+  };
+  const holder = NEVER_SEND.get(params);
   const declaredPrivate: PrivateIndex[] = [];
   /** Declared public entries the project's configuration makes private: answered and recorded by dependency_check's path. */
   const configPrivate: Array<{ ecosystem: CheckEcosystem; package: string; to: string }> = [];
@@ -777,6 +797,8 @@ async function executeBriefing(
     }
   }
   const installed = installedNames(ecosystemDeps());
+  // The never-send set at the choke point: the project's own installed dependencies are the scan's (THE CONTRACT, 16).
+  if (holder) holder.forbidden = (name: string, eco?: string | null) => isForbidden(name) && !(eco ? installed(name, eco as CheckEcosystem) : NAME_ECOSYSTEMS.some((e) => installed(name, e)));
   // I1 (privacy exception): what the briefing would have looked up itself and the caller forbids is not sent; it
   // stands as unchecked, and a known-malicious bundled name is human_only without a lookup.
   const withheldByCaller: Array<{ name: string; ecosystem: CheckEcosystem; malicious: boolean; dependency: boolean }> = [];
@@ -980,7 +1002,7 @@ async function executeBriefing(
   const standing = dismissedWords.flatMap((w) => {
     const near = /^one edit from (\S+): /.exec(w.note ?? "")?.[1];
     const instead = replacedBy(w.word);
-    if (instead) return [`you said ${w.word} is not a package and declared ${instead} instead: the task names ${w.word}; say so to the user, and make sure nothing installs ${w.word}`];
+    if (instead) return [DISMISSED_INSTEAD(w.word, instead)];
     // Round 14, X2: one table classifies every seen kind (briefing-confirm.ts SEEN_KINDS); a read kind holds.
     if (w.seen && w.seen !== "prose" && SEEN_KINDS[w.seen] === "read") return [DISMISSED_READ[w.seen](w.word)];
     if (near) return [`you said ${w.word} is not a package; it is one edit from ${near}: make sure nothing installs it`];
@@ -1228,7 +1250,7 @@ async function executeBriefing(
     // sentence, then the rests-on-your-declaration sentence; a call with `packages: []` (or none) never carries the
     // best-effort sentence. Both rules hold by construction.
     const declaredSome = Array.isArray(params.packages) && params.packages.length > 0;
-    if (assessed.level === "safe_to_delegate") assessed.reason = `${assessed.reason}${declaredSome ? ` ${BEST_EFFORT_READING}` : ""} ${RESTS_ON_DECLARATION}`;
+    if (assessed.level === "safe_to_delegate") assessed.reason = `${assessed.reason}${declaredSome ? ` ${BEST_EFFORT_READING}` : ""} ${OUTSIDE_COVERAGE} ${RESTS_ON_DECLARATION}`;
     // No lockfile read (the live layer's one question): nothing installed was confirmed, so the scan vouches for nothing.
     const noLockfile = assessed.level === "safe_to_delegate" && (liveIntel as { wasLockfileRead?: () => boolean } | null)?.wasLockfileRead?.() === false;
     const delegation = withReadGaps(
@@ -1240,6 +1262,8 @@ async function executeBriefing(
     // A directory name from the repository is named escaped in every sentence (audit 2026-11-25 review).
     return escapeUnsafeDirs<WhatShouldIKnowResult>({
       task,
+      // Round 15, A5: said when the reading copy differs from the caller's task in more than blanks.
+      ...(params.task.replace(/\s+/g, "") !== task.replace(/\s+/g, "") ? { task_note: TASK_FOLDED } : {}),
       files,
       project_path: liveIntel?.getProjectRoot?.() ?? null,
       task_dependencies: taskDependencies,
