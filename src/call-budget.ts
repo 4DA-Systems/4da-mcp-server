@@ -152,12 +152,18 @@ export function runWithCallBudget<T>(startedAt: number, work: () => Promise<T>):
  */
 export const WORD_SCAN_CAP = 4_000;
 const WORD_SCAN_RESERVE_MS = 4_000;
-const scans = new WeakMap<object, { n: number; cut: "cap" | "snippets" | "deadline" | null }>();
-export function mayScanWord(): boolean {
+const scans = new WeakMap<object, { n: number; cut: "cap" | "snippets" | "deadline" | null; words?: Set<string> }>();
+export function mayScanWord(word?: string): boolean {
   const budget = current.getStore();
   if (!budget) return true;
   let s = scans.get(budget);
   if (!s) scans.set(budget, (s = { n: 0, cut: null }));
+  // Round 15 (A2 note): the cap counts the call's own distinct words, whatever earlier calls left in a memo.
+  if (word !== undefined) {
+    const seen = (s.words ??= new Set<string>());
+    if (seen.has(word)) return !s.cut;
+    if (!s.cut && seen.size < WORD_SCAN_CAP) seen.add(word);
+  }
   if (s.cut) return false;
   if (s.n >= WORD_SCAN_CAP) s.cut = "cap";
   else if (budget.deadline - Date.now() < WORD_SCAN_RESERVE_MS) s.cut = "deadline";

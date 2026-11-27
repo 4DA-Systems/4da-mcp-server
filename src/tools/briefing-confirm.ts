@@ -16,6 +16,7 @@
  * matching a declaration to a name the task gives, and the wording the agent acts on.
  */
 
+import { hasCredentialShape } from "../output-screen.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { credentialShape, looksLikeSecret } from "./briefing-task-screen.js";
 import { bareName, foldForNames } from "./briefing-command-check.js";
@@ -105,6 +106,10 @@ export const SCAN_STILL_READS =
 export const SOURCE_HELD = "not looked up: the task names a package source of its own; if it is on the public registry, check it with dependency_check";
 
 /** The last sentence of every safe_to_delegate reason (contract K1). */
+/** Round 15, A4: the boundary of what any answer covers, said in every safe reason before its last sentence. */
+export const OUTSIDE_COVERAGE = "This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.";
+/** Round 15, A5: the echoed task differs from the caller's in more than blanks (characters folded or removed). */
+export const TASK_FOLDED = "the task held characters this briefing folded or removed (full-width or look-alike letters, invisible characters, markup): the echoed task is the reading copy";
 export const RESTS_ON_DECLARATION = "This rests on your declaration of what the task adds and on your statement of which words are not packages: a package you did not declare may not have been checked.";
 /** Round 11, P1: the task-text reading is best effort. */
 export const BEST_EFFORT_READING = "The versions this briefing read in the task's commands and snippets are best effort: a version written in a spelling it does not read was not checked, so declare the version the task writes.";
@@ -240,6 +245,8 @@ function declarationProblem(item: unknown): string | null {
   // Round 12, R4: a name of a credential's shape (the task screen's own test) is refused whatever `public` says, and
   // never repeated; a `public: false` one still forbids its name.
   if (credentialShape(o.name.trim()) || looksLikeSecret(o.name.trim())) return "`name` has the shape of a credential, not a package name";
+  // Round 14b: nor an ecosystem (CREDENTIAL_SHAPES, as the output screen); a version is refused below, as dependency_check refuses it.
+  if (typeof o.ecosystem === "string" && hasCredentialShape(o.ecosystem)) return "refused: a value of a credential's shape is not an ecosystem";
   const ecosystem = ECOSYSTEMS.find((e) => e.toLowerCase() === String(o.ecosystem).trim().toLowerCase())!;
   // The ecosystem's own name grammar, the screen dependency_check applies (dependency-check-screen.ts), and then
   // dependency_check's own entry rule on the name as written (round 7c, F6): a Go path in the proxy's `!`-escaped
@@ -356,6 +363,8 @@ export function declarationFor(word: string, declared: readonly DeclaredPackage[
  * The test a1137-briefing-contract enumerates TaskWordSeen from the source and fails on a kind missing here.
  */
 export const SEEN_KINDS: Readonly<Record<TaskWordSeen, "read" | "caller">> = { command: "read", runner: "read", manifest: "read", form: "read", file: "read", prose: "caller" };
+/** Round 15, A3: the reason for a dismissed name when the call declared a package one edit from it instead. */
+export const DISMISSED_INSTEAD = (word: string, instead: string) => `you said ${word} is not a package and declared ${instead} instead: the task names ${word}; say so to the user, and make sure nothing installs ${word}`;
 /** The reason a dismissal of a name the briefing read gives, per read kind (review_needed at least). */
 export const DISMISSED_READ: Readonly<Record<Exclude<TaskWordSeen, "prose">, (word: string) => string>> = {
   command: (w) => `you said ${w} is not a package; it stands where a package name stands in a command of the task: make sure nothing installs it`,

@@ -26,6 +26,7 @@
  * - Stateless (no session tracking)
  */
 
+import { screenWireText } from "./output-screen.js";
 import { createServer, IncomingMessage, ServerResponse, type Server as HttpServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { isIPv4 } from "node:net";
@@ -357,6 +358,15 @@ function addBatchAnswers(res: ServerResponse, answers: Array<Record<string, unkn
   }) as ServerResponse["end"];
 }
 
+/** Every chunk a response writes, screened for credential shapes (JSON lines and event-stream `data:` lines). */
+function screenResponse(res: ServerResponse): void {
+  const write = res.write.bind(res) as (...a: unknown[]) => boolean;
+  const end = res.end.bind(res) as (...a: unknown[]) => ServerResponse;
+  const screen = (chunk: unknown): unknown => (typeof chunk === "string" ? screenWireText(chunk) : Buffer.isBuffer(chunk) ? Buffer.from(screenWireText(chunk.toString("utf8")), "utf8") : chunk);
+  res.write = ((chunk: unknown, ...rest: unknown[]) => write(screen(chunk), ...rest)) as ServerResponse["write"];
+  res.end = ((chunk?: unknown, ...rest: unknown[]) => (typeof chunk === "function" || chunk === undefined ? end(chunk, ...rest) : end(screen(chunk), ...rest))) as ServerResponse["end"];
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
@@ -428,6 +438,8 @@ export async function startHttpServer(
   });
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    // Round 15, A2: every byte of every response passes the output screen (output-screen.ts), whatever wrote it.
+    screenResponse(res);
     // DNS rebinding protection — every request, before routing or auth.
     const rejection = evaluateRequestGuard(req.headers, policy);
     if (rejection) {

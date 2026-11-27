@@ -325,6 +325,25 @@ describe(`review-confirm12 cases hold the invariants (${sets.join(", ")})`, () =
     }, CASE_MS);
   }
 
+  // Round 15, A1: the Go walk never asks the proxy about a forbidden module or a path under it.
+  if (sets.includes("t12")) {
+    const GO: Array<[string, Record<string, unknown>]> = [
+      ["go get github.com/zqxevil/mod/sub@latest", { not_packages: ["github.com/zqxevil/mod"] }],
+      ["go get github.com/zqxevil/mod/sub@latest", { packages: [{ ecosystem: "Go", name: "github.com/zqxevil/mod", public: false }, { ecosystem: "Go", name: "github.com/zqxevil/mod/sub", version: "latest", public: true }] }],
+      ["go install github.com/zqxevil/mod/cmd/tool@v1.2.0", { not_packages: ["github.com/zqxevil/mod"] }],
+      ["go get github.com/zqxevil/mod/...@latest", { not_packages: ["GitHub.com/ZqxEvil/Mod"] }],
+    ];
+    it.each(GO.map(([task, extra]) => [`${task} with ${JSON.stringify(extra).slice(0, 70)}`, task, extra] as const))("%s: no proxy request under the forbidden module, never safe", async (_l, task, extra) => {
+      live = null;
+      for (const [rel, body] of Object.entries(TEMPLATES.go ?? {})) h.write(rel, body);
+      sent.length = 0;
+      const { r } = await call({ task, packages: [], ...extra });
+      const under = namesRequested().filter((n) => n.toLowerCase().startsWith("github.com/zqxevil/mod"));
+      expect(under).toEqual([]);
+      expect(r?.delegation_assessment.level).not.toBe("safe_to_delegate");
+    }, CASE_MS);
+  }
+
   // Round 12b, item 3: in his world (scan ready), a declaration safe on its own; the same call with one refused entry
   // holds review_needed by that entry alone; without `version` it is confirmation_needed.
   if (sets.includes("t12"))

@@ -34,9 +34,9 @@ const CLOSEST_PYPI = new Map<string, string | null>();
 /** Round 10, G4: once per distinct name (pure in the name), as closestPopularNpm. */
 export function closestPopularPypi(name: string): string | null {
   const key = normalizePypiName(name);
+  if (key.length >= 5 && !POPULAR_PYPI_SET.has(key) && !mayScanWord(`PyPI\0${key}`)) return null;
   const known = CLOSEST_PYPI.get(key);
   if (known !== undefined) return known;
-  if (key.length >= 5 && !mayScanWord()) return null;
   const found = closestPopularPypiUncached(name);
   if (CLOSEST_PYPI.size >= 20_000) CLOSEST_PYPI.clear();
   CLOSEST_PYPI.set(key, found);
