@@ -78,6 +78,8 @@ describe("THE CONTRACT is held to its own rules", () => {
   it("each constant it names exists and is exported; the windows are the numbers it states", () => {
     const named = new Set(TEXT.match(/\b(?:[A-Z][A-Z0-9]*_[A-Z0-9_]+|MANAGERS|VERBS|MANIFESTS)\b/g) ?? []);
     named.delete("FOURDA_GUARD");
+    // An environment setting the text names, not a constant of the hook.
+    named.delete("FOURDA_MCP_HOME");
     expect(named.size).toBeGreaterThanOrEqual(15);
     for (const c of named) expect(mod[c], c).toBeDefined();
     expect(mod.LEDGER_WINDOW_MS).toBe(24 * 60 * 60 * 1000);
@@ -173,16 +175,16 @@ describe("P2: an option the hook does not read, beside a named package, is denie
 describe("P3: the windows", () => {
   const at = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
   it("an exact answer 23 hours old counts; one 25 hours old does not", () => {
-    writeFileSync(join(s.home, "check-ledger.jsonl"), JSON.stringify({ t: at(23), ecosystem: "npm", package: "ms", version: "2.1.3", verdict: "proceed" }) + "\n");
+    writeFileSync(join(s.home, "check-ledger.jsonl"), JSON.stringify({ sv: "6.6.0", t: at(23), ecosystem: "npm", package: "ms", version: "2.1.3", verdict: "proceed" }) + "\n");
     expect(run("npm install ms@2.1.3").decision).toBe("allow");
-    writeFileSync(join(s.home, "check-ledger.jsonl"), JSON.stringify({ t: at(25), ecosystem: "npm", package: "ms", version: "2.1.3", verdict: "proceed" }) + "\n");
+    writeFileSync(join(s.home, "check-ledger.jsonl"), JSON.stringify({ sv: "6.6.0", t: at(25), ecosystem: "npm", package: "ms", version: "2.1.3", verdict: "proceed" }) + "\n");
     expect(run("npm install ms@2.1.3").decision).toBe("deny");
   });
 });
 
 describe("P3: which answers count", () => {
   const at = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
-  const put = (lines: Array<Record<string, string>>) => writeFileSync(join(s.home, "check-ledger.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const put = (lines: Array<Record<string, string>>) => writeFileSync(join(s.home, "check-ledger.jsonl"), lines.map((l) => JSON.stringify({ sv: "6.6.0", ...l })).join("\n") + "\n");
   it("an inclusive upper bound with lower bounds only: the release it names counts, where no answer counts for the range itself", () => {
     put([{ t: at(5), ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "proceed" }]);
     expect(run("npm install 'lodash@>=4.17.0 <=4.17.21'").decision).toBe("allow");
@@ -234,7 +236,7 @@ describe("P5: the bounds", () => {
     expect(r.decision).toBe("deny");
   });
   it("a ledger file over MAX_LEDGER_BYTES makes an examined call denied as not read", () => {
-    const line = JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "ms", version: "2.1.3", verdict: "proceed", reason: "r".repeat(200) });
+    const line = JSON.stringify({ sv: "6.6.0", t: new Date().toISOString(), ecosystem: "npm", package: "ms", version: "2.1.3", verdict: "proceed", reason: "r".repeat(200) });
     writeFileSync(join(s.home, "check-ledger.jsonl"), `${line}\n`.repeat(Math.ceil((mod.MAX_LEDGER_BYTES as number) / line.length) + 10));
     const r = run("npm install ms@2.1.3");
     expect(r.decision).toBe("deny");
@@ -254,7 +256,7 @@ describe("P6: a PostToolUse answer carries no permission decision (each kind of 
   let home: string;
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "a1125-contract-home-"));
-    writeFileSync(join(home, "check-ledger.jsonl"), JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "avoid" }) + "\n");
+    writeFileSync(join(home, "check-ledger.jsonl"), JSON.stringify({ sv: "6.6.0", t: new Date().toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "avoid" }) + "\n");
   });
   afterEach(() => rmSync(home, { recursive: true, force: true }));
   const calls: Array<[string, Record<string, unknown>]> = [

@@ -215,3 +215,22 @@ describe("P3 forms: an avoid answer for the reading denies each manifest form", 
     expect(r.text, r.text).toContain("answered avoid");
   });
 });
+
+/** Round 23 (V1): each range form with a character cmd.exe treats specially, through each manager's .cmd shim. */
+const CMD_RANGES = ["^4.17.0", "^4.17", '">=4.17.0"', '"<5"', '">=4.17.0 <5"', '"4.17.0 || 4.17.21"'];
+const CMD_MANAGERS: Array<[string, string]> = [
+  ["npm.cmd", "install"],
+  ["pnpm.cmd", "add"],
+  ["yarn.cmd", "add"],
+  ["bun.cmd", "add"],
+];
+describe("V1 forms: every range form through every .cmd manager is denied as not read", () => {
+  const cases = CMD_MANAGERS.flatMap(([m, verb]) => CMD_RANGES.map((r) => [`${m} ${verb} lodash@${r.startsWith('"') ? r.slice(1, -1) : r}`.replace(/lodash@(.*)$/, (_x, v: string) => (/\s/.test(v) || /[<>|]/.test(v) ? `"lodash@${v}"` : `lodash@${v}`))]));
+  it.each(cases)("%s", (command) => {
+    for (const tool of ["Bash", "PowerShell"]) {
+      const r = run(command, tool);
+      expect(r.decision, `${tool}: ${r.text}`).toBe("deny");
+      expect(r.text).toContain("cmd.exe rewrites");
+    }
+  });
+});

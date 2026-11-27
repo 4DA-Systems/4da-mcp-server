@@ -574,9 +574,11 @@ export function newDependenciesSignal(
   const rows = introduced.map((name) => {
     const fact = created.get(name);
     if (!fact) return { name, first_published: null, age_days: null, note: "not checked (per-call lookup cap)" };
-    if (fact.status !== "ok") return { name, first_published: null, age_days: null, note: fact.detail, status: fact.status };
-    const age = fact.createdAt ? Math.round(((ref - Date.parse(fact.createdAt)) / DAY_MS) * 10) / 10 : null;
-    return { name, first_published: fact.createdAt, age_days: age };
+    if (fact.status !== "ok") return { name, first_published: null, age_days: null, note: fact.detail || "publish date unknown", status: fact.status };
+    // Round 23 (V4): no publish date (or one that does not parse) is said so, never printed as undefined or NaN.
+    const raw = fact.createdAt ? Math.round(((ref - Date.parse(fact.createdAt)) / DAY_MS) * 10) / 10 : null;
+    const age = raw !== null && Number.isFinite(raw) ? raw : null;
+    return age === null ? { name, first_published: null, age_days: null, note: "publish date unknown" } : { name, first_published: fact.createdAt, age_days: age };
   });
   const young = rows.filter((r) => r.age_days !== null && r.age_days < NEW_DEP_MIN_AGE_DAYS);
   const missing = rows.filter((r) => "status" in r && r.status === "not_found");

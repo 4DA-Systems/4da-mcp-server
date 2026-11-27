@@ -46,12 +46,13 @@ describe("the same name in two sections", () => {
     expect(s.edit(file, 'winapi = "0.3.8"', 'winapi = "0.3.7"').items).toEqual([{ ecosystem: "crates.io", package: "winapi", to: "0.3.7", from: "0.3.8" }]);
   });
 
-  it("a dependency moved to another section at the same version goes ahead", () => {
+  it("a dependency moved to another section at the same version is judged in its new section (round 23, W1)", () => {
     const file = s.file("package.json", PKG);
     const run = s.write(file, '{\n  "name": "app",\n  "dependencies": {},\n  "devDependencies": {\n    "left-pad": "1.3.0",\n    "typescript": "5.6.3"\n  }\n}\n');
-    expect(run.decision, run.text).toBe("allow");
+    expect(run.decision, run.text).toBe("deny");
+    expect(run.items).toEqual([{ ecosystem: "npm", package: "left-pad", to: "1.3.0", from: "1.3.0" }]);
     const cargo = s.file("Cargo.toml", CARGO);
-    expect(s.edit(cargo, 'anyhow = "1.0.89"\n', '\n[dev-dependencies]\nanyhow = "1.0.89"\n').decision).toBe("allow");
+    expect(s.edit(cargo, 'anyhow = "1.0.89"\n', '\n[dev-dependencies]\nanyhow = "1.0.89"\n').decision).toBe("deny");
   });
 });
 

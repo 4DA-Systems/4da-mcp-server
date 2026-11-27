@@ -136,7 +136,7 @@ describe("a data folder with a ledger: a server that records verdicts has run th
 
   it("other verdicts on record, none for this version: the same note, without the empty-ledger sentence", () => {
     const t = new Date(Date.now() - 60_000).toISOString();
-    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ t, ecosystem: "npm", package: "express", version: "4.21.2", verdict: "proceed" }) + "\n");
+    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", package: "express", version: "4.21.2", verdict: "proceed" }) + "\n");
     const reason = denial(hook(event("PreToolUse", "Edit", lodashEdit("4.17.20"))))!;
     expect(reason).not.toContain("No dependency_check verdict at all");
     expect(reason).toContain("do not retry");
@@ -144,7 +144,7 @@ describe("a data folder with a ledger: a server that records verdicts has run th
 
   it("an unknown answer on record for the version: that answer is named, and the note is left out", () => {
     const t = new Date(Date.now() - 60_000).toISOString();
-    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ t, ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "unknown", reason: "the registry did not answer" }) + "\n");
+    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "unknown", reason: "the registry did not answer" }) + "\n");
     const reason = denial(hook(event("PreToolUse", "Edit", lodashEdit("4.17.20"))))!;
     expect(reason).toContain("the last dependency_check answer was unknown");
     expect(reason).toContain("the registry did not answer");
