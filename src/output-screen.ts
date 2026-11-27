@@ -18,6 +18,17 @@ const SHAPED = new RegExp(CREDENTIAL_SHAPES.source.replace(/^\\b/, "").replace(/
 /** A credential as an answer may show it: its first four characters and its length. */
 export const byShape = (value: string) => `${value.slice(0, 4)}... (${value.length} characters)`;
 
+/** Whether a text holds a substring of a CREDENTIAL_SHAPES shape (round 14b: the argument stage uses this). */
+export function hasCredentialShape(text: string): boolean {
+  SHAPED.lastIndex = 0;
+  const found = SHAPED.test(text);
+  SHAPED.lastIndex = 0;
+  return found;
+}
+
+/** The same as screenText: each credential-shaped substring replaced by its shape (for arguments stored or sent). */
+export const maskCredentialShapes = (text: string) => screenText(text);
+
 /** A text with every substring of a CREDENTIAL_SHAPES shape rendered by shape. */
 export function screenText(text: string): string {
   SHAPED.lastIndex = 0;

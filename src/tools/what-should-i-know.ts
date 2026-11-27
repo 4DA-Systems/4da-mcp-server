@@ -27,6 +27,7 @@
  * 14. A text constant is said only where its rule in `TEXT_RULES` holds, for example `RESTS_ON_DECLARATION` ends a safe reason, `BEST_EFFORT_READING` precedes it in a call that declared a package, and `STAYS_REVIEW` is not said with safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
  * 15. `to_confirm` lists names the briefing noticed: a prompt for the caller, not a complete reading. [tests: a1134-round11]
  * 16. The project's own scan reads the installed dependencies and sends their names unless the project's configuration marks them private; a declaration does not change that, and no task text goes to an embedding provider. [tests: a1127-confirm-promises, a1136-round13]
+ * 17. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) in an argument of any tool is not sent to any host and not stored: `screenArguments` refuses a name, version, ecosystem or path holding one, and masks it in the free text a tool stores or sends on purpose. [tests: a1137-round14b (generated)]
  * END OF THE CONTRACT.
  *
  * NOTES: how it reads; not part of the contract. The readers are briefing-command-check.ts (commands and forms),

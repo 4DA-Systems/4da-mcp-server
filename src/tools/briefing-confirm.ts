@@ -16,6 +16,7 @@
  * matching a declaration to a name the task gives, and the wording the agent acts on.
  */
 
+import { hasCredentialShape } from "../output-screen.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { credentialShape, looksLikeSecret } from "./briefing-task-screen.js";
 import { bareName, foldForNames } from "./briefing-command-check.js";
@@ -240,6 +241,8 @@ function declarationProblem(item: unknown): string | null {
   // Round 12, R4: a name of a credential's shape (the task screen's own test) is refused whatever `public` says, and
   // never repeated; a `public: false` one still forbids its name.
   if (credentialShape(o.name.trim()) || looksLikeSecret(o.name.trim())) return "`name` has the shape of a credential, not a package name";
+  // Round 14b: nor an ecosystem (CREDENTIAL_SHAPES, as the output screen); a version is refused below, as dependency_check refuses it.
+  if (typeof o.ecosystem === "string" && hasCredentialShape(o.ecosystem)) return "refused: a value of a credential's shape is not an ecosystem";
   const ecosystem = ECOSYSTEMS.find((e) => e.toLowerCase() === String(o.ecosystem).trim().toLowerCase())!;
   // The ecosystem's own name grammar, the screen dependency_check applies (dependency-check-screen.ts), and then
   // dependency_check's own entry rule on the name as written (round 7c, F6): a Go path in the proxy's `!`-escaped
