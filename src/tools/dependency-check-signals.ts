@@ -383,9 +383,13 @@ function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
   };
 }
 
-/** High or critical, or a severity that could not be read: an unread record never counts as less (AdvisoryRef.unread). */
+/**
+ * High or critical, or a severity that could not be read or is not graded: an unread record never
+ * counts as less (AdvisoryRef.unread), and since round 24 (Y3) neither does one read with no grade
+ * the server can read (OSV gives none, its aliases give none): fail closed, said "severity not graded".
+ */
 function isSerious(a: AdvisoryRef): boolean {
-  return a.severity === "critical" || a.severity === "high" || (a.severity === "unknown" && a.unread === true);
+  return a.severity === "critical" || a.severity === "high" || a.severity === "unknown";
 }
 
 function fmt(a: AdvisoryRef): string {
@@ -397,7 +401,9 @@ function fmt(a: AdvisoryRef): string {
         ? a.gradeUnreadFrom?.length
           ? `severity NOT CHECKED: it carries no grade of its own and its alias ${a.gradeUnreadFrom.slice(0, 2).join(", ")} could not be read from OSV.dev, so it counts as high`
           : "severity NOT CHECKED: OSV.dev did not return its record, so it counts as high"
-        : a.severity;
+        : a.severity === "unknown"
+          ? "severity not graded: neither the record nor its aliases give one, so it counts as high"
+          : a.severity;
   // Counted, and said why: it reads like a notice and is not one by the record's own statement.
   return `${a.id} (${grade}${a.countedNotice ? "; worded as an unmaintained-package notice, but not declared as one or it names a fixed release, so it counts" : ""})`;
 }

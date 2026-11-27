@@ -267,15 +267,16 @@ describe("dependency_check: the names that read proceed", () => {
     expect(r.reason).toMatch(/1\.0\.0 is affected by (GHSA-m2xr-2vj4-wh94|RUSTSEC-2025-0031) \(medium/);
   });
 
-  it("golang.org/x/crypto v0.58.0 is review: GO-2026-5932 has a fix, and no release in v0 is past it", async () => {
+  // Round 24 (Y3): an advisory with no grade the server can read counts as high: avoid.
+  it("golang.org/x/crypto v0.58.0 is avoid: GO-2026-5932 is ungraded, has a fix, and no release in v0 is past it", async () => {
     const out = await check([
       { ecosystem: "Go", package: "golang.org/x/crypto", to: "v0.58.0" },
       { ecosystem: "Go", package: "golang.org/x/crypto", to: "v0" },
     ]);
     for (const r of out.results) {
-      expect(r.verdict).toBe("review");
+      expect(r.verdict).toBe("avoid");
       expect(advisories(r).value.affecting_to).toEqual(["GO-2026-5932"]);
-      expect(r.reason).toContain("GO-2026-5932 (unknown)");
+      expect(r.reason).toContain("GO-2026-5932 (severity not graded");
     }
     // The range answer agrees with the verdict: no v0 release is called safe.
     expect(out.results[1].range_check).toMatchObject({ smallest_safe_in_range: null, vulnerable_in_range: 3, affecting_all: ["GO-2026-5932"] });
@@ -290,7 +291,8 @@ describe("dependency_check: the names that read proceed", () => {
 
   it("a declared notice with a fixed release counts, and the fixed release is named: ring 0.16.20", async () => {
     const [r] = (await check([{ ecosystem: "crates.io", package: "ring", to: "0.16.20" }])).results;
-    expect(r.verdict).toBe("review");
+    // Round 24 (Y3): the notice carries no grade: it counts as high.
+    expect(r.verdict).toBe("avoid");
     expect(advisories(r).value.affecting_to).toEqual(["RUSTSEC-2025-0010"]);
     expect(r.reason).toContain("worded as an unmaintained-package notice, but not declared as one or it names a fixed release, so it counts");
     // A bare "0.16.20" is Cargo's ^0.16.20 (round 10, W2): the range check is over what it admits.

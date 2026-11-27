@@ -219,10 +219,12 @@ describe("C-2: an advisory graded only through an alias that could not be read c
     expect(results[0].reason).toMatch(/severity NOT CHECKED: .*GHSA-h5c8-rqwp-cp95 could not be read/);
   });
 
-  it("an alias OSV.dev holds no record for (404) grades nothing: review, as before (RUSTSEC-2021-0157's GHSA-69v2-w9vg-4g83)", async () => {
+  // Round 24 (Y3): no grade the server can read counts as high (was review).
+  it("an alias OSV.dev holds no record for (404) grades nothing: avoid, severity not graded (RUSTSEC-2021-0157's GHSA-69v2-w9vg-4g83)", async () => {
     OSV.pop();
     const { results } = await run(item);
-    expect(results[0].verdict).toBe("review");
+    expect(results[0].verdict).toBe("avoid");
+    expect(results[0].reason).toContain("severity not graded");
     expect(results[0].reason).not.toMatch(/severity NOT CHECKED/);
   });
 
