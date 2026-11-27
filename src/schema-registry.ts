@@ -137,7 +137,7 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
 
   // --- Intelligence (mixed) ---
   what_should_i_know: {
-    summary: "Pre-task briefing: versions, vulnerabilities, decisions, a verdict. Call BEFORE a non-trivial task with its packages and the `version` of each: public: false for private registries, own indexes, git, paths. On confirmation_needed: task_packages.next_step.",
+    summary: "Pre-task briefing (npm, PyPI, crates.io and Go packages only): advisories and a verdict. Call BEFORE a non-trivial task with its packages and each `version`; public: false for private registries, indexes, git, paths. On confirmation_needed: task_packages.next_step.",
     definition: whatShouldIKnowTool,
     category: "intelligence",
     tags: ["briefing", "advisories", "pre-task", "delegation"],

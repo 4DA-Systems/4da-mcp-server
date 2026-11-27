@@ -84,7 +84,7 @@ describe("item 4: what a declaration does and does not change", () => {
     const r = await brief({ task: "npm install zqxok", packages: [{ ecosystem: "npm", name: "zqxok", version: `1.0.0-${label}`, public: true }] });
     expect(JSON.stringify(r)).not.toContain(label);
     expect(h.requests.filter((u) => u.includes(label))).toEqual([]);
-    expect(JSON.stringify(r.task_packages.not_read)).toContain("looks like a credential");
+    expect(JSON.stringify(r.task_packages.not_read)).toContain("refused: a value of a credential's shape is not a version");
   });
 });
 

@@ -90,7 +90,7 @@ describe("item 6: dependency_check refuses a credential-shaped version label", (
     const r = await runDependencyCheck(null, { items: [{ ecosystem: "npm", package: "zqxok", to: `1.0.0-${AK}` }, { ecosystem: "npm", package: "zqxok", to: "1.0.0" }] }, await h.live());
     const text = JSON.stringify(r);
     expect(text).not.toContain(AK);
-    expect(text).toContain("looks like a credential");
+    expect(text).toContain("refused: a value of a credential's shape is not a version");
     expect(h.requests.filter((u) => u.includes(AK))).toEqual([]);
     await new Promise((res) => setTimeout(res, 300));
     const ledger = path.join(serverDataDir(), LEDGER_FILE);

@@ -14,6 +14,9 @@
  */
 import { hasCredentialShape, maskCredentialShapes } from "./output-screen.js";
 
+/** Round 15b: THE refusal of a credential-shaped argument, for every field and tool (a hint may follow it). */
+export const CREDENTIAL_REFUSAL = (field: string) => `refused: a value of a credential's shape is not ${/^[aeiou]/i.test(field) ? "an" : "a"} ${field}; nothing was sent or stored`;
+
 /** Tools whose free-text arguments are stored or sent on purpose: masked, not refused. */
 export const MASKED_TOOLS: ReadonlySet<string> = new Set(["decision_memory", "check_decision_alignment", "agent_memory"]);
 /** Tools that screen their own arguments item by item (per-item refusals; their free text is never sent or stored). */
@@ -50,7 +53,7 @@ export function screenArguments(tool: string, args: Record<string, unknown>): Ar
   }
   for (const [key, value] of Object.entries(args)) {
     const strings = typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : [];
-    if (strings.some(hasCredentialShape)) return { refused: `refused: a value of a credential's shape is not a ${FIELD_LABEL[key] ?? key.replace(/_/g, " ")}; nothing was sent or stored` };
+    if (strings.some(hasCredentialShape)) return { refused: CREDENTIAL_REFUSAL(FIELD_LABEL[key] ?? key.replace(/_/g, " ")) };
   }
   return { args, masked: 0 };
 }

@@ -49,6 +49,7 @@
  * popular name (weekly downloads).
  */
 
+import { CREDENTIAL_REFUSAL } from "../argument-screen.js";
 import { hasCredentialShape } from "../output-screen.js";
 import type { FourDADatabase } from "../db.js";
 import { goModuleContaining } from "../live/go-path.js";
@@ -549,7 +550,7 @@ export function validateItem(r: unknown, i: number): Requested {
   // Round 14b: a value of a credential's shape (CREDENTIAL_SHAPES, as the output screen) in any field is refused
   // before anything reads it: not sent, not recorded (a refused item writes no ledger line), never repeated.
   for (const [field, label] of [["package", "package name"], ["ecosystem", "ecosystem"]] as const) {
-    if (typeof o[field] === "string" && hasCredentialShape(o[field] as string)) throw new SecretVersionError(`${where}: refused: a value of a credential's shape is not a ${label}; nothing was sent or recorded`);
+    if (typeof o[field] === "string" && hasCredentialShape(o[field] as string)) throw new SecretVersionError(`${where}.${field}: ${CREDENTIAL_REFUSAL(label)}`);
   }
   // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
   for (const field of ["package", "to", "from"]) {
@@ -568,11 +569,11 @@ export function validateItem(r: unknown, i: number): Requested {
   // Round 6b, item 6: a version label shaped like a credential is refused before anything reads it: not sent, not
   // recorded, never repeated (the briefing's declarations apply the same screen).
   if (versionLooksSecret(givenTo) || (typeof o.from === "string" && versionLooksSecret(o.from))) {
-    throw new SecretVersionError(`${where}.${versionLooksSecret(givenTo) ? "to" : "from"} looks like a credential (a secret in a version label): it was not sent or recorded; write the version without it`);
+    throw new SecretVersionError(`${where}.${versionLooksSecret(givenTo) ? "to" : "from"}: ${CREDENTIAL_REFUSAL("version")} (a secret in a version label: write the version without it)`);
   }
   // Round 14b: and any CREDENTIAL_SHAPES substring the label test above lets through.
   if (hasCredentialShape(givenTo) || (typeof o.from === "string" && hasCredentialShape(o.from))) {
-    throw new SecretVersionError(`${where}.${hasCredentialShape(givenTo) ? "to" : "from"} looks like a credential (a secret in a version label): it was not sent or recorded; write the version without it`);
+    throw new SecretVersionError(`${where}.${hasCredentialShape(givenTo) ? "to" : "from"}: ${CREDENTIAL_REFUSAL("version")} (a secret in a version label: write the version without it)`);
   }
   // A PyPI exact pin with a local label (`==1.0.0+corp.5`) is that one build: read as the version it names, so the
   // label is set aside the same way whichever way the pin is written (round 8, reviewer 6's ledger-cmp #74).
