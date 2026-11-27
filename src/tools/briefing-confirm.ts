@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * Package confirmation: the briefing's system for the names of a task it has not checked (wave 2,
  * section 1 of the design of 2026-11-27).
  *
@@ -18,7 +20,6 @@ import type { CheckEcosystem } from "../live/release-metadata.js";
 import { credentialShape, looksLikeSecret } from "./briefing-task-screen.js";
 import { bareName, foldForNames } from "./briefing-command-check.js";
 import { lengthProblem, MAX_NAME_ARG_LENGTH, MAX_VERSION_ARG_LENGTH } from "../tool-args.js";
-import { quoteThirdParty } from "../untrusted-text.js";
 import { ecosystemKey, type TaskWordSeen } from "./briefing-new-packages.js";
 import { validateItem } from "./dependency-check.js";
 import type { UnverifiedWord } from "./briefing-requested-versions.js";
@@ -230,7 +231,8 @@ function declarationProblem(item: unknown): string | null {
   // A field this tool does not define is never ignored (`registry`, `index_url` say where a package lives,
   // and this tool reads only the public registry): the entry is refused, as dependency_check refuses one.
   const unknown = Object.keys(o).find((k) => !DECLARED_FIELDS.has(k));
-  if (unknown !== undefined) return `unknown field ${JSON.stringify(quoteThirdParty(unknown, 40))}: an entry defines only ecosystem, name, version and public`;
+  // Round 14, X1: counted, never named (a key may be a secret).
+  if (unknown !== undefined) return `an unknown field (${Object.keys(o).filter((k) => !DECLARED_FIELDS.has(k)).length} unknown): an entry defines only ecosystem, name, version and public`;
   if (typeof o.public !== "boolean") return "`public` must be true (a package on the public registry: it is checked) or false (from a private registry, git, a path or the workspace: never sent)";
   if (typeof o.ecosystem !== "string" || !ECOSYSTEMS.some((e) => e.toLowerCase() === o.ecosystem!.toString().trim().toLowerCase())) return `\`ecosystem\` must be one of ${ECOSYSTEMS.map((e) => `"${e}"`).join(", ")}`;
   if (typeof o.name !== "string" || !o.name.trim()) return "`name` must be a non-empty string";
@@ -294,7 +296,17 @@ export function readNotPackages(raw: unknown): { words: string[]; refused: NotRe
 export function forbiddenKey(name: string): string {
   // A Go module's major-version suffix names the same private path: example.com/zqx/lib/v2 is example.com/zqx/lib.
   // An npm alias or an ecosystem prefix (`npm:x`) names the same package (fourth check, f-alias2).
-  return name.trim().toLowerCase().replace(/^(?:npm|jsr|pypi):/, "").replace(/!/g, "").replace(/^(.+\/.+)\/v\d+$/, "$1").replace(/[-_.]+/g, "-");
+  return baseName(name).replace(/!/g, "").replace(/^(.+\/.+)\/v\d+$/, "$1").replace(/[-_.]+/g, "-");
+}
+
+/**
+ * THE fold of a name (round 14, X3), under every comparison of names: NFKC, default-ignorable code points removed,
+ * case folded, the bare name (a version, extras, quotes and a trailing mark off), an ecosystem prefix off. The
+ * never-send set and the dismissal compare its union form (forbiddenKey: every ecosystem's separators at once); a
+ * declaration and a read name compare it under the declaration's own ecosystem rule (sameName).
+ */
+export function baseName(name: string): string {
+  return bareName(foldForNames(name.trim())).replace(/^(?:npm|jsr|pypi):/, "");
 }
 
 /** Whether two names are one edit apart: one character changed, added or dropped, or two neighbours swapped (lodahs, lodash). */
@@ -316,20 +328,16 @@ export const BUDGET_MISS = /did not finish in time|time budget|time_budget/i;
 
 /** A name compared as its ecosystem compares names (PEP 503, crates' `-`/`_`, npm's case; a Go path as written). */
 export function sameName(a: string, b: string, ecosystem: CheckEcosystem): boolean {
-  return ecosystemKey(a, ecosystem) === ecosystemKey(b, ecosystem);
+  return ecosystemKey(baseName(a), ecosystem) === ecosystemKey(baseName(b), ecosystem);
 }
 
 /** Whether a word the task gives is settled by a `not_packages` word, in any ecosystem it was read for. */
 export function dismissedBy(word: string, ecosystems: readonly string[], notPackages: readonly string[]): string | undefined {
-  const ecos = (ecosystems.length > 0 ? ecosystems : ECOSYSTEMS).filter((e): e is CheckEcosystem => (ECOSYSTEMS as readonly string[]).includes(e));
-  // Round 13, U1: one fold for every dismissal: NFKC, default-ignorables out, case, the bare name (version, extras and
-  // quotes off), then each ecosystem's own rule (PEP 503 for PyPI).
-  const fold = (x: string) => bareName(foldForNames(x));
-  const w = fold(word);
-  return notPackages.find((n) => {
-    const f = fold(n);
-    return f === w || ecos.some((e) => sameName(f, w, e));
-  });
+  // Round 14, X3: the never-send set's own key (forbiddenKey), so a dismissal and the never-send rule agree on every
+  // spelling. `ecosystems` is kept for the callers; the union fold covers each ecosystem's rule.
+  void ecosystems;
+  const w = forbiddenKey(word);
+  return notPackages.find((n) => forbiddenKey(n) === w);
 }
 
 /**
@@ -340,6 +348,22 @@ export function dismissedBy(word: string, ecosystems: readonly string[], notPack
 export function declarationFor(word: string, declared: readonly DeclaredPackage[]): DeclaredPackage | undefined {
   return declared.find((d) => sameName(d.name, word, d.ecosystem));
 }
+
+/**
+ * Round 14, X2: EVERY seen kind a reader can emit, classified. "read": the briefing read the name itself (an operand
+ * of a command it reads, a snippet entry, a version form, a line of a requirements file the task names); a dismissal
+ * of it holds review_needed with its DISMISSED_READ text. "caller": a prose candidate, the caller's word to settle.
+ * The test a1137-briefing-contract enumerates TaskWordSeen from the source and fails on a kind missing here.
+ */
+export const SEEN_KINDS: Readonly<Record<TaskWordSeen, "read" | "caller">> = { command: "read", runner: "read", manifest: "read", form: "read", file: "read", prose: "caller" };
+/** The reason a dismissal of a name the briefing read gives, per read kind (review_needed at least). */
+export const DISMISSED_READ: Readonly<Record<Exclude<TaskWordSeen, "prose">, (word: string) => string>> = {
+  command: (w) => `you said ${w} is not a package; it stands where a package name stands in a command of the task: make sure nothing installs it`,
+  runner: (w) => `you said ${w} is not a package; it stands where a package name stands in a runner command of the task, which downloads and runs it: make sure nothing runs it`,
+  manifest: (w) => `you said ${w} is not a package; it stands where a package name stands in a manifest entry of the task: make sure nothing installs it`,
+  form: (w) => `you said ${w} is not a package; the task writes a version on it: make sure nothing installs it`,
+  file: (w) => `you said ${w} is not a package; it stands on a line of the requirements file the task names: make sure nothing installs it`,
+};
 
 const SEEN: Record<TaskWordSeen, ToConfirm["seen"]> = {
   command: "operand of an install command",

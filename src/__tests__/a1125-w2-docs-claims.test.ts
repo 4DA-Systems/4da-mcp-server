@@ -112,7 +112,8 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(comma.canonical).toBe(false);
     expect(unreadableReason({ ...comma, unreadable: comma.why as never, operands: [] })).toBe(`This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check. ${STAYS_REVIEW}`);
     // Round 9, E3: the remedy is gone; the truth instead (README/CHANGELOG follow from the ROUND 9 block).
-    expect(STAYS_REVIEW).toBe("This stays review_needed for the command as the task writes it: it is not an error. Check what the command installs with dependency_check before running it.");
+    // Round 14, X5: true at every level it is said with (confirmation_needed included).
+    expect(STAYS_REVIEW).toBe("This command, as the task writes it, keeps the answer from safe_to_delegate: it is not an error. Check what the command installs with dependency_check before running it.");
     expect(next).toContain("(\"This task holds a command (pip install) this briefing could not read whole (a comma in its list of packages): check what it installs with dependency_check.\")");
     expect(canonicalCommands("npm create vite")[0]!.why).toBe("it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check");
     expect(next).toContain('"it fetches and runs a package named create-<name> (or <scope>/create), which this briefing does not check"');
@@ -142,6 +143,23 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(text("src/tools/briefing-confirm.ts")).toContain('"your FOURDA_PRIVATE_PACKAGES list"');
     expect(next).toContain('its basis is "your FOURDA_PRIVATE_PACKAGES list" when that list names it');
     expect(next).toContain("is shown as its first four characters and its length");
+  });
+
+  // Round 14: the docs lane writes the ROUND 14 sentences; until then this one fails on purpose.
+  it("round 14: the CHANGELOG carries the contract's 16 sentences in order, and the source and masking rules as the code has them", () => {
+    const contract = next.slice(next.indexOf("- What `what_should_i_know` promises, and nothing more"), next.indexOf("- The one promise:"));
+    const numbers = [...contract.matchAll(/^ {2}(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(numbers).toEqual(Array.from({ length: 16 }, (_, i) => i + 1));
+    expect(contract).toContain("a public entry without `version` never leaves the answer at `safe_to_delegate`");
+    expect(contract).toContain("a task that only mentions such a spelling can be safe");
+    expect(next).not.toContain("the level is at most `review_needed`, and nothing is written to the check ledger");
+    expect(next).toContain("Only known shapes are masked: a long random-looking folder name, a sha512 integrity string or a 64-hex digest is shown as it is");
+    expect(text("src/tool-args.ts") + text("src/tools/dependency-check.ts")).toContain("an unknown parameter (");
+    expect(readme).not.toContain("this stays `review_needed` for the command");
+  });
+
+  it("docs lane, round 14: the CHANGELOG quotes the reworded STAYS_REVIEW", () => {
+    expect(next).toContain(`the reason adds "${STAYS_REVIEW}" No remedy is offered.`);
   });
 
   it("docs lane, round 13: the CHANGELOG quotes the new last sentence and no longer the raw-text dismissal rule", () => {
@@ -284,7 +302,7 @@ describe("what_should_i_know after confirmation round 8: the wordings and the li
       expect(doc).not.toContain("For a clean answer");
       expect(doc).not.toContain("on a line with a package manager's name");
     }
-    expect(next).toContain(`the reason adds "${STAYS_REVIEW}" No remedy is offered.`);
+    // Round 14: the CHANGELOG half of STAYS_REVIEW is checked in the docs-lane test below.
     // Round 13, U1: the raw-text dismissed-word rule and its text are gone from the code (the CHANGELOG half below).
     expect(wsik).not.toContain("it stands after a package manager's name in the task");
     expect(readme).toContain('"name": "lodahs", "version": "latest", "public": true');

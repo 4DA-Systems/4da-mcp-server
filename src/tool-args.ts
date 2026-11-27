@@ -95,10 +95,12 @@ export function validateToolArgs(toolName: string, schema: InputSchema, args: Re
     }
   }
 
+  // Round 14, X1: an unknown parameter is counted, never named (a name may be a secret).
+  const unknownCount = Object.keys(args).filter((n) => !(Object.hasOwn(properties, n) && typeof properties[n] === "object")).length;
   for (const [name, value] of Object.entries(args)) {
     const prop = Object.hasOwn(properties, name) ? properties[name] : undefined;
     if (!prop || typeof prop !== "object") {
-      return `${toolName}: unknown parameter "${name}". Valid parameters: ${known.join(", ") || "(none)"}.`;
+      return `${toolName}: an unknown parameter (${unknownCount} unknown). Valid parameters: ${known.join(", ") || "(none)"}.`;
     }
     if (value === undefined || value === null) continue;
     if (!matchesType(value, prop.type)) {

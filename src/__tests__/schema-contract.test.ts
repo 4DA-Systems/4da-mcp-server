@@ -81,7 +81,7 @@ describe("schema-vs-code contract", () => {
     const schema = TOOL_REGISTRY.agent_memory.definition.inputSchema;
     expect(validateToolArgs("agent_memory", schema, { action: "recall", query: "fastembed" })).toBeNull();
     expect(validateToolArgs("agent_memory", schema, { action: "store", subject: "s", content: "c" })).toBeNull();
-    expect(validateToolArgs("agent_memory", schema, { action: "recall", topic: "x" })).toMatch(/unknown parameter "topic"/);
+    expect(validateToolArgs("agent_memory", schema, { action: "recall", topic: "x" })).toMatch(/an unknown parameter \(1 unknown\)/);
   });
 });
 
@@ -96,7 +96,7 @@ describe("argument validation", () => {
   it("names the fix for a wrong type, a bad enum value and an unknown parameter", () => {
     expect(validateToolArgs("vulnerability_scan", vuln, { project_path: 42 })).toMatch(/"project_path" must be a string, got number\.$/);
     expect(validateToolArgs("vulnerability_scan", vuln, { severity_filter: "severe" })).toMatch(/must be one of "critical", "high", "medium", "low"/);
-    expect(validateToolArgs("vulnerability_scan", vuln, { severity: "high" })).toMatch(/unknown parameter "severity".*severity_filter/);
+    expect(validateToolArgs("vulnerability_scan", vuln, { severity: "high" })).toMatch(/an unknown parameter \(1 unknown\).*severity_filter/);
   });
 
   it("vulnerability_scan's detailed page: limit is 1 to 1000 and offset is not negative", () => {

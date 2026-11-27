@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * Which of this project's dependencies a task touches, and what is known
  * about each — the core of the what_should_i_know briefing.
  *

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * Wisdom retrieval for the what_should_i_know briefing.
  *
  * Ranks the developer's recorded decisions and agent memories against the

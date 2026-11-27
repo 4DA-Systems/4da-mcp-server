@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * Round 14, X5: the emitted text constants of what_should_i_know, each with the levels at which it may appear. The
+ * vendored runners (a1137-review12-runner.ts) apply TEXT_RULES to every answer they get: a text said where its rule
+ * does not hold fails the run. Adding a text constant means adding its rule here.
+ */
+import { STAYS_REVIEW } from "../../tools/briefing-command-check.js";
+import { BEST_EFFORT_READING, DECLARE_REASON, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../../tools/briefing-confirm.js";
+
+type Answer = Record<string, any>;
+type Args = Record<string, any>;
+export interface TextRule {
+  /** The constant (or text family) as the code names it. */
+  constant: string;
+  /** Where in the answer it is looked for. */
+  found: (r: Answer) => boolean;
+  /** When it may be said. */
+  holds: (r: Answer, args: Args) => boolean;
+  /** The rule, in words (THE CONTRACT names this table). */
+  when: string;
+}
+const reason = (r: Answer) => String(r?.delegation_assessment?.reason ?? "");
+const level = (r: Answer) => String(r?.delegation_assessment?.level ?? "");
+const declared = (a: Args) => Array.isArray(a.packages) && a.packages.length > 0;
+
+export const TEXT_RULES: readonly TextRule[] = [
+  { constant: "RESTS_ON_DECLARATION", found: (r) => reason(r).includes(RESTS_ON_DECLARATION), holds: (r) => level(r) === "safe_to_delegate" && reason(r).endsWith(RESTS_ON_DECLARATION), when: "safe_to_delegate only, as the reason's last sentence" },
+  { constant: "BEST_EFFORT_READING", found: (r) => reason(r).includes(BEST_EFFORT_READING), holds: (r, a) => level(r) === "safe_to_delegate" && declared(a), when: "safe_to_delegate in a call that declared at least one package" },
+  { constant: "STAYS_REVIEW", found: (r) => reason(r).includes(STAYS_REVIEW), holds: (r) => level(r) !== "safe_to_delegate", when: "any level but safe_to_delegate" },
+  { constant: "DISMISSED_READ", found: (r) => /\byou said \S+ is not a package; (?:it stands|the task writes a version)/.test(reason(r)), holds: (r) => level(r) !== "safe_to_delegate", when: "any level but safe_to_delegate" },
+  { constant: "SOURCE_HELD", found: (r) => JSON.stringify(r?.task_packages?.not_read ?? []).includes(SOURCE_HELD), holds: (r) => level(r) !== "safe_to_delegate", when: "a name was held (not looked up): any level but safe_to_delegate" },
+  { constant: "unreadableReason", found: (r) => /this briefing could not read whole|This task holds a line longer|This task holds a command this briefing does not read/.test(reason(r)), holds: (r) => level(r) !== "safe_to_delegate", when: "any level but safe_to_delegate" },
+  { constant: "split the task (call-budget cut texts)", found: (r) => /split the task and ask for each part/.test(reason(r)), holds: (r) => level(r) !== "safe_to_delegate", when: "any level but safe_to_delegate" },
+  { constant: "DECLARE_REASON", found: (r) => reason(r).startsWith(DECLARE_REASON), holds: (r, a) => level(r) === "confirmation_needed" && a.packages === undefined, when: "confirmation_needed, in a call without packages" },
+  { constant: "SCAN_STILL_READS", found: (r) => reason(r).includes(SCAN_STILL_READS.replace(/\.$/, "")), holds: (r) => level(r) !== "safe_to_delegate", when: "any level but safe_to_delegate" },
+];
+
+/** The rules a given answer breaks (empty: every text it says is true at its level). */
+export function brokenTextRules(r: Answer, args: Args): string[] {
+  return TEXT_RULES.filter((t) => t.found(r) && !t.holds(r, args)).map((t) => `${t.constant} (${t.when})`);
+}

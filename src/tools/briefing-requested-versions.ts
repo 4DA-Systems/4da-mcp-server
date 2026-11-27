@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * what_should_i_know and the version a task names (black-box re-run of 96c16d2, 2026-11-14):
  * "add lodash 4.17.20 to package.json" came back safe_to_delegate, with lodash judged at `latest`
  * (4.18.1) instead of the 4.17.20 the task writes, which four advisories affect; "pin axios to
