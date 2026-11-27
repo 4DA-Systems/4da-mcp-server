@@ -26,7 +26,8 @@
  * - Stateless (no session tracking)
  */
 
-import { screenWireText } from "./output-screen.js";
+import { screenText, screenWireText } from "./output-screen.js";
+import { StringDecoder } from "node:string_decoder";
 import { createServer, IncomingMessage, ServerResponse, type Server as HttpServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { isIPv4 } from "node:net";
@@ -359,12 +360,62 @@ function addBatchAnswers(res: ServerResponse, answers: Array<Record<string, unkn
 }
 
 /** Every chunk a response writes, screened for credential shapes (JSON lines and event-stream `data:` lines). */
-function screenResponse(res: ServerResponse): void {
+export function screenResponse(res: ServerResponse): void {
+  // Round 16, C2: every chunk type (string in any encoding, Buffer, Uint8Array, any ArrayBufferView), decoded as one
+  // UTF-8 stream; only whole lines are screened and written, the rest is carried to the next chunk, so a token split
+  // over two writes is still screened whole. A token never spans a line end, and the body is JSON lines or an event
+  // stream, so whole lines are the unit. The body's length can change: Content-Length is dropped (chunked encoding).
   const write = res.write.bind(res) as (...a: unknown[]) => boolean;
   const end = res.end.bind(res) as (...a: unknown[]) => ServerResponse;
-  const screen = (chunk: unknown): unknown => (typeof chunk === "string" ? screenWireText(chunk) : Buffer.isBuffer(chunk) ? Buffer.from(screenWireText(chunk.toString("utf8")), "utf8") : chunk);
-  res.write = ((chunk: unknown, ...rest: unknown[]) => write(screen(chunk), ...rest)) as ServerResponse["write"];
-  res.end = ((chunk?: unknown, ...rest: unknown[]) => (typeof chunk === "function" || chunk === undefined ? end(chunk, ...rest) : end(screen(chunk), ...rest))) as ServerResponse["end"];
+  const writeHead = res.writeHead.bind(res) as (...a: unknown[]) => ServerResponse;
+  const setHeader = res.setHeader.bind(res) as (name: string, value: unknown) => ServerResponse;
+  const decoder = new StringDecoder("utf8");
+  let carry = "";
+  const text = (chunk: unknown, encoding: unknown): string => {
+    if (chunk === undefined || chunk === null) return "";
+    if (typeof chunk === "string") return decoder.write(Buffer.from(chunk, typeof encoding === "string" && Buffer.isEncoding(encoding) ? encoding : "utf8"));
+    if (ArrayBuffer.isView(chunk)) return decoder.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+    if (chunk instanceof ArrayBuffer) return decoder.write(Buffer.from(chunk));
+    return decoder.write(Buffer.from(String(chunk), "utf8"));
+  };
+  const headerValue = (v: unknown): unknown => (typeof v === "string" ? screenText(v) : Array.isArray(v) ? v.map(headerValue) : v);
+  const isLength = (k: unknown) => typeof k === "string" && k.toLowerCase() === "content-length";
+  res.setHeader = ((name: string, value: unknown) => (isLength(name) ? res : setHeader(name, headerValue(value)))) as ServerResponse["setHeader"];
+  if (res.hasHeader("content-length")) res.removeHeader("content-length");
+  res.writeHead = ((...args: unknown[]) => {
+    const out = args.map((a, i) => {
+      if (i === 0) return a;
+      if (typeof a === "string") return screenText(a);
+      if (Array.isArray(a)) {
+        const flat: unknown[] = [];
+        for (let j = 0; j + 1 < a.length; j += 2) if (!isLength(a[j])) flat.push(a[j], headerValue(a[j + 1]));
+        return flat;
+      }
+      if (a && typeof a === "object") return Object.fromEntries(Object.entries(a).filter(([k]) => !isLength(k)).map(([k, v]) => [k, headerValue(v)]));
+      return a;
+    });
+    if (res.hasHeader("content-length")) res.removeHeader("content-length");
+    return writeHead(...out);
+  }) as ServerResponse["writeHead"];
+  res.write = ((chunk: unknown, ...rest: unknown[]) => {
+    const encoding = typeof rest[0] === "string" ? rest[0] : undefined;
+    const callback = rest.find((r) => typeof r === "function");
+    const all = carry + text(chunk, encoding);
+    const cut = all.lastIndexOf("\n");
+    carry = cut < 0 ? all : all.slice(cut + 1);
+    const ready = cut < 0 ? "" : screenWireText(all.slice(0, cut + 1));
+    return callback ? write(ready, "utf8", callback) : write(ready, "utf8");
+  }) as ServerResponse["write"];
+  res.end = ((chunk?: unknown, ...rest: unknown[]) => {
+    const fnFirst = typeof chunk === "function";
+    const encoding = !fnFirst && typeof rest[0] === "string" ? rest[0] : undefined;
+    const callback = fnFirst ? chunk : rest.find((r) => typeof r === "function");
+    const all = carry + (fnFirst ? "" : text(chunk, encoding)) + decoder.end();
+    carry = "";
+    const last = all === "" ? undefined : screenWireText(all);
+    if (last === undefined) return callback ? end(callback) : end();
+    return callback ? end(last, "utf8", callback) : end(last, "utf8");
+  }) as ServerResponse["end"];
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

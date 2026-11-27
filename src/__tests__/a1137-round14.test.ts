@@ -25,13 +25,18 @@ describe("X1: the output screen, generated from CREDENTIAL_SHAPES", () => {
   });
   const VARIANTS: Array<[string, (t: string) => string]> = [
     ["alone", (t) => t],
-    ["with a prefix", (t) => `xx${t}`],
+    // Round 16, C7: a prefix of non-word characters (CREDENTIAL_SHAPES starts at a word boundary).
+    ["with a prefix", (t) => `x-${t}`],
     ["with a suffix", (t) => `${t}.yy`],
-    ["inside a longer word", (t) => `prefix_${t}_suffix`],
+    ["inside a longer phrase", (t) => `prefix/${t}_suffix`],
     ["after 200,000 characters of filler", (t) => `${"a ".repeat(100_000)}${t}`],
   ];
   it.each(SHAPES.flatMap((t, i) => VARIANTS.map(([v, f]) => [`shape ${i} ${v}`, f(t), t] as const)))("screenText: %s is rendered by shape", (_l, text, tok) => {
     expect(screenText(text).includes(tok)).toBe(false);
+  });
+  // Round 16, C7: after a word character CREDENTIAL_SHAPES does not match, and neither does the screen.
+  it.each(SHAPES.map((t, i) => [`shape ${i}`, `xx${t}`] as const))("screenText: %s after a word character follows CREDENTIAL_SHAPES", (_l, text) => {
+    expect(screenText(text) !== text).toBe(new RegExp(CREDENTIAL_SHAPES.source).test(text));
   });
   it("a long text is screened in bounded time (linear)", () => {
     const text = "eyJ".repeat(70_000);
@@ -74,7 +79,7 @@ describe("X1: the output screen, generated from CREDENTIAL_SHAPES", () => {
       out.push([`${tool} packages[].name`, (t) => ({ task: "add it", packages: [{ ecosystem: "npm", name: t, version: "1.0.0", public: true }] })]);
       out.push([`${tool} packages[] unknown field key`, (t) => ({ task: "add it", packages: [{ ecosystem: "npm", name: "zqxok", version: "1.0.0", public: true, [`k_${t}`]: 1 }] })]);
       out.push([`${tool} files after a 180,000-character task`, (t) => ({ task: `${"a ".repeat(90_000)}`, packages: [], files: [t] })]);
-      out.push([`${tool} files over 2,000 characters`, (t) => ({ task: "x", packages: [], files: [`${"f".repeat(2_100)}${t}`] })]);
+      out.push([`${tool} files over 2,000 characters`, (t) => ({ task: "x", packages: [], files: [`${"f".repeat(2_100)}/${t}`] })]);
       out.push([`${tool} project_path`, (t) => ({ task: "x", packages: [], project_path: `/nonexistent/${t}` })]);
     }
     if (tool === "dependency_check") out.push([`${tool} items[] unknown field key`, (t) => ({ items: [{ ecosystem: "npm", package: "zqxok", to: "1.0.0", [t]: "x" }] })]);

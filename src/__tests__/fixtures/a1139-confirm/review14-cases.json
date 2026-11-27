@@ -1,0 +1,4517 @@
+{
+ "holes": {"{{H0}}":["np","m_config"]},
+ "source": "review-confirm14 (fourteenth independent check)",
+ "cases": [
+  {
+   "set": "r2-a",
+   "id": "r2-s8proj-lodash-a-0",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"lodash\":\"^4.17.20\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"lodash\":\"^4.17.20\",\"zod\":\"^3.24.1\"}},\"node_modules/lodash\":{\"version\":\"4.17.20\",\"resolved\":\"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the config module.",
+    "packages": [],
+    "not_packages": []
+   },
+   "group": "g0"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8proj-add-lodash-a-1",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"lodash\":\"^4.17.20\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"lodash\":\"^4.17.20\",\"zod\":\"^3.24.1\"}},\"node_modules/lodash\":{\"version\":\"4.17.20\",\"resolved\":\"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ky for the HTTP calls.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "version": "1.7.4",
+      "public": true
+     }
+    ],
+    "not_packages": []
+   },
+   "group": "g1"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8proj-node-forge-a-2",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"node-forge\":\"^0.10.0\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"node-forge\":\"^0.10.0\",\"zod\":\"^3.24.1\"}},\"node_modules/node-forge\":{\"version\":\"0.10.0\",\"resolved\":\"https://registry.npmjs.org/node-forge/-/node-forge-0.10.0.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the config module.",
+    "packages": [],
+    "not_packages": []
+   },
+   "group": "g2"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8proj-add-node-forge-a-3",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"node-forge\":\"^0.10.0\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"node-forge\":\"^0.10.0\",\"zod\":\"^3.24.1\"}},\"node_modules/node-forge\":{\"version\":\"0.10.0\",\"resolved\":\"https://registry.npmjs.org/node-forge/-/node-forge-0.10.0.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ky for the HTTP calls.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "version": "1.7.4",
+      "public": true
+     }
+    ],
+    "not_packages": []
+   },
+   "group": "g3"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8proj-elliptic-a-4",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"elliptic\":\"^6.5.4\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"elliptic\":\"^6.5.4\",\"zod\":\"^3.24.1\"}},\"node_modules/elliptic\":{\"version\":\"6.5.4\",\"resolved\":\"https://registry.npmjs.org/elliptic/-/elliptic-6.5.4.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the config module.",
+    "packages": [],
+    "not_packages": []
+   },
+   "group": "g4"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8proj-add-elliptic-a-5",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"elliptic\":\"^6.5.4\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"elliptic\":\"^6.5.4\",\"zod\":\"^3.24.1\"}},\"node_modules/elliptic\":{\"version\":\"6.5.4\",\"resolved\":\"https://registry.npmjs.org/elliptic/-/elliptic-6.5.4.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ky for the HTTP calls.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "version": "1.7.4",
+      "public": true
+     }
+    ],
+    "not_packages": []
+   },
+   "group": "g5"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8proj-fastifyy-a-6",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"fastifyy\":\"^1.0.1\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"fastifyy\":\"^1.0.1\",\"zod\":\"^3.24.1\"}},\"node_modules/fastifyy\":{\"version\":\"1.0.1\",\"resolved\":\"https://registry.npmjs.org/fastifyy/-/fastifyy-1.0.1.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the config module.",
+    "packages": [],
+    "not_packages": []
+   },
+   "group": "g6"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8proj-add-fastifyy-a-7",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"fastifyy\":\"^1.0.1\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"fastifyy\":\"^1.0.1\",\"zod\":\"^3.24.1\"}},\"node_modules/fastifyy\":{\"version\":\"1.0.1\",\"resolved\":\"https://registry.npmjs.org/fastifyy/-/fastifyy-1.0.1.tgz\",\"integrity\":\"sha512-AAAA\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ky for the HTTP calls.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "version": "1.7.4",
+      "public": true
+     }
+    ],
+    "not_packages": []
+   },
+   "group": "g7"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8dec-installed-a-8",
+   "clause": "s8-decision",
+   "template": "npm",
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "validation",
+      "decision": "Use valibot for validation; zod is rejected",
+      "rationale": "team rule",
+      "alternatives_rejected": [
+       "zod"
+      ],
+      "context_tags": [
+       "validation"
+      ]
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "zod"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Refactor the validation with zod.",
+      "packages": [],
+      "not_packages": []
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Upgrade zod to 3.24.1.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zod",
+        "version": "3.24.1",
+        "public": true
+       }
+      ],
+      "not_packages": []
+     }
+    }
+   ],
+   "group": "g8"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8dec-new-a-9",
+   "clause": "s8-decision",
+   "template": "npm",
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "http",
+      "decision": "Use ky for HTTP; axios is rejected",
+      "rationale": "team rule",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "context_tags": [
+       "http"
+      ]
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add axios for the HTTP calls.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "axios",
+        "version": "1.7.9",
+        "public": true
+       }
+      ],
+      "not_packages": []
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "npm install axios@1.7.9",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "axios",
+        "version": "1.7.9",
+        "public": true
+       }
+      ],
+      "not_packages": []
+     }
+    }
+   ],
+   "group": "g9"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s8dec-pg-a-10",
+   "clause": "s8-decision",
+   "template": "npm",
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "dependency",
+      "subject": "database",
+      "decision": "Use MongoDB; PostgreSQL and pg are rejected",
+      "rationale": "team rule",
+      "alternatives_rejected": [
+       "postgresql",
+       "pg"
+      ],
+      "context_tags": [
+       "database"
+      ]
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "pg"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Switch persistence to pg.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "pg",
+        "version": "8.13.1",
+        "public": true
+       }
+      ],
+      "not_packages": []
+     }
+    }
+   ],
+   "group": "g10"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s5-feff-a-11",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm insta﻿ll hono@4.6.14 for the routes",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "hono",
+      "version": "4.6.14",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "for",
+     "the",
+     "routes"
+    ]
+   },
+   "group": "g11"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s5-1bca0-a-12",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm insta𛲠ll hono@4.6.14 for the routes",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "hono",
+      "version": "4.6.14",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "for",
+     "the",
+     "routes"
+    ]
+   },
+   "group": "g12"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s5-1d173-a-13",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm insta𝅳ll hono@4.6.14 for the routes",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "hono",
+      "version": "4.6.14",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "for",
+     "the",
+     "routes"
+    ]
+   },
+   "group": "g13"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s5-e01f0-a-14",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm insta󠇰ll hono@4.6.14 for the routes",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "hono",
+      "version": "4.6.14",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "for",
+     "the",
+     "routes"
+    ]
+   },
+   "group": "g14"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s5-200b-control-a-15",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm insta​ll hono@4.6.14 for the routes",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "hono",
+      "version": "4.6.14",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "for",
+     "the",
+     "routes"
+    ]
+   },
+   "group": "g15"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-bare-a-18",
+   "clause": "s2-bare",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pnpm dlx zqxrunnerword"
+   },
+   "group": "g18"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-a-19",
+   "clause": "s2-runner",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pnpm dlx zqxrunnerword",
+    "packages": [],
+    "not_packages": [
+     "zqxrunnerword"
+    ]
+   },
+   "group": "g19"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-bare-a-20",
+   "clause": "s2-bare",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm exec zqxrunnerword"
+   },
+   "group": "g20"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-a-21",
+   "clause": "s2-runner",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm exec zqxrunnerword",
+    "packages": [],
+    "not_packages": [
+     "zqxrunnerword"
+    ]
+   },
+   "group": "g21"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-bare-a-22",
+   "clause": "s2-bare",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bun x zqxrunnerword"
+   },
+   "group": "g22"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-a-23",
+   "clause": "s2-runner",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bun x zqxrunnerword",
+    "packages": [],
+    "not_packages": [
+     "zqxrunnerword"
+    ]
+   },
+   "group": "g23"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-bare-a-24",
+   "clause": "s2-bare",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "uv tool run zqxrunnerword"
+   },
+   "group": "g24"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-a-25",
+   "clause": "s2-runner",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "uv tool run zqxrunnerword",
+    "packages": [],
+    "not_packages": [
+     "zqxrunnerword"
+    ]
+   },
+   "group": "g25"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-bare-a-26",
+   "clause": "s2-bare",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pipx run zqxrunnerword"
+   },
+   "group": "g26"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-a-27",
+   "clause": "s2-runner",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pipx run zqxrunnerword",
+    "packages": [],
+    "not_packages": [
+     "zqxrunnerword"
+    ]
+   },
+   "group": "g27"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-bare-a-28",
+   "clause": "s2-bare",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npx --yes zqxrunnerword@1.0.0"
+   },
+   "group": "g28"
+  },
+  {
+   "set": "r2-a",
+   "id": "r2-s2-runner-a-29",
+   "clause": "s2-runner",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npx --yes zqxrunnerword@1.0.0",
+    "packages": [],
+    "not_packages": [
+     "zqxrunnerword"
+    ]
+   },
+   "group": "g29"
+  },
+  {
+   "set": "m-s8",
+   "id": "s8-projvuln-0",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "group": "pv",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"lodash\":\"^4.17.20\",\"zod\":\"^3.24.1\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"lodash\":\"^4.17.20\",\"zod\":\"^3.24.1\"}},\"node_modules/lodash\":{\"version\":\"4.17.20\",\"resolved\":\"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\",\"integrity\":\"sha512-AAAA\",\"license\":\"MIT\"},\"node_modules/zod\":{\"version\":\"3.24.1\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.24.1.tgz\",\"integrity\":\"sha512-AAAA\",\"license\":\"MIT\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the config module.",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {}
+  },
+  {
+   "set": "m-s8",
+   "id": "s8-projvuln-1",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "group": "pv",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the lodash template call in utils.",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {}
+  },
+  {
+   "set": "m-s8",
+   "id": "s8-projvuln-2",
+   "clause": "s8-projvuln",
+   "template": "none",
+   "group": "pv",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ky.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "version": "1.7.4",
+      "public": true
+     }
+    ]
+   },
+   "expect": {}
+  },
+  {
+   "set": "m-s8",
+   "id": "s8-drift-3",
+   "clause": "s8-drift",
+   "template": "none",
+   "group": "dr",
+   "setup": {
+    "package.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"lodash\":\"^4.17.21\"}}",
+    "package-lock.json": "{\"name\":\"svc\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"svc\",\"version\":\"1.0.0\",\"dependencies\":{\"lodash\":\"^4.17.21\"}},\"node_modules/lodash\":{\"version\":\"4.17.21\",\"resolved\":\"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz\",\"integrity\":\"sha512-AAAA\",\"license\":\"MIT\"}}}",
+    "node_modules/lodash/package.json": "{\"name\":\"lodash\",\"version\":\"4.17.20\"}",
+    "node_modules/.package-lock.json": "{\"name\":\"svc\",\"lockfileVersion\":3,\"packages\":{\"node_modules/lodash\":{\"version\":\"4.17.20\"}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the config module.",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {}
+  },
+  {
+   "set": "m-s8",
+   "id": "s8-drift-4",
+   "clause": "s8-drift",
+   "template": "none",
+   "group": "dr",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use lodash in the price module.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "lodash",
+      "version": "4.17.21",
+      "public": true
+     }
+    ]
+   },
+   "expect": {}
+  },
+  {
+   "set": "m-s8",
+   "id": "s8-decision-5",
+   "clause": "s8-decision",
+   "template": "npm",
+   "group": "dc",
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "database",
+      "decision": "Use MongoDB for all persistence; PostgreSQL is rejected",
+      "rationale": "documents",
+      "alternatives_rejected": [
+       "postgresql",
+       "pg"
+      ],
+      "context_tags": [
+       "database"
+      ]
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "postgresql"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Switch persistence to PostgreSQL with pg.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "pg",
+        "version": "8.13.1",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "PostgreSQL"
+      ]
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Switch persistence to PostgreSQL.",
+      "packages": [],
+      "not_packages": [
+       "PostgreSQL"
+      ]
+     }
+    }
+   ],
+   "expect": {}
+  },
+  {
+   "set": "m-s8",
+   "id": "s8-toconfirm-6",
+   "clause": "s8-toconfirm",
+   "template": "npm",
+   "group": "tc",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install ky hono",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "version": "1.7.4",
+      "public": true
+     }
+    ]
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-0-0-priv-0",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ZQXSN-NJGMP to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxsn-njgmp",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ZQXSN-NJGMP",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxsnnjgmp"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-0-4-notpkg-9",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/zqxawiikpp/core/sub/v2 to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxawiikpp/core/sub/v2",
+      "version": "v2.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zqxawiikpp/core"
+    ]
+   },
+   "expect": {
+    "core": "zqxawiikpp"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-0-9-priv-18",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ｚｑｘｋｉ-ｗａｉａｉ to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxki-waiai",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ｚｑｘｋｉ-ｗａｉａｉ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxkiwaiai"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-0-13-notpkg-27",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxza-rsftw to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": " zqxza-rsftw ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zqxza-rsftw"
+    ]
+   },
+   "expect": {
+    "core": "zqxzarsftw"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3r-go-0-36",
+   "clause": "s3-redirect",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/redir-to-zqxzxzkatb@v1.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/redir-to-zqxzxzkatb",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "example.com/zqxzxzkatb"
+    ]
+   },
+   "expect": {
+    "core": "zqxzxzkatb"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-1-3-priv-45",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxzm-yjedr to the service.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxzm_yjedr",
+      "public": false
+     },
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxzm-yjedr",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxzmyjedr"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-1-7-notpkg-54",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add @zqxryxqpmc/ui to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@zqxryxqpmc/ui",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "@zqxryxqpmc"
+    ]
+   },
+   "expect": {
+    "core": "zqxryxqpmc"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-1-12-priv-63",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxwi-bauec[extra] to the service.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxwi-bauec",
+      "public": false
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxwi-bauec[extra]",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxwibauec"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-1-16-notpkg-72",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/Zqxaeopwzi/core/pkg to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/Zqxaeopwzi/core/pkg",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zqxaeopwzi/core"
+    ]
+   },
+   "expect": {
+    "core": "zqxaeopwzi"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-2-1-notpkg-81",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxpw-jmmbi to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxpw-jmmbi",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zqxpw_jmmbi"
+    ]
+   },
+   "expect": {
+    "core": "zqxpwjmmbi"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-2-6-priv-90",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/zqxlgnkvgx/core/x to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxlgnkvgx/Core",
+      "public": false
+     },
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxlgnkvgx/core/x",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxlgnkvgx"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-2-10-notpkg-99",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxcn-icvhj to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxcn-icvhj",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "ｚｑｘｃｎ-ｉｃｖｈｊ"
+    ]
+   },
+   "expect": {
+    "core": "zqxcnicvhj"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-2-15-priv-108",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxfo-​zyqnr to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxfo-zyqnr",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "zqxfo-​zyqnr",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxfozyqnr"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-3-0-priv-117",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ZQXWN-HLZBZ to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxwn-hlzbz",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ZQXWN-HLZBZ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxwnhlzbz"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-3-4-notpkg-126",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/zqxjghxpzq/core/sub/v2 to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxjghxpzq/core/sub/v2",
+      "version": "v2.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zqxjghxpzq/core"
+    ]
+   },
+   "expect": {
+    "core": "zqxjghxpzq"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-3-9-priv-135",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ｚｑｘｍｒ-ｉｏｋｆｓ to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxmr-iokfs",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ｚｑｘｍｒ-ｉｏｋｆｓ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxmriokfs"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-3-13-notpkg-144",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxge-raipl to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": " zqxge-raipl ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zqxge-raipl"
+    ]
+   },
+   "expect": {
+    "core": "zqxgeraipl"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3r-go-3-153",
+   "clause": "s3-redirect",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/redir-to-zqxebklyan@v1.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/redir-to-zqxebklyan",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "example.com/zqxebklyan"
+    ]
+   },
+   "expect": {
+    "core": "zqxebklyan"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-4-3-priv-162",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxqk-tswhd to the service.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxqk_tswhd",
+      "public": false
+     },
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxqk-tswhd",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxqktswhd"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-4-7-notpkg-171",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add @zqxjgdedkb/ui to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@zqxjgdedkb/ui",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "@zqxjgdedkb"
+    ]
+   },
+   "expect": {
+    "core": "zqxjgdedkb"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-4-12-priv-180",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxka-wfuls[extra] to the service.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxka-wfuls",
+      "public": false
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxka-wfuls[extra]",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxkawfuls"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-4-16-notpkg-189",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/Zqxpejdpvw/core/pkg to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/Zqxpejdpvw/core/pkg",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zqxpejdpvw/core"
+    ]
+   },
+   "expect": {
+    "core": "zqxpejdpvw"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-5-1-notpkg-198",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxne-rgjar to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxne-rgjar",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zqxne_rgjar"
+    ]
+   },
+   "expect": {
+    "core": "zqxnergjar"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-5-6-priv-207",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/zqxzovgmku/core/x to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxzovgmku/Core",
+      "public": false
+     },
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxzovgmku/core/x",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxzovgmku"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-5-10-notpkg-216",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxzi-yvtdd to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxzi-yvtdd",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "ｚｑｘｚｉ-ｙｖｔｄｄ"
+    ]
+   },
+   "expect": {
+    "core": "zqxziyvtdd"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-5-15-priv-225",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxup-​edwng to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxup-edwng",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "zqxup-​edwng",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxupedwng"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-6-0-priv-234",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ZQXXR-ASVZN to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxxr-asvzn",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ZQXXR-ASVZN",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxxrasvzn"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-6-4-notpkg-243",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/zqxkytgkvp/core/sub/v2 to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxkytgkvp/core/sub/v2",
+      "version": "v2.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zqxkytgkvp/core"
+    ]
+   },
+   "expect": {
+    "core": "zqxkytgkvp"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-6-9-priv-252",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ｚｑｘｍｃ-ｐｆｖｍｗ to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxmc-pfvmw",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ｚｑｘｍｃ-ｐｆｖｍｗ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxmcpfvmw"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-6-13-notpkg-261",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxkd-qeysi to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": " zqxkd-qeysi ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zqxkd-qeysi"
+    ]
+   },
+   "expect": {
+    "core": "zqxkdqeysi"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3r-go-6-270",
+   "clause": "s3-redirect",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/redir-to-zqxswiabdq@v1.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/redir-to-zqxswiabdq",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "example.com/zqxswiabdq"
+    ]
+   },
+   "expect": {
+    "core": "zqxswiabdq"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-7-3-priv-279",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxcn-ngocu to the service.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxcn_ngocu",
+      "public": false
+     },
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxcn-ngocu",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxcnngocu"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-7-7-notpkg-288",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add @zqxawexqwl/ui to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@zqxawexqwl/ui",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "@zqxawexqwl"
+    ]
+   },
+   "expect": {
+    "core": "zqxawexqwl"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-7-12-priv-297",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxbv-nrxth[extra] to the service.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxbv-nrxth",
+      "public": false
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxbv-nrxth[extra]",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxbvnrxth"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-7-16-notpkg-306",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/Zqxrpmzwwh/core/pkg to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/Zqxrpmzwwh/core/pkg",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zqxrpmzwwh/core"
+    ]
+   },
+   "expect": {
+    "core": "zqxrpmzwwh"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-8-1-notpkg-315",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxuy-hgjyv to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxuy-hgjyv",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zqxuy_hgjyv"
+    ]
+   },
+   "expect": {
+    "core": "zqxuyhgjyv"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-8-6-priv-324",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/zqxxazgqke/core/x to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxxazgqke/Core",
+      "public": false
+     },
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxxazgqke/core/x",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxxazgqke"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-8-10-notpkg-333",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxfb-irmya to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxfb-irmya",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "ｚｑｘｆｂ-ｉｒｍｙａ"
+    ]
+   },
+   "expect": {
+    "core": "zqxfbirmya"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-8-15-priv-342",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxuf-​bmkia to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxuf-bmkia",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "zqxuf-​bmkia",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxufbmkia"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-9-0-priv-351",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ZQXIJ-UCKBN to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxij-uckbn",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ZQXIJ-UCKBN",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxijuckbn"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-9-4-notpkg-360",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/zqxepzaiwx/core/sub/v2 to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxepzaiwx/core/sub/v2",
+      "version": "v2.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zqxepzaiwx/core"
+    ]
+   },
+   "expect": {
+    "core": "zqxepzaiwx"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-9-9-priv-369",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ｚｑｘｐｆ-ｘｘｐｋｑ to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxpf-xxpkq",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ｚｑｘｐｆ-ｘｘｐｋｑ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxpfxxpkq"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-9-13-notpkg-378",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxqx-vzvbg to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": " zqxqx-vzvbg ",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zqxqx-vzvbg"
+    ]
+   },
+   "expect": {
+    "core": "zqxqxvzvbg"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3r-go-9-387",
+   "clause": "s3-redirect",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/redir-to-zqxaaqfkdb@v1.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/redir-to-zqxaaqfkdb",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "example.com/zqxaaqfkdb"
+    ]
+   },
+   "expect": {
+    "core": "zqxaaqfkdb"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-10-3-priv-396",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxay-rwgrc to the service.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxay_rwgrc",
+      "public": false
+     },
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxay-rwgrc",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxayrwgrc"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-10-7-notpkg-405",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add @zqxqmiplqh/ui to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@zqxqmiplqh/ui",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "@zqxqmiplqh"
+    ]
+   },
+   "expect": {
+    "core": "zqxqmiplqh"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-10-12-priv-414",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxde-gcnjk[extra] to the service.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxde-gcnjk",
+      "public": false
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxde-gcnjk[extra]",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxdegcnjk"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-10-16-notpkg-423",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/Zqxqserlym/core/pkg to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/Zqxqserlym/core/pkg",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zqxqserlym/core"
+    ]
+   },
+   "expect": {
+    "core": "zqxqserlym"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-11-1-notpkg-432",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxwh-fnotm to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxwh-fnotm",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zqxwh_fnotm"
+    ]
+   },
+   "expect": {
+    "core": "zqxwhfnotm"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-11-6-priv-441",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/zqxezxbkdw/core/x to the service.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxezxbkdw/Core",
+      "public": false
+     },
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zqxezxbkdw/core/x",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxezxbkdw"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-11-10-notpkg-450",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxss-okqfo to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxss-okqfo",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "ｚｑｘｓｓ-ｏｋｑｆｏ"
+    ]
+   },
+   "expect": {
+    "core": "zqxssokqfo"
+   }
+  },
+  {
+   "set": "b-s3b",
+   "id": "s3u-11-15-priv-459",
+   "clause": "s3-under",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zqxxv-​zvimw to the service.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxxv-zvimw",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "zqxxv-​zvimw",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxxvzvimw"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-0-971",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "ｎｐｍ ｉｎｓｔａｌｌ ｈｏｎｏ@4.6.14 ｆｏｒ ｔｈｅ ｎｅｗ ｒｏｕｔｅｓ"
+   },
+   "expect": {
+    "fold": 0,
+    "input": "ｎｐｍ ｉｎｓｔａｌｌ ｈｏｎｏ@4.6.14 ｆｏｒ ｔｈｅ ｎｅｗ ｒｏｕｔｅｓ"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-4-980",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm ins­tall hono@4.6.14 for the new routes",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 4,
+    "input": "npm ins­tall hono@4.6.14 for the new routes"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-9-989",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm\tinstall\thono@4.6.14\tfor\tthe\tnew\troutes"
+   },
+   "expect": {
+    "fold": 9,
+    "input": "npm\tinstall\thono@4.6.14\tfor\tthe\tnew\troutes"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-13-998",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "**npm install hono@4.6.14 for the new routes**",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 13,
+    "input": "**npm install hono@4.6.14 for the new routes**"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-18-1007",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install hono@4.6.14 for the new routes"
+   },
+   "expect": {
+    "fold": 18,
+    "input": "npm install hono@4.6.14 for the new routes"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-22-1016",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "  npm install hono@4.6.14 for the new routes  ",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 22,
+    "input": "  npm install hono@4.6.14 for the new routes  "
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-0-1025",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Aｄｄ ｔｈｅ ｚｏｄ-ｆｉｌｅ ｒｅａｄｅｒ ａｎｄ ｆｉｘ ｉｍｐｏｒｔｓ"
+   },
+   "expect": {
+    "fold": 0,
+    "input": "Aｄｄ ｔｈｅ ｚｏｄ-ｆｉｌｅ ｒｅａｄｅｒ ａｎｄ ｆｉｘ ｉｍｐｏｒｔｓ"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-4-1034",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add the zod-file reader and fix imports­",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 4,
+    "input": "Add the zod-file reader and fix imports­"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-9-1043",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add\tthe\tzod-file\treader\tand\tfix\timports"
+   },
+   "expect": {
+    "fold": 9,
+    "input": "Add\tthe\tzod-file\treader\tand\tfix\timports"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-13-1052",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "**Add the zod-file reader and fix imports**",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 13,
+    "input": "**Add the zod-file reader and fix imports**"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-18-1061",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add the zod‐file reader and fix imports"
+   },
+   "expect": {
+    "fold": 18,
+    "input": "Add the zod‐file reader and fix imports"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-22-1070",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "  Add the zod-file reader and fix imports  ",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 22,
+    "input": "  Add the zod-file reader and fix imports  "
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-0-1079",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "ｐｉｐ ｉｎｓｔａｌｌ ｆｌａｓｋ==3.1.0 ｔｈｅｎ ｒｅｓｔａｒｔ"
+   },
+   "expect": {
+    "fold": 0,
+    "input": "ｐｉｐ ｉｎｓｔａｌｌ ｆｌａｓｋ==3.1.0 ｔｈｅｎ ｒｅｓｔａｒｔ"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-4-1088",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip ins­tall flask==3.1.0 then restart",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 4,
+    "input": "pip ins­tall flask==3.1.0 then restart"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-9-1097",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip\tinstall\tflask==3.1.0\tthen\trestart"
+   },
+   "expect": {
+    "fold": 9,
+    "input": "pip\tinstall\tflask==3.1.0\tthen\trestart"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-13-1106",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "**pip install flask==3.1.0 then restart**",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 13,
+    "input": "**pip install flask==3.1.0 then restart**"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-18-1115",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install flask==3.1.0 then restart"
+   },
+   "expect": {
+    "fold": 18,
+    "input": "pip install flask==3.1.0 then restart"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-22-1124",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "  pip install flask==3.1.0 then restart  ",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 22,
+    "input": "  pip install flask==3.1.0 then restart  "
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-0-1133",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "ｃａｒｇｏ ａｄｄ ｓｅｒｄｅ@1.0.217 ｆｏｒ ｔｈｅ ｉｎｇｅｓｔ"
+   },
+   "expect": {
+    "fold": 0,
+    "input": "ｃａｒｇｏ ａｄｄ ｓｅｒｄｅ@1.0.217 ｆｏｒ ｔｈｅ ｉｎｇｅｓｔ"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-4-1142",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "cargo add s­erde@1.0.217 for the ingest",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 4,
+    "input": "cargo add s­erde@1.0.217 for the ingest"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-9-1151",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "cargo\tadd\tserde@1.0.217\tfor\tthe\tingest"
+   },
+   "expect": {
+    "fold": 9,
+    "input": "cargo\tadd\tserde@1.0.217\tfor\tthe\tingest"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-13-1160",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "**cargo add serde@1.0.217 for the ingest**",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 13,
+    "input": "**cargo add serde@1.0.217 for the ingest**"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-18-1169",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "cargo add serde@1.0.217 for the ingest"
+   },
+   "expect": {
+    "fold": 18,
+    "input": "cargo add serde@1.0.217 for the ingest"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-22-1178",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "  cargo add serde@1.0.217 for the ingest  ",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 22,
+    "input": "  cargo add serde@1.0.217 for the ingest  "
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-0-1187",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Rｅｆａｃｔｏｒ ｔｈｅ ｃｏｎｆｉｇ ｍｏｄｕｌｅ; ｎｏｔｈｉｎｇ ｅｌｓｅ"
+   },
+   "expect": {
+    "fold": 0,
+    "input": "Rｅｆａｃｔｏｒ ｔｈｅ ｃｏｎｆｉｇ ｍｏｄｕｌｅ; ｎｏｔｈｉｎｇ ｅｌｓｅ"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-4-1196",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the config module; nothing els­e",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 4,
+    "input": "Refactor the config module; nothing els­e"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-9-1205",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor\tthe\tconfig\tmodule;\tnothing\telse"
+   },
+   "expect": {
+    "fold": 9,
+    "input": "Refactor\tthe\tconfig\tmodule;\tnothing\telse"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-13-1214",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "**Refactor the config module; nothing else**",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 13,
+    "input": "**Refactor the config module; nothing else**"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-18-1223",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the config module; nothing else"
+   },
+   "expect": {
+    "fold": 18,
+    "input": "Refactor the config module; nothing else"
+   }
+  },
+  {
+   "set": "b-s5",
+   "id": "s5-22-1232",
+   "clause": "s5",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "  Refactor the config module; nothing else  ",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {
+    "fold": 22,
+    "input": "  Refactor the config module; nothing else  "
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-315",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install lodash",
+    "packages": [],
+    "not_packages": [
+     "lodash"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "lodash"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-318",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/lodash",
+    "packages": [],
+    "not_packages": [
+     "lodash"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "lodash"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-321",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bun add lodash",
+    "packages": [],
+    "not_packages": [
+     "lodash"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "lodash"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-324",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install axios",
+    "packages": [],
+    "not_packages": [
+     "axios"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "axios"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-327",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/axios",
+    "packages": [],
+    "not_packages": [
+     "axios"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "axios"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-330",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bun add axios",
+    "packages": [],
+    "not_packages": [
+     "axios"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "axios"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-333",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install flask",
+    "packages": [],
+    "not_packages": [
+     "flask"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "flask"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-336",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/flask",
+    "packages": [],
+    "not_packages": [
+     "flask"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "flask"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-339",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bun add flask",
+    "packages": [],
+    "not_packages": [
+     "flask"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "flask"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-342",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install serde",
+    "packages": [],
+    "not_packages": [
+     "serde"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "serde"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-345",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/serde",
+    "packages": [],
+    "not_packages": [
+     "serde"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "serde"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-348",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bun add serde",
+    "packages": [],
+    "not_packages": [
+     "serde"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "serde"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-351",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install zqxvzgssah",
+    "packages": [],
+    "not_packages": [
+     "zqxvzgssah"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "zqxvzgssah"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-354",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/zqxvzgssah",
+    "packages": [],
+    "not_packages": [
+     "zqxvzgssah"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "zqxvzgssah"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-357",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bun add zqxvzgssah",
+    "packages": [],
+    "not_packages": [
+     "zqxvzgssah"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "zqxvzgssah"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-360",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install zqxfszpvly",
+    "packages": [],
+    "not_packages": [
+     "zqxfszpvly"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "zqxfszpvly"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-363",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go get example.com/zqxfszpvly",
+    "packages": [],
+    "not_packages": [
+     "zqxfszpvly"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "zqxfszpvly"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-command-366",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bun add zqxfszpvly",
+    "packages": [],
+    "not_packages": [
+     "zqxfszpvly"
+    ]
+   },
+   "expect": {
+    "kind": "command",
+    "word": "zqxfszpvly"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-369",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npx lodash init",
+    "packages": [],
+    "not_packages": [
+     "lodash"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "lodash"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-372",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bunx lodash",
+    "packages": [],
+    "not_packages": [
+     "lodash"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "lodash"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-375",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npx axios init",
+    "packages": [],
+    "not_packages": [
+     "axios"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "axios"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-378",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bunx axios",
+    "packages": [],
+    "not_packages": [
+     "axios"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "axios"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-381",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npx flask init",
+    "packages": [],
+    "not_packages": [
+     "flask"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "flask"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-384",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bunx flask",
+    "packages": [],
+    "not_packages": [
+     "flask"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "flask"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-387",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npx serde init",
+    "packages": [],
+    "not_packages": [
+     "serde"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "serde"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-390",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bunx serde",
+    "packages": [],
+    "not_packages": [
+     "serde"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "serde"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-393",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npx zqxroaznsh init",
+    "packages": [],
+    "not_packages": [
+     "zqxroaznsh"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "zqxroaznsh"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-396",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bunx zqxroaznsh",
+    "packages": [],
+    "not_packages": [
+     "zqxroaznsh"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "zqxroaznsh"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-399",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npx zqxpttxtlp init",
+    "packages": [],
+    "not_packages": [
+     "zqxpttxtlp"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "zqxpttxtlp"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-runner-402",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "bunx zqxpttxtlp",
+    "packages": [],
+    "not_packages": [
+     "zqxpttxtlp"
+    ]
+   },
+   "expect": {
+    "kind": "runner",
+    "word": "zqxpttxtlp"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-manifest-405",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{\"dependencies\": {\"lodash\": \"^1.2.0\"}}\n```",
+    "packages": [],
+    "not_packages": [
+     "lodash"
+    ]
+   },
+   "expect": {
+    "kind": "manifest",
+    "word": "lodash"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-manifest-408",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{\"dependencies\": {\"axios\": \"^1.2.0\"}}\n```",
+    "packages": [],
+    "not_packages": [
+     "axios"
+    ]
+   },
+   "expect": {
+    "kind": "manifest",
+    "word": "axios"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-manifest-411",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{\"dependencies\": {\"flask\": \"^1.2.0\"}}\n```",
+    "packages": [],
+    "not_packages": [
+     "flask"
+    ]
+   },
+   "expect": {
+    "kind": "manifest",
+    "word": "flask"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-manifest-414",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{\"dependencies\": {\"serde\": \"^1.2.0\"}}\n```",
+    "packages": [],
+    "not_packages": [
+     "serde"
+    ]
+   },
+   "expect": {
+    "kind": "manifest",
+    "word": "serde"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-manifest-417",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{\"dependencies\": {\"zqxuffsivq\": \"^1.2.0\"}}\n```",
+    "packages": [],
+    "not_packages": [
+     "zqxuffsivq"
+    ]
+   },
+   "expect": {
+    "kind": "manifest",
+    "word": "zqxuffsivq"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-manifest-420",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{\"dependencies\": {\"zqxkkcbrus\": \"^1.2.0\"}}\n```",
+    "packages": [],
+    "not_packages": [
+     "zqxkkcbrus"
+    ]
+   },
+   "expect": {
+    "kind": "manifest",
+    "word": "zqxkkcbrus"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-form-423",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin lodash@1.2.0 in the service.",
+    "packages": [],
+    "not_packages": [
+     "lodash"
+    ]
+   },
+   "expect": {
+    "kind": "form",
+    "word": "lodash"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-form-426",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin axios@1.2.0 in the service.",
+    "packages": [],
+    "not_packages": [
+     "axios"
+    ]
+   },
+   "expect": {
+    "kind": "form",
+    "word": "axios"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-form-429",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin flask@1.2.0 in the service.",
+    "packages": [],
+    "not_packages": [
+     "flask"
+    ]
+   },
+   "expect": {
+    "kind": "form",
+    "word": "flask"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-form-432",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin serde@1.2.0 in the service.",
+    "packages": [],
+    "not_packages": [
+     "serde"
+    ]
+   },
+   "expect": {
+    "kind": "form",
+    "word": "serde"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-form-435",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin zqxrbwvbmi@1.2.0 in the service.",
+    "packages": [],
+    "not_packages": [
+     "zqxrbwvbmi"
+    ]
+   },
+   "expect": {
+    "kind": "form",
+    "word": "zqxrbwvbmi"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-form-438",
+   "clause": "s2-read",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin zqxoyfnoud@1.2.0 in the service.",
+    "packages": [],
+    "not_packages": [
+     "zqxoyfnoud"
+    ]
+   },
+   "expect": {
+    "kind": "form",
+    "word": "zqxoyfnoud"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-instead-447",
+   "clause": "s2-instead",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install lodahs",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "lodash",
+      "version": "4.17.21",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "lodahs"
+    ]
+   },
+   "expect": {
+    "word": "lodahs",
+    "instead": "lodash"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-instead-453",
+   "clause": "s2-instead",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin axois@1.0.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "axios",
+      "version": "1.7.9",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "axois"
+    ]
+   },
+   "expect": {
+    "word": "axois",
+    "instead": "axios"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-instead-459",
+   "clause": "s2-instead",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install serd",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "serde",
+      "version": "1.0.217",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "serd"
+    ]
+   },
+   "expect": {
+    "word": "serd",
+    "instead": "serde"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-instead-465",
+   "clause": "s2-instead",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin hono@1.0.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "honoo",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "hono"
+    ]
+   },
+   "expect": {
+    "word": "hono",
+    "instead": "honoo"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-file-441-bare",
+   "clause": "s2-bare",
+   "group": "s2-file-441",
+   "template": "py",
+   "setup": {
+    "reqs/extra.txt": "zqxjxttlou==1.0.0\nflask==3.1.0\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install -r reqs/extra.txt"
+   },
+   "expect": {
+    "kind": "file",
+    "word": "zqxjxttlou"
+   }
+  },
+  {
+   "set": "b-s2all",
+   "id": "s2-file-444-bare",
+   "clause": "s2-bare",
+   "group": "s2-file-444",
+   "template": "py",
+   "setup": {
+    "reqs/extra.txt": "zqxfhzmdxg==1.0.0\nflask==3.1.0\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install -r reqs/extra.txt"
+   },
+   "expect": {
+    "kind": "file",
+    "word": "zqxfhzmdxg"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1241",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install \"zod"
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1245",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install 'flask==3.1.0",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1249",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install zod`",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.24.1",
+      "public": true
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "flask",
+      "version": "3.1.0",
+      "public": true
+     },
+     {
+      "ecosystem": "crates.io",
+      "name": "serde",
+      "version": "1.0.217",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "a",
+     "b",
+     "x",
+     "hono",
+     "PKGS",
+     "list.txt",
+     "echo",
+     "local"
+    ]
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1253",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install ${PKGS}"
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1257",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install --index-url https://pkgs.example.test/simple flask",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1261",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install --registry https://npm.example.test zod",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.24.1",
+      "public": true
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "flask",
+      "version": "3.1.0",
+      "public": true
+     },
+     {
+      "ecosystem": "crates.io",
+      "name": "serde",
+      "version": "1.0.217",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "a",
+     "b",
+     "x",
+     "hono",
+     "PKGS",
+     "list.txt",
+     "echo",
+     "local"
+    ]
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1265",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install -e ./local"
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1269",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install zod\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1273",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "```json\n{\"dependencies\": {\"zod\": \"^3\n```",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.24.1",
+      "public": true
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "flask",
+      "version": "3.1.0",
+      "public": true
+     },
+     {
+      "ecosystem": "crates.io",
+      "name": "serde",
+      "version": "1.0.217",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "a",
+     "b",
+     "x",
+     "hono",
+     "PKGS",
+     "list.txt",
+     "echo",
+     "local"
+    ]
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1277",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install -r <(curl https://example.test/r.txt)"
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1281",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install 'a b'",
+    "packages": [],
+    "not_packages": []
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s9-1285",
+   "clause": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install zod\\ hono",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.24.1",
+      "public": true
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "flask",
+      "version": "3.1.0",
+      "public": true
+     },
+     {
+      "ecosystem": "crates.io",
+      "name": "serde",
+      "version": "1.0.217",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "a",
+     "b",
+     "x",
+     "hono",
+     "PKGS",
+     "list.txt",
+     "echo",
+     "local"
+    ]
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1729",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install --registry https://npm.example.test zqxdoqcdbp"
+   },
+   "expect": {
+    "core": "zqxdoqcdbp"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1733",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Set @acme:registry=https://npm.example.test and npm install zqxppeamcb"
+   },
+   "expect": {
+    "core": "zqxppeamcb"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1737",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "uv add --index https://pypi.example.test zqxofxvbkx"
+   },
+   "expect": {
+    "core": "zqxofxvbkx"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1741",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "cargo add zqxyhbbhyg --source internal"
+   },
+   "expect": {
+    "core": "zqxyhbbhyg"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1745",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add [[tool.uv.index]] with url https://pypi.example.test and uv add zqxchmjtsh"
+   },
+   "expect": {
+    "core": "zqxchmjtsh"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1749",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use [install.scopes] in bunfig.toml then bun add zqxmyijhfe"
+   },
+   "expect": {
+    "core": "zqxmyijhfe"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1753",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add [source.acme] and cargo add zqxntuepmq"
+   },
+   "expect": {
+    "core": "zqxntuepmq"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1757",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "{{H0}}_registry=https://npm.example.test npm install zqxrmkwbod"
+   },
+   "expect": {
+    "core": "zqxrmkwbod"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1761",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "PIP_INDEX_URL=https://x.test pip install zqxndijrpv"
+   },
+   "expect": {
+    "core": "zqxndijrpv"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1765",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "UV_INDEX_URL=https://x.test uv add zqxkcdykpv"
+   },
+   "expect": {
+    "core": "zqxkcdykpv"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1769",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "CARGO_REGISTRY_DEFAULT=acme cargo add zqxjaknzmu"
+   },
+   "expect": {
+    "core": "zqxjaknzmu"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-0-1773",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "GONOPROXY=example.com go get example.com/zqxwrtlgyr"
+   },
+   "expect": {
+    "core": "zqxwrtlgyr"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1777",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Set registry=https://npm.example.test in .npmrc and add zqxjxcacuw",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxjxcacuw",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxjxcacuw"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1781",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "uv add --default-index https://pypi.example.test zqxwubxciu",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxwubxciu",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxwubxciu"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1785",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install -f ./wheels zqxypvklwf",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxypvklwf",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxypvklwf"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1789",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Set npmRegistryServer in .yarnrc.yml and yarn add zqxppmikdy",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxppmikdy",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxppmikdy"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1793",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add [[tool.poetry.source]] and poetry add zqxzlvworr",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxzlvworr",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxzlvworr"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1797",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use [registry] default = \"acme\" then cargo add zqxyzetxdv",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxyzetxdv",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxyzetxdv"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1801",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "go.mod:\nreplace (\n  example.com/zqxvkqmchl => ../x\n)",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/zqxvkqmchl",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxvkqmchl"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1805",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "YARN_NPM_REGISTRY_SERVER=https://x.test yarn add zqxgdjttsi",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxgdjttsi",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxgdjttsi"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1809",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "UV_INDEX=https://x.test uv add zqxuylryen",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxuylryen",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxuylryen"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1813",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "CARGO_REGISTRIES_ACME_INDEX=sparse+https://x.test cargo add zqxwmvlits",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxwmvlits",
+      "version": "1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxwmvlits"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-1-1817",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "GONOSUMDB=example.com go get example.com/zqxyuzuvbx",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/zqxyuzuvbx",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "core": "zqxyuzuvbx"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1821",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install --userconfig ./x.npmrc zqxfrqavkq",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxfrqavkq",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxfrqavkq"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1825",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install --extra-index-url https://pypi.example.test/simple zqxrjgstpf",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxrjgstpf",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxrjgstpf"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1829",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install -i https://pypi.example.test/simple zqxaydplno",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxaydplno",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxaydplno"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1833",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "cargo add zqxyvmgkpm --path ../x",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxyvmgkpm",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxyvmgkpm"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1837",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use [tool.uv.sources] for zqxgkvkdxy",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxgkvkdxy",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxgkvkdxy"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1841",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add [registries.acme] and cargo add zqxenjogkl",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zqxenjogkl",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxenjogkl"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1845",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add replace example.com/zqxchgbcui => ../x to go.mod",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/zqxchgbcui",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxchgbcui"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1849",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "YARN_REGISTRY=https://x.test yarn add zqxzsjruip",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zqxzsjruip",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxzsjruip"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1853",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "PIP_FIND_LINKS=./w pip install zqxpcapawl",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxpcapawl",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxpcapawl"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1857",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "UV_EXTRA_INDEX_URL=https://x.test uv add zqxisbltqi",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zqxisbltqi",
+      "version": "1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxisbltqi"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11-2-1861",
+   "clause": "s11-held",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "GOPROXY=https://x.test go get example.com/zqxnldcdwm",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/zqxnldcdwm",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "acme",
+     "x",
+     "wheels",
+     "internal",
+     "default",
+     "url",
+     "with",
+     "and",
+     "in",
+     "to",
+     "then",
+     "for",
+     "Use",
+     "Add",
+     "Set"
+    ]
+   },
+   "expect": {
+    "core": "zqxnldcdwm"
+   }
+  },
+  {
+   "set": "b-s911",
+   "id": "s11n-1865",
+   "clause": "s11-noname",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Point npm at --registry https://npm.example.test; no package changes.",
+    "packages": [],
+    "not_packages": [
+     "npm",
+     "README",
+     "wiki"
+    ]
+   },
+   "expect": {}
+  },
+  {
+   "set": "b-s911",
+   "id": "s11n-1869",
+   "clause": "s11-noname",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Explain what GOPRIVATE does in the wiki.",
+    "packages": [],
+    "not_packages": [
+     "npm",
+     "README",
+     "wiki"
+    ]
+   },
+   "expect": {}
+  }
+ ]
+}
