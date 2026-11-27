@@ -35,6 +35,7 @@
  */
 // First, before any other module runs: below Node.js 22 the process stops here with one line (node-gate.ts).
 import "./node-gate.js";
+import { screenText, screenToolResult } from "./output-screen.js";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { StdioGate } from "./stdio-gate.js";
 import type { Server } from "@modelcontextprotocol/server";
@@ -452,17 +453,18 @@ export function buildServer(): Server {
     // a tool result: it used to come back as `isError` content like a tool
     // that ran and failed.
     const entry = toolEntry(name);
-    if (!entry) throw unknownToolError(name);
+    // Round 14, X1: the name is the caller's; an error names it by shape where it has a credential's.
+    if (!entry) throw unknownToolError(screenText(name));
 
     // Arguments are checked against the published schema before anything
     // runs, so a wrong type or a misspelled parameter comes back as a
     // correctable error rather than a Node exception or a silent no-op.
     const problem = validateToolArgs(name, entry.definition.inputSchema, (args ?? {}) as Record<string, unknown>);
     if (problem) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({ error: problem }) }],
+      return screenToolResult(name, {
+        content: [{ type: "text" as const, text: JSON.stringify({ error: problem }) }],
         isError: true,
-      };
+      });
     }
 
     try {
@@ -483,7 +485,8 @@ export function buildServer(): Server {
       liveIntel?.refreshPrivateRules();
       const result = await dispatchTool(name, database, args as Record<string, unknown> | undefined, { startedAt });
       const note = database?.takeCreationNote() ?? unavailableNote;
-      return note ? withDatabaseNote(result, note) : result;
+      // Round 14, X1: every result leaves through the output screen (output-screen.ts).
+      return screenToolResult(name, note ? withDatabaseNote(result, note) : result);
     } catch (error) {
       // A database that turns out damaged mid-session (SQLITE_CORRUPT on a
       // page the open did not touch) gets the same guidance as one that
@@ -494,16 +497,16 @@ export function buildServer(): Server {
           : error instanceof Error
             ? error.message
             : String(error);
-      return {
+      return screenToolResult(name, {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             // One shape for every tool error: `{"error": "..."}`, compact, as the argument check writes it.
             text: JSON.stringify({ error: errorMessage }),
           },
         ],
         isError: true,
-      };
+      });
     }
   }));
 

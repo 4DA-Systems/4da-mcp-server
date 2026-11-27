@@ -15,6 +15,7 @@ import { executeWhatShouldIKnow } from "../../tools/what-should-i-know.js";
 import type { OsvVulnerability } from "../../live/types.js";
 import { createHarness, type Harness } from "./a1119-planner-harness.js";
 import { validateToolArgs } from "../../tool-args.js";
+import { screenValue } from "../../output-screen.js";
 import { BEST_EFFORT_READING, RESTS_ON_DECLARATION } from "../../tools/briefing-confirm.js";
 /** How many one-call answers were safe (the P1 check above must have something to check). */
 const safeSeen = { n: 0 };
@@ -168,7 +169,8 @@ async function call(args: Record<string, any>): Promise<{ r: Record<string, any>
   const problem = validateToolArgs("what_should_i_know", SCHEMA, args);
   if (problem !== null) return { r: null, problem };
   live ??= await h.live();
-  return { r: (await executeWhatShouldIKnow(db, { ...args, project_path: h.dir } as never, live)) as Record<string, any>, problem: null };
+  // Round 14, X1: as the server returns it, through the output screen (output-screen.ts).
+  return { r: screenValue(await executeWhatShouldIKnow(db, { ...args, project_path: h.dir } as never, live), "task") as Record<string, any>, problem: null };
 }
 
 describe(`review-confirm11 cases hold the invariants (${sets.join(", ")})`, () => {

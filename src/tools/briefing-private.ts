@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * what_should_i_know and private packages (pre-publish audit 2026-11-13, S3). A task that upgrades
  * a private package (`@acme/vault-core`, private by the project's `.npmrc`) came back "No
  * dependency of this project is named in the task" and safe_to_delegate: private copies are kept

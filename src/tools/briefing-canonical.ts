@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * Round 7, C1: the canonical command grammar. Five independent checks found new holes in a hand-written reader of
  * commands inside free text (launcher names, where options stand, stop words, option arity, lower-casing, prose
  * versions), so this small grammar reads a command it recognises, and where it notices a shape it cannot read the

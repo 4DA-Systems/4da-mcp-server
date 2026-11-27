@@ -326,10 +326,11 @@ describe("6: only a tool's own parameters are parameters", () => {
   const schema = { properties: { limit: { type: "number" } }, required: [] };
   it("constructor, __proto__, toString and hasOwnProperty are unknown parameters", () => {
     for (const name of ["constructor", "toString", "hasOwnProperty", "valueOf"]) {
-      expect(validateToolArgs("t", schema, { [name]: "x" }), name).toMatch(new RegExp(`unknown parameter "${name}"`));
+      // Round 14, X1: an unknown parameter is counted, never named.
+      expect(validateToolArgs("t", schema, { [name]: "x" }), name).toMatch(/an unknown parameter \(1 unknown\)/);
     }
     const proto = JSON.parse('{"__proto__": "x"}') as Record<string, unknown>;
-    expect(validateToolArgs("t", schema, proto)).toMatch(/unknown parameter "__proto__"/);
+    expect(validateToolArgs("t", schema, proto)).toMatch(/an unknown parameter \(1 unknown\)/);
     expect(lengthProblem("w", "toString", "x".repeat(10))).toBeNull();
     expect(validateToolArgs("t", { properties: {}, required: ["toString"] }, {})).toMatch(/missing required parameter "toString"/);
   });
