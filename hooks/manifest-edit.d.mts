@@ -27,3 +27,27 @@ export function poetryToPep440(spec: string): string;
 export const NAMED_OPTIONS: Record<string, Array<[string, string]>>;
 /** Round 14 (R7): the first pnpm-workspace.yaml line that is not plain YAML, or null. */
 export function pnpmUnplainLine(text: string): string | null;
+/** THE CONTRACT's constants (a1125-w2-hook-contract.test.ts). */
+export const MANAGERS: readonly string[];
+export const VERBS: Readonly<Record<string, readonly string[]>>;
+export const MANIFESTS: ReadonlySet<string>;
+export const MANIFEST_NAME_RULES: ReadonlyArray<{ kind: string; name: RegExp; folder: RegExp | null }>;
+export const UNREAD_MANIFESTS: readonly string[];
+export const DATA_SPECS: Record<string, unknown>;
+export const SINK_SPECS: Record<string, unknown>;
+export const ADVICE_VERBS: ReadonlyMap<string, ReadonlySet<string>>;
+export const LEDGER_WINDOW_MS: number;
+export const LATEST_WINDOW_MS: number;
+export const READ_BUDGET_MS: number;
+export const WALL_LIMIT_MS: number;
+export const WORKER_ABOVE_CHARS: number;
+export const SELF_LIMIT_MS: number;
+export const MAX_INPUT_CHARS: number;
+export const MAX_PARSE_CHARS: number;
+export const MAX_ACCOUNT_CHARS: number;
+export const MAX_MANIFEST_BYTES: number;
+export const MAX_LEDGER_BYTES: number;
+export const PROJECT_DEPTH: number;
+/** The manifest kind of a path, or null (THE CONTRACT, P1). */
+export function manifestKind(filePath: string): string | null;
+export const INERT_SETTING: RegExp;

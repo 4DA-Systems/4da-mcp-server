@@ -1,6 +1,144 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * THE CONTRACT
+ *
+ * This block is the hook's contract, and the notes below it are not: each sentence names, in
+ * brackets, the test files that pin it [test: a1125-w2-hook-contract].
+ *
+ * WHAT IT IS
+ *
+ * The hook reads the text of the tool calls Claude Code passes it (hooks.json registers it before
+ * Bash, PowerShell, Edit, MultiEdit, Write and NotebookEdit calls, and after Bash, PowerShell,
+ * Edit, MultiEdit and Write calls) and judges them against the check ledger that the 4da server
+ * writes in its data folder (dataDir) [test: a1123-guard-hook, a1125-w2-hook-contract]. It is a
+ * guard-rail against an agent's mistakes and shortcuts, not a sandbox (L4) [test:
+ * a1125-w2-hook-contract]. It opens no network connection and loads no module outside Node's own,
+ * and it exits with status 0 whatever it answers [test: a1125-w2-hook-contract,
+ * a651-hook-pathological-inputs]. With FOURDA_GUARD=off it answers nothing; with
+ * FOURDA_GUARD=advise it denies nothing and advises after a manifest edit instead; with any other
+ * value, or none, it is in the blocking mode that the promises describe [test: a1123-guard-hook,
+ * a1125-w2-hook-contract]. Apart from the ledger guard (P5), it denies nothing until the server has
+ * started a ledger in its data folder, and until then it advises after a manifest edit [test:
+ * a1123-skew-guard-older-server]. Names and versions that a denial repeats from the call are held
+ * to their shape and quoted as data [test: a651-hook-quoted-names].
+ *
+ * THE PROMISES
+ *
+ * P1 (detection): a Bash or PowerShell call is examined when one of its lines holds a word that
+ * managerWord reads as a manager on the MANAGERS list followed, later on the same line, by one of
+ * that manager's verbs on the VERBS list, in the line as written or with the shell's quote and
+ * escape characters taken out (detectsInstall; a manager's verbs also count in the abbreviations
+ * that manager accepts) [test: a1125-w2-hook-contract, a1125-w2-hook-account]. P1: an Edit,
+ * MultiEdit, Write or NotebookEdit call is examined when its path names a manifest, that is a name
+ * on the MANIFESTS list or one that MANIFEST_NAME_RULES matches, compared without regard to letter
+ * case, or a name on the UNREAD_MANIFESTS list (manifestKind, manifestBaseName) [test:
+ * a1125-w2-hook-contract, a1125-w2-hook-round17]. P1: a call that is not examined goes ahead with
+ * no answer, apart from the ledger guard and the failure rule (P5) and the advice (P6) [test:
+ * a1125-w2-hook-contract].
+ *
+ * P2 (fail closed): an examined command goes ahead only when each simple command in it that holds a
+ * detector hit is read, as the text of a data program (P4) or whole, its program, prefixes,
+ * wrappers, options and operands each in a form the hook reads (accountCall) [test:
+ * a1125-w2-hook-round14-remedy, a1125-w2-hook-account, a1125-w2-hook-contract]. P2: a command that
+ * is not read in this way is denied as not read, and the denial names the part that was not read or
+ * says what to change [test: a1125-w2-hook-round14-remedy, a1125-w2-hook-round13-remedy]. P2: for
+ * each of the 441 held lines of the twelfth independent check, following the remedy its denial
+ * gives leads to a command the hook reads, or to the general remedy [test:
+ * a1125-w2-hook-round14-remedy]. P2: an examined edit is read from the manifest it makes (the file
+ * on disk with the edit applied) or, where the edit does not apply to that file, from its own old
+ * and new text, and an edit the hook cannot read in this way is denied as not read [test:
+ * a1125-w2-hook-round7, a1125-w2-hook-round16, a1125-w2-hook-round17].
+ *
+ * P3 (verdicts): for each release an examined call names in a form the hook reads, the call is
+ * denied unless the ledger holds a proceed or review answer that counts for that reading, or a
+ * private record that applies, or the release comes from the project's own source (both below)
+ * [test: a1125-w2-hook-forms, a1125-w2-hook-round20, a1123-guard-hook]. P3: among the answers that
+ * count for a reading, the newest proceed, review, avoid or wait answer decides, an avoid or wait
+ * one denies the call, and an unknown answer decides nothing [test: a651-hook-ledger-order,
+ * a1125-w2-hook-ledger-unknown, a1125-w2-hook-forms, a1125-w2-hook-round20]. P3: an answer counts
+ * for a reading when it was recorded for that reading; besides, a latest answer counts for the
+ * release it records, an avoid or wait answer for a release also counts for a Cargo bare version of
+ * it (which Cargo reads as a range that a lockfile holding the release keeps), and where no answer
+ * counts for a range, the answer for the release its inclusive upper bound names counts when its
+ * other bounds are lower bounds (judge) [test: a1125-w2-hook-round20, a651-hook-ranges,
+ * a1125-w2-hook-contract]. P3: an answer counts for LEDGER_WINDOW_MS (24 hours) after it was
+ * recorded, and for the reading latest for LATEST_WINDOW_MS (1 hour) [test: a1125-w2-hook-round20,
+ * a1125-w2-hook-contract]. P3: a name given without a version where the manager then installs its
+ * newest release, and a version spec that bounds nothing (boundsNothing), are the reading latest
+ * [test: a1125-w2-hook-bare-names, a1125-w2-hook-round16, a1125-w2-hook-round17]. P3: a dist-tag or
+ * a branch in place of a version is denied, with the advice to name the version [test:
+ * a1125-w2-hook-bare-names]. P3: for an edit, the releases it names are the dependency entries it
+ * adds or changes, and an entry the manifest already held unchanged is not judged again [test:
+ * a1125-w2-hook-round18, a1123-guard-hook]. P3: an examined command that names no release in a form
+ * the hook reads, and is read whole, goes ahead [test: a1125-w2-hook-round10,
+ * a1125-w2-hook-account]. P3: a release the call takes from a source the hook reads as the
+ * project's own, for example a local path, git, or a host private by its shape, is not judged
+ * (sourceVerdict, urlDependency) [test: a1125-w2-hook-round18, a1125-w2-hook-round19,
+ * a1123-hookfix-local-sources]. P3: where no proceed, review, avoid or wait answer counts for a
+ * reading, a private record lets the release through when it is the name's newest withheld line,
+ * newer than the name's last answer for that reading, and applies to the call's folder: a record
+ * from the user's own list applies in every folder, a record from a project's rules in that
+ * project's root and the folders up to PROJECT_DEPTH levels below it, and a record that says
+ * neither applies nowhere [test: a1125-w2-hook-round20, a651-hook-withheld].
+ *
+ * P4 (text): a simple command that dataCommand reads as a data program (its program and options on
+ * the DATA_SPECS list), with no setting on its line but those INERT_SETTING allows, whose output
+ * goes to no manifest or lockfile and, through a pipe, only to such programs or to a sink on the
+ * SINK_SPECS list, and that no pipe feeds into a program that runs its input, is read as text, and
+ * the installs it mentions are not judged [test: a1125-w2-hook-round13, a1125-w2-hook-account,
+ * a1125-w2-hook-contract].
+ *
+ * P5 (the ledger guard): in the blocking mode, a call that names the check ledger file, or the data
+ * folder that holds it, is denied unless it is one plain read command (ledgerCall), whether or not
+ * a ledger has been started [test: a1125-w2-hook-ledger-writes, a1125-w2-hook-ledger-spellings]. P5
+ * (the failure rule): in the blocking mode, where a ledger has been started, a call the hook cannot
+ * finish reading (READ_BUDGET_MS of reading, and WALL_LIMIT_MS of wall clock for a payload over
+ * WORKER_ABOVE_CHARS characters), a call on which it meets an error of its own, and a payload it
+ * cannot parse or read whole (MAX_INPUT_CHARS, MAX_PARSE_CHARS) are denied when the call is a Bash
+ * or PowerShell call or an edit whose path names a manifest or the ledger or cannot be read, a
+ * payload that does not parse is denied whatever its tool, and other calls get no answer (rawHold)
+ * [test: a651-hook-pathological-inputs, a1125-w2-hook-time, a1125-w2-hook-round12,
+ * a1125-w2-hook-round13]. P5 (bounds): a command line over MAX_ACCOUNT_CHARS characters, a manifest
+ * over MAX_MANIFEST_BYTES bytes and a ledger file over MAX_LEDGER_BYTES bytes are not read, and an
+ * examined call that meets one is denied as not read [test: a1125-w2-hook-contract,
+ * a651-hook-pathological-inputs].
+ *
+ * P6 (advice): after a Bash or PowerShell call of at most MAX_ACCOUNT_CHARS characters in which a
+ * manager's own program runs one of its verbs on the ADVICE_VERBS list (advisedRun), where a ledger
+ * has been started and the mode is not off, the hook answers with one line of advice to run
+ * vulnerability_scan, and a PostToolUse answer carries no permission decision [test:
+ * a1125-w2-hook-round16, a1125-w2-hook-round19, a1125-w2-hook-round20, a1125-w2-hook-contract].
+ *
+ * THE LIMITS
+ *
+ * L1: the hook judges what a call names, not what the package manager then installs, and the
+ * manager resolves on its own, for example transitive dependencies, a release a lockfile or an
+ * installed copy already holds, the release a range picks, overrides and pins elsewhere in the
+ * project, the runtime's own constraints, and a release published after the verdict was recorded
+ * [test: a1125-w2-hook-round10, a1125-w2-hook-round19]. L1: vulnerability_scan reads the releases
+ * actually installed, and the advice line (P6) says to run it [test: a1125-w2-hook-round16]. L2:
+ * the hook examines what P1 detects and nothing else, so an install started another way goes ahead
+ * unchecked, for example by a script or a make target, through a tool or a manager that is not on
+ * the MANAGERS list, by a file a shell command changes, or inside a container [test:
+ * a1125-w2-hook-contract, a1125-w2-hook-round10]. L3: the further guard on a name given alone or as
+ * a range (the notes list its causes) is best effort: it holds a call where it sees a reason the
+ * manager may pick another release, and promises nothing where it does not [test:
+ * a1125-w2-hook-round17, a1125-w2-hook-round18, a1125-w2-hook-round19]. L4: an agent that sets out
+ * to defeat the hook can, for example with a script that runs the install, a command the shell
+ * decodes before it runs, or a change of folder made in an earlier call [test:
+ * a1125-w2-hook-contract]. L5: the ledger is taken as the server wrote it, so the verdicts, and
+ * whether a record is private and where it applies, are the server's (src/check-ledger.ts), and a
+ * ledger line the hook cannot read is no verdict and makes the verdicts it may stand beside unknown
+ * (readLedger) [test: a1125-w2-hook-ledger-unknown, a1125-w2-hook-round20].
+ *
+ * NOTES ON HOW IT READS
+ *
+ * (Not part of the contract: behaviour that may change. Each note is pinned by the tests of the
+ * round it names, and README "The guard hook" describes it for users.)
+ *
+ * READINGS AND WINDOWS (the ledger, and which answer counts for which reading; round 20, Q1/Q2)
+ *
  * The 4DA guard: a Claude Code plugin hook (PreToolUse on Edit, MultiEdit, Write, NotebookEdit,
  * Bash and PowerShell; PostToolUse for advice) that stops a dependency version from being written
  * or installed before `dependency_check` has judged it, against the check ledger the server writes
@@ -240,6 +378,10 @@
  *
  * Names and versions it repeats come from the edit or command, which may quote a third party's
  * manifest, so each is held to its shape first (NAME_TEXT, specText).
+ *
+ * MEASURED (cargo 1.97.0, round 21): `cargo install itoa@1.0.0` downloaded itoa v1.0.0 although newer
+ * 1.0.x releases exist, and `cargo install itoa@1` is refused ("add an explicit qualifier, like
+ * ^1"): a bare version given to cargo install is that release, which is why it is read as `=1.0.0`.
  */
 
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -2221,6 +2363,20 @@ function manifestBaseName(filePath) {
   return (parts[parts.length - 1] ?? "").replace(/[\u0000\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]/g, "").replace(/[\u2024\uff0e\u3002\u00b7]/g, ".").replace(/:.*$/, "").replace(/[. ]+$/, "");
 }
 
+/**
+ * THE CONTRACT, P1: the name rules manifestKind applies beside MANIFESTS, each with the reader it
+ * selects: go.work is read with go.mod's reader (its `use` lines declare nothing), and a requirements
+ * file is any name like `requirements*.txt` or any `.txt` in a folder named `requirements` (the
+ * server's own rule). A `syntax_test_*` name is no manifest (an editor grammar's fixture).
+ */
+const MANIFEST_NAME_RULES = Object.freeze([
+  Object.freeze({ kind: "go.mod", name: /^go\.work$/i, folder: null }),
+  Object.freeze({ kind: "requirements.txt", name: /requirements[\w.-]*\.txt$/i, folder: null }),
+  Object.freeze({ kind: "requirements.txt", name: /\.txt$/i, folder: /^requirements$/i }),
+]);
+/** THE CONTRACT, P1: manifests a package manager reads that this hook does not: an edit of one is denied as not read. */
+const UNREAD_MANIFESTS = Object.freeze(["package.yaml", "package.json5"]);
+
 function manifestKind(filePath) {
   // The name compared case-insensitively on every platform (Round 11: on a case-sensitive file
   // system `Package.json` is then held too: the safe side).
@@ -2228,12 +2384,9 @@ function manifestKind(filePath) {
   const name = manifestBaseName(filePath);
   const known = MANIFEST_NAMES.get(name.toLowerCase());
   if (known) return known;
-  // L4: go.work's `replace` directives (line and block) are read with go.mod's reader; its `use` lines declare nothing.
-  if (name.toLowerCase() === "go.work") return "go.mod";
-  // The server reads no `syntax_test_*` file (an editor grammar's fixture: isSyntaxTestName).
   if (/^syntax_test_/i.test(name)) return null;
-  if (/requirements[\w.-]*\.txt$/i.test(name)) return "requirements.txt";
-  if (/\.txt$/i.test(name) && (parts[parts.length - 2] ?? "").toLowerCase() === "requirements") return "requirements.txt";
+  const folder = parts[parts.length - 2] ?? "";
+  for (const rule of MANIFEST_NAME_RULES) if (rule.name.test(name) && (rule.folder === null || rule.folder.test(folder))) return rule.kind;
   return null;
 }
 
@@ -3675,8 +3828,15 @@ function managerWord(token) {
 }
 
 /** Whether a token is one of `manager`'s verbs that can add or move a dependency. */
+/** npm's detector commands (read through npm's own abbreviations, npmCommand), and `npm pkg set`. */
+const NPM_DETECT_COMMANDS = ["install", "install-test", "link", "update"];
+/** THE CONTRACT, P1: the package managers the detector reads, by the name managerWord gives each spelling. */
+const MANAGERS = Object.freeze(["npm", ...DETECT_VERBS.keys()]);
+/** THE CONTRACT, P1: each manager's verbs that can add or move a dependency (npm's also by its abbreviations). */
+const VERBS = Object.freeze(Object.fromEntries([["npm", Object.freeze([...NPM_DETECT_COMMANDS, "pkg"])], ...[...DETECT_VERBS].map(([m, v]) => [m, Object.freeze([...v])])]));
+
 function isManagerVerb(manager, token) {
-  if (manager === "npm") return token === "pkg" || (token.length <= 16 && ["install", "install-test", "link", "update"].includes(npmCommand(token) ?? ""));
+  if (manager === "npm") return token === "pkg" || (token.length <= 16 && NPM_DETECT_COMMANDS.includes(npmCommand(token) ?? ""));
   return DETECT_VERBS.get(manager)?.has(token) ?? false;
 }
 
@@ -5162,6 +5322,8 @@ const NAMED_OPTIONS = {
 /** The allow lists as maps: option -> 1 (takes a value) or 0. */
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
+// THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
+export { INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, manifestKind };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {
@@ -5957,14 +6119,16 @@ function judge(index, c) {
   const last = answers.at(-1);
   // The last decisive answer decides, whatever unknown answers came after it: an avoid or wait
   // holds until a later proceed or review (re-check of 0d30b40, S2: avoid, unknown, private went ahead).
-  // Q1: a crates.io bare `1.2.3` (^1.2.3) installs 1.2.3 itself where a Cargo.lock holds it, so an
-  // avoid or wait for the exact release 1.2.3 holds it too; only an answer for ^1.2.3 releases it.
+  // Q1 + round 21: a crates.io bare `1.2.3` (^1.2.3) installs 1.2.3 itself where a Cargo.lock holds
+  // it, so an avoid or wait for the exact release 1.2.3 also counts for it (a proceed for the release
+  // does not); among the answers that count, the newest decides (THE CONTRACT, P3).
+  let pool = answers.filter((e) => HOLDS.has(e.verdict) || PASSES.has(e.verdict));
   if (eco === "crates.io" && !exactVersion && /^v?\d+\.\d+\.\d+/.test(String(c.spec).trim())) {
     const base = versionKey(eco, String(c.spec).trim().replace(/^v/, ""));
-    const exactHold = forPackage.filter((e) => !isWithheld(e) && e.vk === base && exactEntry(e) && (HOLDS.has(e.verdict) || PASSES.has(e.verdict))).at(-1);
-    if (exactHold && HOLDS.has(exactHold.verdict)) return { deny: exactHold };
+    const holds = forPackage.filter((e) => !isWithheld(e) && e.vk === base && exactEntry(e) && HOLDS.has(e.verdict));
+    pool = [...new Set([...pool, ...holds])].sort((x, y) => forPackage.indexOf(x) - forPackage.indexOf(y));
   }
-  const decisive = answers.filter((e) => HOLDS.has(e.verdict) || PASSES.has(e.verdict)).at(-1);
+  const decisive = pool.at(-1);
   if (decisive && HOLDS.has(decisive.verdict)) return { deny: decisive };
   if (decisive && PASSES.has(decisive.verdict)) return "allow";
   // A range with no answer of its own: the verdict for the release its inclusive ceiling names.
@@ -6294,7 +6458,7 @@ function introducedBy(input) {
   // reads, package.yaml and package.json5 included) writes it in a form this hook does not read.
   if (toolName === "NotebookEdit" && typeof toolInput.notebook_path === "string") {
     const name = manifestBaseName(toolInput.notebook_path).toLowerCase();
-    if (manifestKind(toolInput.notebook_path) === null && name !== "package.yaml" && name !== "package.json5") return null;
+    if (manifestKind(toolInput.notebook_path) === null && !UNREAD_MANIFESTS.includes(name)) return null;
     refuse(`a NotebookEdit of ${name}, a manifest this hook reads only from Edit, MultiEdit and Write`, "No dependency_check verdict releases this edit. Change the manifest with the Edit or Write tool: the versions it sets are then judged as in any other edit.");
     unreadInstalls = true;
     return { what: "edit", changes: [] };
@@ -6303,7 +6467,7 @@ function introducedBy(input) {
   if (typeof toolInput.file_path !== "string") return null;
   // Round 16 (J7): pnpm reads package.yaml and package.json5 as a project's manifest; this hook does not.
   const last = manifestBaseName(toolInput.file_path).toLowerCase();
-  if (last === "package.yaml" || last === "package.json5") {
+  if (UNREAD_MANIFESTS.includes(last)) {
     refuse(
       `${last}, a manifest pnpm reads and this hook does not`,
       "No dependency_check verdict releases this edit. pnpm reads package.json as well: write the project's manifest as package.json, which this hook reads, and the versions it sets are judged as in any other edit.",
@@ -6674,6 +6838,8 @@ const ADVICE_VERBS = new Map([
   ["go", new Set(["get", "install", "download"])],
 ]);
 const NPM_ADVICE_COMMANDS = new Set(["install", "install-test", "ci", "install-ci-test", "update", "link"]);
+// THE CONTRACT, P6: ADVICE_VERBS lists npm too (its words read through npm's own abbreviations).
+ADVICE_VERBS.set("npm", NPM_ADVICE_COMMANDS);
 /** L6: whether a simple command runs a manager with one of ADVICE_VERBS (a manager's own program, not text). */
 function advisedRun(words) {
   const start = commandStart(words);
