@@ -33,7 +33,7 @@ afterEach(() => {
 const NOW = Date.parse("2026-11-24T12:00:00Z");
 const MIN = 60_000;
 const e = (minutesAgo: number, fields: Record<string, unknown>) => ({ t: new Date(NOW - minutesAgo * MIN).toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", ...fields });
-const lines = (entries: unknown[]) => entries.map((x) => JSON.stringify(x)).join("\n") + "\n";
+const lines = (entries: unknown[]) => entries.map((x) => JSON.stringify({ sv: "6.6.0", ...(x as object) })).join("\n") + "\n";
 const decide = () => (respond({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: project, tool_input: { command: "npm i lodash@4.17.20" } }, { FOURDA_MCP_HOME: home }, NOW) === "" ? "allow" : "deny");
 
 describe("an avoid or wait holds over a later private answer, whatever lies between", () => {

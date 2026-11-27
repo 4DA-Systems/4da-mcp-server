@@ -37,7 +37,7 @@ const MIN = 60_000;
 function ledger(entries: Array<Record<string, unknown>>) {
   writeFileSync(
     join(home, LEDGER_FILE),
-    entries.map(({ ago = 1, ...e }) => JSON.stringify({ t: new Date(NOW - (ago as number) * MIN).toISOString(), verdict: "unknown", ...e })).join("\n") + "\n",
+    entries.map(({ ago = 1, ...e }) => JSON.stringify({ sv: "6.6.0", t: new Date(NOW - (ago as number) * MIN).toISOString(), verdict: "unknown", ...e })).join("\n") + "\n",
   );
 }
 function decide(command: string): { decision: "allow" | "deny"; text: string } {

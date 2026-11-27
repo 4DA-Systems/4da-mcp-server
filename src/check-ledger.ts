@@ -26,7 +26,9 @@
  */
 
 import { appendFile, mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { serverDataDir } from "./db.js";
 
@@ -38,6 +40,34 @@ export const LEDGER_MAX_BYTES = 512 * 1024;
 const MAX_REASON = 400;
 /** The longest name, version or constraint kept (dependency_check bounds its own inputs below this). */
 const MAX_FIELD = 300;
+
+/**
+ * Round 23 (V3): the server version written on every ledger line (`sv`). The hook counts a proceed
+ * or review answer only from a line whose `sv` is at least its MIN_VERDICT_SERVER, the first
+ * version whose verdict rules it relies on. A build before its release still carries the last
+ * published number in package.json, so the line says at least VERDICT_RULES_VERSION, the release
+ * this code is (release.mjs bumps package.json past it from then on).
+ */
+export const VERDICT_RULES_VERSION = "6.6.0";
+const PACKAGE_VERSION: string = (() => {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    return (JSON.parse(readFileSync(path.join(here, "..", "package.json"), "utf8")) as { version?: string }).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
+/** Numeric comparison of dotted versions (missing parts are 0; anything after a "-" ignored). */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split("-")[0].split(".").map((x) => Number.parseInt(x, 10) || 0);
+  const pb = b.split("-")[0].split(".").map((x) => Number.parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+export const LEDGER_SERVER_VERSION = compareVersions(PACKAGE_VERSION, VERDICT_RULES_VERSION) >= 0 ? PACKAGE_VERSION : VERDICT_RULES_VERSION;
 /** The longest file path kept; a longer one is left out. */
 const MAX_PATH = 1024;
 
@@ -45,6 +75,8 @@ const MAX_PATH = 1024;
 export interface LedgerEntry {
   /** When the verdict was given (ISO 8601). */
   t: string;
+  /** The server version that wrote the line (V3). */
+  sv: string;
   ecosystem: string;
   package: string;
   /** The exact version the verdict is for (a constraint's pick, when one was asked). */
@@ -76,6 +108,8 @@ export interface LedgerEntry {
    * environment or user-level rule.
    */
   config_dir?: string;
+  /** For "named" (round 23, W3): the manager whose configuration holds the rule (an .npmrc: "npm"). */
+  config_of?: string;
   /** For "registry-wide": the host of the registry, index or proxy (a host name only, never credentials). */
   registry_host?: string;
   /** Round 22 (F3): Go: the module that contains the package path recorded in `package`. */
@@ -83,7 +117,7 @@ export interface LedgerEntry {
 }
 
 /** Where a private record applies (LiveIntelligence.privateRecordScope). */
-export type PrivateScope = (ecosystem: string, name: string) => { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null };
+export type PrivateScope = (ecosystem: string, name: string) => { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null; config?: string };
 
 /** The fields of a dependency_check result item the ledger keeps. */
 export interface CheckedItem {
@@ -146,6 +180,7 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
     const withheld = item.not_checked === "private" && !unread ? withheldKind(item, privateRule) : null;
     out.push({
       t,
+      sv: LEDGER_SERVER_VERSION,
       ecosystem: oneLine(item.ecosystem, 40),
       package: pkg,
       version,
@@ -169,7 +204,10 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
  * Q3 + round 22 (S1): why a private record is private. With nothing known (no project, or the call
  * failed), the record is "registry-wide" with no folder, which the hook never releases.
  */
-function scopeFields(item: { ecosystem: string; package: string; reason?: unknown }, scope: PrivateScope | null): Pick<LedgerEntry, "private_rule" | "config_dir" | "registry_host"> {
+/** W3: the managers whose configuration a named rule may sit in. */
+const CONFIG_OF = new Set(["npm", "pnpm", "yarn", "bun", "cargo", "go", "pip", "uv", "poetry"]);
+
+function scopeFields(item: { ecosystem: string; package: string; reason?: unknown }, scope: PrivateScope | null): Pick<LedgerEntry, "private_rule" | "config_dir" | "config_of" | "registry_host"> {
   try {
     const s = scope ? scope(item.ecosystem, item.package) : null;
     if (s?.rule === "listed") return { private_rule: "listed" };
@@ -179,7 +217,9 @@ function scopeFields(item: { ecosystem: string; package: string; reason?: unknow
     const raw = s && typeof s.host === "string" ? s.host : fromReason;
     const host = typeof raw === "string" && /^[a-z0-9.-]{1,253}$/i.test(raw) ? raw.toLowerCase() : null;
     const rule = s?.rule === "named" ? "named" : "registry-wide";
-    return { private_rule: rule, ...(dir ? { config_dir: dir } : {}), ...(host && rule === "registry-wide" ? { registry_host: host } : {}) };
+    // Round 23 (W3): which manager's configuration holds a named rule.
+    const config = rule === "named" && s && typeof s.config === "string" && CONFIG_OF.has(s.config) ? s.config : null;
+    return { private_rule: rule, ...(dir ? { config_dir: dir } : {}), ...(config ? { config_of: config } : {}), ...(host && rule === "registry-wide" ? { registry_host: host } : {}) };
   } catch {
     return { private_rule: "registry-wide" };
   }

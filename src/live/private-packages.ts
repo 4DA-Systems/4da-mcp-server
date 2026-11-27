@@ -916,6 +916,9 @@ function within(dir: string, scope: string | null): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/** A file path compared as the file system does (Windows: case-insensitive). */
+const fileKey = (f: string): string => (process.platform === "win32" ? path.resolve(f).toLowerCase() : path.resolve(f));
+
 /** The first setting that applies to `dir` (null: only the user's, the system's, the environment's). */
 function settingFor(list: readonly ScopedSetting[], dir: string | null): PrivateSetting | null {
   const hit = list.find((s) => (dir === null ? s.scope === null : within(path.resolve(dir), s.scope)));
@@ -954,6 +957,8 @@ export class PrivatePackageRules {
   private readonly npmScopes = new Map<string, string>();
   /** Round 22 (S1): the folder whose file maps each scope, or null for the environment or a user-level file. */
   private readonly npmScopeDirs = new Map<string, string | null>();
+  /** Round 23 (W3): which manager's configuration holds each npm scope rule (npm: an .npmrc or npm_config_*; yarn; bun; pnpm). */
+  private readonly npmScopeOf = new Map<string, "npm" | "yarn" | "bun" | "pnpm">();
   private readonly goPatterns: Array<{ key: string; value: string; from: string }> = [];
   private readonly listed: Array<{ ecosystem: string | null; pattern: string; re: NameMatcher; rePypi: NameMatcher; reCrates: NameMatcher }> = [];
   /** FOURDA_PUBLIC_MIRRORS: hosts the user declares mirror only the public registries; their packages are checked. */
@@ -1043,6 +1048,12 @@ export class PrivatePackageRules {
     const bunfigs = [...inDirs("bunfig.toml"), ...global([xdg ? path.join(xdg, ".bunfig.toml") : null, home ? path.join(home, ".bunfig.toml") : null])];
     // pnpm v10+ reads `registry` and `registries` from pnpm-workspace.yaml (pnpmWorkspaceRegistries).
     const pnpmWorkspaces = inDirs("pnpm-workspace.yaml");
+    // Round 23 (W2): a manager's own user-level file is user-level by what it is, even where the
+    // ancestor walk reaches it as a project folder's file (a project under the home folder).
+    const userLevel = new Set(
+      [...global([npmEnv.userconfig || (home ? path.join(home, ".npmrc") : null), ...npmGlobalConfigFiles(env)]), ...global([home ? path.join(home, yarnName) : null]), ...global([xdg ? path.join(xdg, ".bunfig.toml") : null, home ? path.join(home, ".bunfig.toml") : null])].map((f) => fileKey(f.file)),
+    );
+    const ruleDir = (file: string, scope: string | null): string | null => (userLevel.has(fileKey(file)) ? null : scope);
     const goFile = goEnvPath(env);
     const pipFiles = pipConfigFiles(env);
     // uv finds `uv.toml` and `pyproject.toml` in the project and the directories above it; pipenv the Pipfile.
@@ -1114,6 +1125,7 @@ export class PrivatePackageRules {
     for (const { scope, from } of npmEnv.scopes) if (!this.npmScopes.has(scope)) {
       this.npmScopes.set(scope, from);
       this.npmScopeDirs.set(scope, null);
+      this.npmScopeOf.set(scope, "npm");
     }
     if (npmEnv.registry) npmDefaults.push({ ...npmEnv.registry, scope: null });
     const seen = new Set<string>();
@@ -1123,7 +1135,8 @@ export class PrivatePackageRules {
       const rc = npmrcRead(read(file, "npm", scope));
       for (const s of rc.scopes) if (!this.npmScopes.has(s)) {
         this.npmScopes.set(s, file);
-        this.npmScopeDirs.set(s, scope);
+        this.npmScopeDirs.set(s, ruleDir(file, scope));
+        this.npmScopeOf.set(s, "npm");
       }
       if (rc.defaultRegistry && !isPublicNpmRegistry(rc.defaultRegistry)) npmDefaults.push({ url: rc.defaultRegistry, from: file, scope });
     }
@@ -1133,7 +1146,8 @@ export class PrivatePackageRules {
       const text = read(file, "npm", scope);
       for (const s of yarnrcPrivateScopes(text)) if (!this.npmScopes.has(s)) {
         this.npmScopes.set(s, file);
-        this.npmScopeDirs.set(s, scope);
+        this.npmScopeDirs.set(s, ruleDir(file, scope));
+        this.npmScopeOf.set(s, "yarn");
       }
       const server = yarnrcRegistry(text);
       if (server && !isPublicNpmRegistry(server)) npmDefaults.push({ url: server, from: file, scope });
@@ -1142,6 +1156,7 @@ export class PrivatePackageRules {
     for (const { scope, from } of yarnEnv.scopes) if (!this.npmScopes.has(scope)) {
       this.npmScopes.set(scope, from);
       this.npmScopeDirs.set(scope, null);
+      this.npmScopeOf.set(scope, "yarn");
     }
     if (yarnEnv.registry) npmDefaults.push({ ...yarnEnv.registry, scope: null });
     for (const { file, scope } of bunfigs) {
@@ -1150,7 +1165,8 @@ export class PrivatePackageRules {
       const bunfig = bunfigRegistries(read(file, "npm", scope));
       for (const s of bunfig.scopes) if (!this.npmScopes.has(s)) {
         this.npmScopes.set(s, file);
-        this.npmScopeDirs.set(s, scope);
+        this.npmScopeDirs.set(s, ruleDir(file, scope));
+        this.npmScopeOf.set(s, "bun");
       }
       if (bunfig.registry && !isPublicNpmRegistry(bunfig.registry)) npmDefaults.push({ url: bunfig.registry, from: file, scope });
     }
@@ -1160,7 +1176,8 @@ export class PrivatePackageRules {
       const workspace = pnpmWorkspaceRegistries(read(file, "npm", scope));
       for (const s of workspace.scopes) if (!this.npmScopes.has(s)) {
         this.npmScopes.set(s, file);
-        this.npmScopeDirs.set(s, scope);
+        this.npmScopeDirs.set(s, ruleDir(file, scope));
+        this.npmScopeOf.set(s, "pnpm");
       }
       if (workspace.registry && !isPublicNpmRegistry(workspace.registry)) npmDefaults.push({ url: workspace.registry, from: file, scope });
       // A registry setting this reader cannot follow fails closed: pnpm may fetch any name from a
@@ -1250,16 +1267,16 @@ export class PrivatePackageRules {
    * does not know as public (every name is then private, public ones too), with that folder and host
    * when one is known.
    */
-  privateRuleKind(ecosystem: string, name: string, dirs: string[]): { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null } {
+  privateRuleKind(ecosystem: string, name: string, dirs: string[]): { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null; config?: string } {
     if (this.listedCovers(ecosystem, name)) return { rule: "listed", dir: null, host: null };
     if (ecosystem === "npm" && name.startsWith("@")) {
       const scope = name.slice(0, name.indexOf("/") > 0 ? name.indexOf("/") : undefined).toLowerCase();
       if (this.npmScopes.has(scope)) {
         const d = this.npmScopeDirs.get(scope) ?? null;
-        return { rule: "named", dir: d === null ? "environment" : path.resolve(d), host: null };
+        return { rule: "named", dir: d === null ? "environment" : path.resolve(d), host: null, config: this.npmScopeOf.get(scope) ?? "npm" };
       }
     }
-    if (ecosystem === "Go" && this.goPatterns.some((g) => goPrivateMatch(g.value, name))) return { rule: "named", dir: "environment", host: null };
+    if (ecosystem === "Go" && this.goPatterns.some((g) => goPrivateMatch(g.value, name))) return { rule: "named", dir: "environment", host: null, config: "go" };
     for (const d of dirs) {
       const setting =
         ecosystem === "npm"

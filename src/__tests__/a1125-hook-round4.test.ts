@@ -70,14 +70,15 @@ describe("a narrow key is judged, but declares no version for the whole tree", (
     const file = s.file("pnpm-workspace.yaml", text);
     // (round 15, H3: an unknown top-level key is held; a setting known to install nothing is not)
     expect(s.edit(file, "catalog:\n", "nodeLinker: hoisted\ncatalog:\n").decision).toBe("allow");
-    expect(s.edit(file, '"foo>lodash": 3.10.0', '"foo>lodash": 3.10.1').decision).toBe("allow");
+    // Round 23 (W1): each section on its own: the catalog's 3.10.1 no longer covers the override.
+    expect(s.edit(file, '"foo>lodash": 3.10.0', '"foo>lodash": 3.10.1').decision).toBe("deny");
     expect(s.edit(file, '"foo>lodash": 3.10.0', '"foo>lodash": 3.10.2').items).toEqual([{ ecosystem: "npm", package: "lodash", to: "3.10.2", from: "3.10.0" }]);
     expect(s.edit(file, '"foo>lodash": 3.10.0', '"bar>lodash": 3.10.0').decision).toBe("deny");
   });
 
-  it("pnpm-workspace.yaml: a plain override key is a declaration as before", () => {
+  it("pnpm-workspace.yaml: a plain override key no longer covers the catalog (round 23, W1)", () => {
     const file = s.file("pnpm-workspace.yaml", `${H}overrides:\n  lodash: 3.10.1\ncatalog:\n  lodash: ^4.17.21\n`);
-    expect(s.edit(file, "lodash: ^4.17.21", "lodash: 3.10.1").decision).toBe("allow");
+    expect(s.edit(file, "lodash: ^4.17.21", "lodash: 3.10.1").decision).toBe("deny");
   });
 
   it.each([
@@ -96,10 +97,10 @@ describe("a narrow key is judged, but declares no version for the whole tree", (
     expect(s.write(file, before).decision).toBe("allow");
   });
 
-  it("package.json: a plain override is a declaration as before, and an unchanged narrow key holds nothing", () => {
+  it("package.json: a plain override no longer covers dependencies (round 23, W1), and an unchanged narrow key holds nothing", () => {
     const before = json({ name: "r", overrides: { lodash: "3.10.1", foo: { qs: "6.11.0" } }, pnpm: { overrides: { "a>b": "1.0.0" } }, dependencies: { lodash: "^4.17.21" } });
     const file = s.file("package.json", before);
-    expect(s.edit(file, '"lodash": "^4.17.21"', '"lodash": "3.10.1"').decision).toBe("allow");
+    expect(s.edit(file, '"lodash": "^4.17.21"', '"lodash": "3.10.1"').decision).toBe("deny");
     expect(s.edit(file, '"name": "r"', '"name": "s"').decision).toBe("allow");
   });
 });

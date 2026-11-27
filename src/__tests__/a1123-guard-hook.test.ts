@@ -88,7 +88,7 @@ function callIn(reason: string): { items: Array<Record<string, string>> } {
 
 function ledger(entries: Array<Partial<LedgerEntry> & { package: string; version: string; verdict: string }>, ageMs = 60_000) {
   const t = new Date(Date.now() - ageMs).toISOString();
-  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ t, ecosystem: "npm", ...e })).join("\n") + "\n");
+  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", ...e })).join("\n") + "\n");
 }
 
 /** A package.json on disk and an Edit of lodash's version in it. */
@@ -150,7 +150,7 @@ describe("an exact version, by what the ledger holds", () => {
         { t: t(2 * HOUR), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "proceed" },
         { t: t(HOUR), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "avoid", reason: "a new advisory" },
       ]
-        .map((e) => JSON.stringify(e))
+        .map((e) => JSON.stringify({ sv: "6.6.0", ...e }))
         .join("\n"),
     );
     expect(denied(hook(lodashEdit("4.17.20")))).toContain("a new advisory");
@@ -249,7 +249,7 @@ describe("it fails open", () => {
   });
 
   it("garbage and torn lines in the ledger are skipped; the good ones after them still count", () => {
-    writeFileSync(join(home, LEDGER_FILE), `not json\n{"t":"x"}\n{"t":"2026\n{"t":"${new Date().toISOString()}","ecosystem":"npm","package":"lodash","version":"4.17.20","verdict":"proceed"}\n`);
+    writeFileSync(join(home, LEDGER_FILE), `not json\n{"t":"x"}\n{"t":"2026\n{"sv":"6.6.0","t":"${new Date().toISOString()}","ecosystem":"npm","package":"lodash","version":"4.17.20","verdict":"proceed"}\n`);
     allowed(hook(lodashEdit("4.17.20")));
   });
 
@@ -323,7 +323,7 @@ describe("edits are applied to the file as the tool will apply them", () => {
 describe("a very large manifest is answered, not timed out", () => {
   it("a Write of 40,000 dependencies against a full ledger names the first 25 and counts the rest", () => {
     const t = new Date().toISOString();
-    writeFileSync(join(home, LEDGER_FILE), Array.from({ length: 4000 }, (_, i) => JSON.stringify({ t, ecosystem: "npm", package: `other-${i}`, version: "1.0.0", verdict: "proceed" })).join("\n"));
+    writeFileSync(join(home, LEDGER_FILE), Array.from({ length: 4000 }, (_, i) => JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", package: `other-${i}`, version: "1.0.0", verdict: "proceed" })).join("\n"));
     const deps = Object.fromEntries(Array.from({ length: 40_000 }, (_, i) => [`pkg-${i}`, `1.0.${i}`]));
     const reason = denied(hook(pre("Write", { file_path: join(project, "package.json"), content: JSON.stringify({ name: "app", dependencies: deps }, null, 2) })));
     expect(callIn(reason).items).toHaveLength(25);

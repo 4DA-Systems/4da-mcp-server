@@ -45,7 +45,7 @@ function write(file: string, content: string) {
 }
 /** A `proceed` for one PyPI release, a minute old. */
 function proceed(pkg: string, version: string): void {
-  writeFileSync(join(home, LEDGER_FILE), JSON.stringify({ t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "PyPI", package: pkg, version, verdict: "proceed", reason: "ok" }) + "\n");
+  writeFileSync(join(home, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "PyPI", package: pkg, version, verdict: "proceed", reason: "ok" }) + "\n");
 }
 
 const LONG = "1." + "0".repeat(80); // a version over 80 characters

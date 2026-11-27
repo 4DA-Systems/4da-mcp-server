@@ -29,7 +29,7 @@ const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", 
 const dir = mkdtempSync(join(tmpdir(), "a651-overbound-"));
 const home = join(dir, "home");
 mkdirSync(home);
-writeFileSync(join(home, LEDGER_FILE), JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "zzz-unrelated", version: "1.0.0", verdict: "proceed" }) + "\n");
+writeFileSync(join(home, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t: new Date().toISOString(), ecosystem: "npm", package: "zzz-unrelated", version: "1.0.0", verdict: "proceed" }) + "\n");
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const PAD = (n: number) => "b".repeat(n);

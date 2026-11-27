@@ -90,11 +90,11 @@ describe("S4: poetry self add", () => {
 
 describe("S5: a ledger line naming a package that is not fully valid", () => {
   const at = new Date(Date.now() - 60_000).toISOString();
-  const proceed = JSON.stringify({ t: at, ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "proceed" });
+  const proceed = JSON.stringify({ sv: "6.6.0", t: at, ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "proceed" });
   it.each([
-    ["a t that is not a date", JSON.stringify({ t: "soon", ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "avoid" })],
-    ["a verdict that is not one of the five", JSON.stringify({ t: at, ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "Avoid" })],
-    ["no version", JSON.stringify({ t: at, ecosystem: "npm", package: "lodash", verdict: "avoid" })],
+    ["a t that is not a date", JSON.stringify({ sv: "6.6.0", t: "soon", ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "avoid" })],
+    ["a verdict that is not one of the five", JSON.stringify({ sv: "6.6.0", t: at, ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "Avoid" })],
+    ["no version", JSON.stringify({ sv: "6.6.0", t: at, ecosystem: "npm", package: "lodash", verdict: "avoid" })],
   ])("%s after a proceed: held", (_label, bad) => {
     writeFileSync(join(s.home, "check-ledger.jsonl"), `${proceed}\n${bad}\n`);
     expect(run("npm i lodash@4.17.21").decision).toBe("deny");

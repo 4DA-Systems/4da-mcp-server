@@ -20,7 +20,7 @@ const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "ho
 /** Appends ledger lines (a minute old) without replacing what is there. */
 export function record(s: Sandbox, entries: Array<Record<string, string>>): void {
   const t = new Date(Date.now() - 60_000).toISOString();
-  appendFileSync(join(s.home, "check-ledger.jsonl"), entries.map((e) => JSON.stringify({ t, ...e })).join("\n") + "\n");
+  appendFileSync(join(s.home, "check-ledger.jsonl"), entries.map((e) => JSON.stringify({ t, sv: "6.6.0", ...e })).join("\n") + "\n");
 }
 
 /**
