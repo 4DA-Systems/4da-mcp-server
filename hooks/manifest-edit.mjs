@@ -165,12 +165,14 @@
  * the MANAGERS list, by a file a shell command changes, or inside a container [test:
  * a1125-w2-hook-contract, a1125-w2-hook-round10]. L2: on Windows, cmd.exe rewrites the arguments of
  * a .cmd or .bat program, so a manager's install, or a runner, whose arguments hold a character
- * cmd.exe treats specially (CMD_SPECIAL) is read only when each program word of its chain, the
- * prefixes and wrappers the hook reads and the program, is shown not to be one: written with
- * another extension, or a bare name that the hook finds on its own PATH, in the order the shell
- * searches, as a file that is neither .cmd nor .bat; otherwise, including when the name is not
- * found, it is denied as not read (cmdProgram, P2) [test: a1125-w2-hook-round23,
- * a1125-w2-hook-round24]. L3: the further guard on a name given alone or as
+ * cmd.exe treats specially (CMD_SPECIAL) is read only when each word the shell starts from PATH is
+ * shown not to be one; the words looked up are the command's first program word and, after each
+ * prefix on the PATH_LAUNCHERS list, the next word, and a wrapper's manager is not looked up,
+ * because the wrapper starts it itself (for example the package manager after corepack or npx);
+ * a word is shown not to be one when it is written with an extension other than .cmd or .bat, or
+ * when it is a bare name that the hook finds on its own PATH, in the order that shell searches, as
+ * a file that is neither; a bare name the hook does not find, in either shell, and every other case
+ * is denied as not read (cmdProgram, P2) [test: a1125-w2-hook-round23, a1125-w2-hook-round24]. L3: the further guard on a name given alone or as
  * a range (the notes list its causes) is best effort: it holds a call where it sees a reason the
  * manager may pick another release, and promises nothing where it does not [test:
  * a1125-w2-hook-round17, a1125-w2-hook-round18, a1125-w2-hook-round19]. L4: an agent that sets out
@@ -2932,7 +2934,7 @@ const PATH_LAUNCHERS = new Set(["env", "sudo", "doas", "timeout", "nice", "nohup
  * for a name written with another extension, or off Windows; for a bare name on Windows, the file
  * the shell finds on PATH (PowerShell: in each PATH folder in order, NAME.ps1, then the PATHEXT
  * extensions; Git Bash: NAME, then NAME.exe, then the other PATHEXT extensions) decides; null when
- * it is not found (or PATH is unset): not shown to be safe.
+ * it is not found (or PATH is unset), in either shell: not shown to be safe.
  */
 function cmdProgram(word, dialect) {
   const name = word.split(/[\\/]/).pop() ?? "";
@@ -2960,9 +2962,8 @@ function cmdProgram(word, dialect) {
     }
     if (found !== null) break;
   }
-  // Git Bash cannot start a name it does not find (nothing runs); PowerShell's PATH may differ from
-  // the hook's, so there a name not found is not shown to be safe.
-  if (found === null && dialect !== "powershell") found = false;
+  // Round 24b: a name not found on the hook's PATH is not shown to be safe in either shell (the
+  // shell's PATH can differ: a profile, a session shim folder, nvm / volta / fnm): null, not read.
   CMD_RESOLVED.set(key, found);
   return found;
 }
@@ -5617,7 +5618,7 @@ const NAMED_OPTIONS = {
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
 // THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
-export { INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
+export { INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {

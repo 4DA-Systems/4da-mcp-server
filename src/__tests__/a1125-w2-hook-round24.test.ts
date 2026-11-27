@@ -257,3 +257,16 @@ describe("the older-server line only for a name with a set-aside line", () => {
     expect(r.text).not.toContain("The 4da server that recorded");
   });
 });
+
+describe.runIf(process.platform === "win32")("round 24b: a bare name the hook does not find is not read in Git Bash too", () => {
+  it("yarn with an empty PATH, in Bash", () => {
+    const empty = mkdtempSync(join(tmpdir(), "a1125-z1b-"));
+    try {
+      const r = bash("yarn add lodash@^4.17.0", { Path: empty, PATH: empty });
+      expect(r.decision).toBe("deny");
+      expect(r.text).toContain("cmd.exe rewrites");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+});

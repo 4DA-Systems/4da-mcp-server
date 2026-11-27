@@ -6,6 +6,8 @@
  * (ii) still names the same operands, versions, extras and placement flags as the original.
  */
 
+import "./helpers/a1125-poetry-on-path.js";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
