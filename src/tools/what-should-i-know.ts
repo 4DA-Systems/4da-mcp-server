@@ -10,24 +10,24 @@
  * - recorded decisions and decision windows relevant to the task;
  * - a delegation verdict (THE CONTRACT below).
  *
- * THE CONTRACT (round 14). Each numbered sentence ends with the tests that pin it; nothing outside this block is.
+ * THE CONTRACT (round 14). Revised in round 16. Each numbered sentence ends with the tests that pin it; nothing outside this block is.
  * 1. The level rests on the caller's declaration: each package declared public is checked at the `version` it states, and a public entry without `version` never leaves the answer at safe_to_delegate. [tests: a1137-confirm-review12 (generated), a1132-round9]
  * 2. A name the briefing read and reported (a seen kind marked "read" in `SEEN_KINDS`) that the caller dismissed holds the answer from safe_to_delegate, with its `DISMISSED_READ` text, or `DISMISSED_INSTEAD` where the call declared a name one edit from it instead. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
- * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), and for a path any prefix of it at a `/`, is never in a request the call makes: `refusePrivateRequest`, the choke point every registry, proxy, OSV.dev and GitHub request passes, refuses it under the call's `withRequestVeto`, and a public entry in or under that set is refused. [tests: a1138-round15 (generated), a1137-round14 (property)]
- * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`), whole, is never in any response the server returns (`screenJsonRpc`, at the transport's send), outside the `task` field of a what_should_i_know answer. [tests: a1138-round15 (generated), a1137-round14 (generated)]
- * 5. That `task` field is the reading copy of the caller's task: markup dropped, line continuations joined, NFKC-folded with default-ignorable characters removed, each run of blanks one space, a line over `MAX_READ_LINE` characters left out; where it differs from the caller's task in more than blanks the answer carries `TASK_FOLDED`. [tests: a1138-round15, a1136-round13]
+ * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), and a path under such a name at a `/` (a Go module's sub-path, a scope's package), is never in a request the call makes: `refusePrivateRequest`, the choke point every registry, proxy, OSV.dev and GitHub request passes, refuses it under the call's `withRequestVeto`, and a public entry in or under that set is refused; a public parent of a private path is a name of its own, sent when the caller declares it public. [tests: a1138-round15 (generated), a1137-round14 (property)]
+ * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`), whole, is never in any response the server returns (`screenJsonRpc`, at the transport's send: each stdio message, and over HTTP each body chunk of any type and each header value, by whole lines, so a token split across chunks is screened whole; `credentialSpans`, the one matcher both screens use, matches what `CREDENTIAL_SHAPES` matches), outside the `task` field of a what_should_i_know answer. [tests: a1139-round16 (generated), a1138-round15 (generated), a1137-round14 (generated)]
+ * 5. That `task` field is the reading copy of the caller's task, as `readingCopy` makes it: control characters removed, percent-escapes decoded, default-ignorable characters (`DEFAULT_IGNORABLE`, the Unicode property) removed, NFKC-folded with each dash and slash look-alike as - and /, markup dropped, line continuations joined, each run of blanks one space, and a line over `MAX_READ_LINE` characters left out; where it differs from the caller's task in more than blanks (space separators, tabs, line breaks) the answer carries `TASK_FOLDED`. [tests: a1139-round16 (generated), a1138-round15, a1136-round13]
  * 6. A declared item's check ledger line is the line dependency_check writes for the same item: its engine and `recordVerdicts` for a looked-up item, `checkAndRecord` for one the project's configuration makes private. [tests: a1136-round13]
  * 7. The briefing also checks versions it happens to read in the task, for example on a command's operand, in a snippet or beside a name; that reading is best effort, and a version written in a spelling it does not read is not checked. [tests: a1134-round11, a1135-round12]
- * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of the project, running install drift, a decision conflict, a name waiting in to_confirm, or something the briefing noticed it could not read. [tests: a1135-confirm-review10, a1137-confirm-review12]
+ * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of a package the task touches (one it declares or adds, or an installed dependency `detectTaskPackages` finds named in the task), installed malware anywhere in the project (`INSTALLED_MALWARE`: human_only, whatever the task), running install drift, a decision conflict (`decisionConflictsFor`, over the declared names, the names the briefing read in the task and the installed ones it touches), a name waiting in to_confirm, or something the briefing noticed it could not read; another version-confirmed finding of the project is listed in `advisories` with scope "project" and leaves the level as it is, and a safe reason then says so (`PROJECT_FINDINGS_LISTED`). [tests: a1139-round16, a1139-confirm-review14, a1135-confirm-review10, a1137-confirm-review12]
  * 9. When the briefing notices it cannot read a command or a snippet whole, for example a quote problem, a source option, or a line over `MAX_READ_LINE` characters, it says so with `unreadableReason` and the answer is not safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
  * 10. When the briefing notices a command of a manager it does not read, for example gem, brew or composer at a command position with its own verb, it says so, its words are not offered or looked up, and the answer is not safe_to_delegate; it does not promise to notice each such command. [tests: a1138-round15, a1137-round14]
  * 11. With a package-source spelling of `SOURCE_SPELLINGS` in the task, the names the task adds are not looked up (`SOURCE_HELD`); the answer is held from safe_to_delegate when that held a name, and a task that holds such a spelling but no name to hold can be safe. [tests: a1137-confirm-review12 (generated), a1127-confirm-promises]
  * 12. A call reads at most `MAX_SNIPPETS` snippets and checks at most `WORD_SCAN_CAP` distinct words of its own for near-miss names, and checks its deadline between stages and lines; past a bound the answer says which and is not safe_to_delegate. [tests: a1133-round10, a1134-round11]
  * 13. The cost bounds are measured, not enforced by the dispatcher: the CPU tests keep each generated input of up to 200,000 characters under 3 s of child CPU. [tests: a1134-round11, a1135-round12, a1136-round13]
- * 14. A text constant is said only where its rule in `TEXT_RULES` holds, for example `RESTS_ON_DECLARATION` ends a safe reason, `BEST_EFFORT_READING` precedes it in a call that declared a package, and `STAYS_REVIEW` is not said with safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
+ * 14. A text constant is said only where its rule in `TEXT_RULES` holds, for example `RESTS_ON_DECLARATION` ends a safe reason, `BEST_EFFORT_READING` precedes it in a call that declared a package, `STAYS_REVIEW` is not said with safe_to_delegate, and `NO_DECISION_CONFLICT` is said where `decisionConflictsFor` found no conflict. [tests: a1137-confirm-review12 (generated), a1139-confirm-review14]
  * 15. `to_confirm` lists names the briefing noticed: a prompt for the caller, not a complete reading. [tests: a1134-round11]
  * 16. The project's own scan reads the installed dependencies and sends their names unless the project's configuration marks them private; a declaration does not change that, and no task text goes to an embedding provider. [tests: a1127-confirm-promises, a1136-round13]
- * 17. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) in an argument of any tool is not sent to any host and not stored: `screenArguments` refuses a name, version, ecosystem or path holding one, and masks it in the free text a tool stores or sends on purpose. [tests: a1137-round14b (generated)]
+ * 17. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) in an argument of any tool is not sent to any host and not stored: `screenArguments` refuses a name, version, ecosystem or path holding one (`CREDENTIAL_REFUSAL`), and for what_should_i_know each string argument but `task` and `not_packages` (the task words a call dismisses, compared and not sent; its `packages` refused entry by entry), and masks it in the free text a tool stores or sends on purpose. [tests: a1139-round16, a1137-round14b (generated)]
  * 18. The briefing checks npm, PyPI, crates.io and Go packages: what a task installs through any other manager or tool is outside what its answer covers, whatever the level, and a safe reason says so (`OUTSIDE_COVERAGE`). [tests: a1138-round15, a1137-confirm-review12 (generated)]
  * END OF THE CONTRACT.
  *
@@ -52,6 +52,9 @@ import {
   EMBEDDING_NOT_SENT_NOTE,
   RESTS_ON_DECLARATION,
   OUTSIDE_COVERAGE,
+  INSTALLED_MALWARE,
+  PROJECT_FINDINGS_LISTED,
+  NO_DECISION_CONFLICT,
   TASK_FOLDED,
   BEST_EFFORT_READING,
   SCAN_STILL_READS,
@@ -100,6 +103,7 @@ import type { LiveIntelligence } from "../live/index.js";
 import type { VulnerabilityScanResult } from "../live/types.js";
 import { isActionableVulnerability } from "../live/maintenance.js";
 import { readableText } from "../live/private-guard.js";
+import { cleanText } from "../tool-args.js";
 import { presentedSeverity } from "../live/severity-scope.js";
 import { compareVersions, inEcosystemForm, maxVersion } from "../live/version-compare.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
@@ -478,6 +482,28 @@ export async function executeWhatShouldIKnow(
 /** The call's never-send set, by its params object (filled once the declarations are read). */
 const NEVER_SEND = new WeakMap<object, { forbidden: (name: string, eco?: string | null) => boolean }>();
 
+/** Blanks only (space separators, tab, line breaks): not U+FEFF, which JS \s counts and the copy removes (round 16, C5). */
+const BLANKS = /[\p{Zs}\t\n\v\f\r]+/gu;
+const withoutBlanks = (text: string) => text.replace(BLANKS, "");
+
+/** Steps 1 to 4 of readingCopy, line by line. */
+const readingLines = (text: string) => readingText(readableText(cleanText(text))).split("\n").map(collapseBlanks);
+
+/**
+ * Round 16, C5: the reading copy of a task (the answer's task field), each step in order:
+ * 1. control characters removed and U+2028 / U+2029 as a space (cleanText);
+ * 2. percent-escapes decoded (until nothing changes, at most 8 rounds), default-ignorable characters removed
+ *    (Default_Ignorable_Code_Point), NFKC-folded, each dash look-alike as "-" and each slash look-alike as "/"
+ *    (readableText);
+ * 3. markup dropped (tags such as <code>, ** and __) and line continuations joined (readingText);
+ * 4. each run of blanks one space (collapseBlanks);
+ * 5. a line over MAX_READ_LINE characters left out.
+ */
+export function readingCopy(text: string): string {
+  return copyOf(readingLines(text));
+}
+const copyOf = (lines: string[]) => lines.map((l) => (l.length > MAX_READ_LINE ? "" : l)).join("\n");
+
 async function executeBriefing(
   db: FourDADatabase | null,
   params: WhatShouldIKnowParams,
@@ -488,9 +514,9 @@ async function executeBriefing(
   // Markup a chat wraps a command in (`<code>`, `**`) is dropped and line continuations are joined (V3, V4).
   // Round 13, U4: every reader works on a reading copy: each run of blanks and tabs inside a line is one space, and a
   // line longer than MAX_READ_LINE after that is a line it cannot read (left out of the copy, said: not read whole).
-  const collapsed = readingText(readableText(params.task)).split("\n").map(collapseBlanks);
-  const longLine = collapsed.some((l) => l.length > MAX_READ_LINE);
-  const task = longLine ? collapsed.map((l) => (l.length > MAX_READ_LINE ? "" : l)).join("\n") : collapsed.join("\n");
+  const lines = readingLines(params.task);
+  const longLine = lines.some((l) => l.length > MAX_READ_LINE);
+  const task = copyOf(lines);
   const files = params.files || [];
   const relevance = createRelevanceScorer([task, ...files].join(" "));
 
@@ -1005,7 +1031,7 @@ async function executeBriefing(
     const instead = replacedBy(w.word);
     if (instead) return [DISMISSED_INSTEAD(w.word, instead)];
     // Round 14, X2: one table classifies every seen kind (briefing-confirm.ts SEEN_KINDS); a read kind holds.
-    if (w.seen && w.seen !== "prose" && SEEN_KINDS[w.seen] === "read") return [DISMISSED_READ[w.seen](w.word)];
+    if (w.seen && w.seen !== "prose" && w.seen !== "runner" && SEEN_KINDS[w.seen] === "read") return [DISMISSED_READ[w.seen](w.word)];
     if (near) return [`you said ${w.word} is not a package; it is one edit from ${near}: make sure nothing installs it`];
     return [];
   })
@@ -1112,14 +1138,25 @@ async function executeBriefing(
       version_confirmed: false,
     });
   }
-  if (scan) pushAll(advisories, projectAdvisories(scan, new Set(packages.map((p) => `${p.ecosystem}\0${p.name}`))));
+  const taskKeys = new Set(packages.map((p) => `${p.ecosystem}\0${p.name}`));
+  if (scan) pushAll(advisories, projectAdvisories(scan, taskKeys));
+  // Round 16, C1(b): how many project-wide findings the safe reason says are listed (distinct package@version).
+  const projectFindingCount = scan ? new Set(projectFindings(scan, taskKeys).map((v) => `${v.ecosystem}\0${v.package}@${v.currentVersion}`)).size : 0;
 
   // ── 3. Decisions: windows, conflicts, wisdom ──────────────────────────
   const decisionWindows = (db ? getOpenDecisionWindows(db) : [])
     .filter((w) => relevance((w.title || "") + " " + (w.description || "")) > 0)
     .slice(0, 5)
     .map((w) => ({ id: w.id, title: w.title, description: w.description, urgency: w.urgency }));
-  const decisionConflicts = db ? await conflictsFor(db, packages) : [];
+  const notPackageKeys = new Set(notPackages.words.map(forbiddenKey));
+  const decisionNames = [
+    ...declared.entries.map((d) => d.name),
+    ...newPackages.map((p) => p.name),
+    ...wantedVersions.map((r) => r.name),
+    ...waiting.map((w) => w.word),
+    ...packages.map((p) => p.name),
+  ].filter((n) => !notPackageKeys.has(forbiddenKey(n)));
+  const decisionConflicts = db ? await decisionConflictsFor(db, decisionNames) : [];
 
   // ── 4. Judge-accepted reading about the task's packages ───────────────
   const relatedReading = db ? judgedReadingFor(db, packages) : [];
@@ -1141,6 +1178,7 @@ async function executeBriefing(
       requestedVersions,
       uncheckedPackages,
       withheldWords: withheldWords.filter((w) => w.standing),
+      projectFindings: projectFindingCount,
       taskDependencies,
       decisionWindows,
       decisionConflicts,
@@ -1150,6 +1188,11 @@ async function executeBriefing(
     // (confirmation_needed), unless what is known already makes the task human_only. It outranks
     // review_needed and unknown: the agent can act on it now. With nothing waiting, the level follows
     // from every checked row, so a confirmed typosquat or critical pin is human_only again (wave 2, P4/P5).
+    const malwareInstalled = installedMalware(scan);
+    if (malwareInstalled.length > 0) {
+      assessed.reason = assessed.level === "safe_to_delegate" ? INSTALLED_MALWARE(malwareInstalled) : `${INSTALLED_MALWARE(malwareInstalled)} ${assessed.reason}`;
+      assessed.level = "human_only";
+    }
     if (maliciousWithheld.length > 0) {
       assessed.level = "human_only";
       assessed.reason = `${maliciousWithheld.map((w) => w.name).join(", ")} ${maliciousWithheld.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list): ${maliciousWithheld.length === 1 ? "it was" : "they were"} not looked up for the task because you marked ${maliciousWithheld.length === 1 ? "it" : "them"} private or not a package, and ${maliciousWithheld.length === 1 ? "it stands" : "they stand"} in the task: a human decides. ${assessed.reason}`;
@@ -1264,7 +1307,7 @@ async function executeBriefing(
     return escapeUnsafeDirs<WhatShouldIKnowResult>({
       task,
       // Round 15, A5: said when the reading copy differs from the caller's task in more than blanks.
-      ...(params.task.replace(/\s+/g, "") !== task.replace(/\s+/g, "") ? { task_note: TASK_FOLDED } : {}),
+      ...(withoutBlanks(params.task) !== withoutBlanks(task) ? { task_note: TASK_FOLDED } : {}),
       files,
       project_path: liveIntel?.getProjectRoot?.() ?? null,
       task_dependencies: taskDependencies,
@@ -1461,10 +1504,21 @@ function labelOf(d: TaskDependency, all: TaskDependency[]): string {
 }
 
 /** One summary row for the project's other confirmed findings, plus running install drift. */
+/** The project's confirmed findings on packages the task does not touch (the task's packages keyed by ecosystem and name). */
+function projectFindings(scan: VulnerabilityScanResult, taskKeys: Set<string>) {
+  return scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !taskKeys.has(`${v.ecosystem}\0${v.package}`) && !v.installDriftOf);
+}
+
+/** Round 16, C1(a): installed copies whose installed version is malware (a MAL- record or the scan's malware flag), anywhere in the project. */
+export function installedMalware(scan: VulnerabilityScanResult | null | undefined): string[] {
+  const rows = (scan?.vulnerabilities ?? []).filter((v) => !v.installDriftOf && ((v as { malware?: boolean }).malware === true || /^MAL-/i.test(String(v.vulnId ?? ""))));
+  return [...new Set(rows.map((v) => `${v.package}@${v.currentVersion}`))].sort();
+}
+
 function projectAdvisories(scan: VulnerabilityScanResult, taskKeys: Set<string>): Advisory[] {
   const out: Advisory[] = [];
   // The task's packages are keyed by ecosystem and name: npm's jsonwebtoken is not the crate.
-  const actionable = scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !taskKeys.has(`${v.ecosystem}\0${v.package}`) && !v.installDriftOf);
+  const actionable = projectFindings(scan, taskKeys);
   const packages = new Set(actionable.map((v) => v.package));
   if (packages.size > 0) {
     const severities = new Set(actionable.map((v) => presentedSeverity(v)));
@@ -1494,13 +1548,23 @@ function projectAdvisories(scan: VulnerabilityScanResult, taskKeys: Set<string>)
   return out;
 }
 
-async function conflictsFor(db: FourDADatabase, packages: TaskPackage[]) {
+/**
+ * Round 16, C3: the recorded decisions that reject a name of the task, by check_decision_alignment's own matcher
+ * (executeCheckDecisionAlignment, lexical: nothing is sent for embedding), over three sets: the names the call
+ * declared, the names the briefing read in the task (looked up, versions it read, names waiting in to_confirm) and the
+ * installed dependencies the task touches. A name the caller dismissed (not_packages) is not asked.
+ */
+export async function decisionConflictsFor(db: FourDADatabase, names: string[]) {
   const out: Array<{ technology: string; decision_id: number; reason: string }> = [];
-  for (const pkg of packages) {
+  const seen = new Set<string>();
+  for (const name of names) {
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
     try {
       // Ranked on this machine: a task's package names are task text, never sent for embedding (C1).
-      const result = await executeCheckDecisionAlignment(db, { technology: pkg.name }, { lexicalOnly: true });
-      for (const c of result.conflicts) out.push({ technology: pkg.name, decision_id: c.decision_id, reason: c.reason });
+      const result = await executeCheckDecisionAlignment(db, { technology: name }, { lexicalOnly: true });
+      for (const c of result.conflicts) out.push({ technology: name, decision_id: c.decision_id, reason: c.reason });
     } catch {
       // No decisions table: nothing to conflict with.
     }
@@ -1685,6 +1749,8 @@ function assessDelegation(input: {
   withheldWords?: TaskWordWithheld[];
   /** How many packages the task names that the briefing handed back as dependency_check arguments. */
   taskDependencies: TaskDependency[];
+  /** Round 16, C1(b): the project's confirmed findings outside the task (listed, scope "project"; the level is untouched). */
+  projectFindings?: number;
   decisionWindows: DecisionWindow[];
   decisionConflicts: Array<{ technology: string }>;
   relevantWisdom: WisdomEntry[];
@@ -1776,7 +1842,8 @@ function assessDelegation(input: {
   if (reasons.length > 0) {
     return { level: "review_needed", reason: `Delegate, then review: ${reasons.join("; ")}.` };
   }
-  return { level: "safe_to_delegate", reason: "Vulnerability scan ready; nothing version-confirmed, no major-version jump and no recorded-decision conflict for this task." };
+  if ((input.projectFindings ?? 0) > 0) return { level: "safe_to_delegate", reason: PROJECT_FINDINGS_LISTED(input.projectFindings!) };
+  return { level: "safe_to_delegate", reason: `Vulnerability scan ready; nothing version-confirmed, no major-version jump and ${NO_DECISION_CONFLICT}.` };
 }
 
 function summarize(

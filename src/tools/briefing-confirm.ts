@@ -108,7 +108,18 @@ export const SOURCE_HELD = "not looked up: the task names a package source of it
 
 /** The last sentence of every safe_to_delegate reason (contract K1). */
 /** Round 15, A4: the boundary of what any answer covers, said in every safe reason before its last sentence. */
-export const OUTSIDE_COVERAGE = "This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.";
+/**
+ * Round 16, C1(a): an installed dependency whose installed version is malware (a MAL- record, or the scan's malware
+ * flag) makes every briefing of that project human_only, whatever the task.
+ */
+export const INSTALLED_MALWARE = (installed: string[]) =>
+  `This project has ${installed.length === 1 ? installed[0] : `${installed.slice(0, -1).join(", ")} and ${installed[installed.length - 1]}`} installed, which ${installed.length === 1 ? "is" : "are"} recorded as malware: a person must deal with that before any task is delegated.`;
+/** Round 16, C1(b): the safe reason's opening when project-wide findings are listed (none of them on a package the task touches). */
+export const PROJECT_FINDINGS_LISTED = (n: number) =>
+  `Vulnerability scan ready; nothing version-confirmed for the packages this task touches; ${n} project-wide finding${n === 1 ? " is" : "s are"} listed below (advisories, scope "project"), no major-version jump and no recorded-decision conflict for this task.`;
+/** Round 16, C3: said only when decisionConflictsFor found no conflict over the declared, the read and the installed names. */
+export const NO_DECISION_CONFLICT = "no recorded-decision conflict for this task";
+export const OUTSIDE_COVERAGE ="This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.";
 /** Round 15, A5: the echoed task differs from the caller's in more than blanks (characters folded or removed). */
 export const TASK_FOLDED = "the task held characters this briefing folded or removed (full-width or look-alike letters, invisible characters, markup): the echoed task is the reading copy";
 export const RESTS_ON_DECLARATION = "This rests on your declaration of what the task adds and on your statement of which words are not packages: a package you did not declare may not have been checked.";
@@ -365,13 +376,15 @@ export function declarationFor(word: string, declared: readonly DeclaredPackage[
  * of it holds review_needed with its DISMISSED_READ text. "caller": a prose candidate, the caller's word to settle.
  * The test a1137-briefing-contract enumerates TaskWordSeen from the source and fails on a kind missing here.
  */
-export const SEEN_KINDS: Readonly<Record<TaskWordSeen, "read" | "caller">> = { command: "read", runner: "read", manifest: "read", form: "read", file: "read", prose: "caller" };
+// Round 16, C8: "runner" is not a read kind. Every runner command (npx, pnpm dlx, bunx, uvx, pipx run, npm exec, uv tool
+// run) is a command this briefing could not read whole, which holds the answer by unreadableReason; its operand is
+// never reported as read, so no dismissal of it is a dismissal of a name the briefing read.
+export const SEEN_KINDS: Readonly<Record<TaskWordSeen, "read" | "caller">> = { command: "read", runner: "caller", manifest: "read", form: "read", file: "read", prose: "caller" };
 /** Round 15, A3: the reason for a dismissed name when the call declared a package one edit from it instead. */
 export const DISMISSED_INSTEAD = (word: string, instead: string) => `you said ${word} is not a package and declared ${instead} instead: the task names ${word}; say so to the user, and make sure nothing installs ${word}`;
 /** The reason a dismissal of a name the briefing read gives, per read kind (review_needed at least). */
-export const DISMISSED_READ: Readonly<Record<Exclude<TaskWordSeen, "prose">, (word: string) => string>> = {
+export const DISMISSED_READ: Readonly<Record<Exclude<TaskWordSeen, "prose" | "runner">, (word: string) => string>> = {
   command: (w) => `you said ${w} is not a package; it stands where a package name stands in a command of the task: make sure nothing installs it`,
-  runner: (w) => `you said ${w} is not a package; it stands where a package name stands in a runner command of the task, which downloads and runs it: make sure nothing runs it`,
   manifest: (w) => `you said ${w} is not a package; it stands where a package name stands in a manifest entry of the task: make sure nothing installs it`,
   form: (w) => `you said ${w} is not a package; the task writes a version on it: make sure nothing installs it`,
   file: (w) => `you said ${w} is not a package; it stands on a line of the requirements file the task names: make sure nothing installs it`,

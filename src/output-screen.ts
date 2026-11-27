@@ -46,11 +46,13 @@ const ALTS = alternatives(CREDENTIAL_SHAPES.source);
 /** Two-segment shapes: a literal head, `[\w-]{a,}`, a dot, `[\w-]{b,}` (a JWT may have a third segment). */
 const TWO_SEGMENT = /^((?:\\.|[A-Za-z])+)\[\\w-\]\{(\d+),\}\\\.\[\\w-\]\{(\d+),\}(\(\?:\\\.\[\\w-\]\*\)\?)?$/;
 const SEGMENTED = ALTS.map((a) => TWO_SEGMENT.exec(a)).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ head: m[1].replace(/\\(.)/g, "$1"), a: Number(m[2]), b: Number(m[3]), third: Boolean(m[4]) }));
-const SINGLE = new RegExp(ALTS.filter((a) => !TWO_SEGMENT.test(a)).join("|"), "g");
+// Round 16, C7: the leading \b of CREDENTIAL_SHAPES is kept, so the screen matches exactly what CREDENTIAL_SHAPES matches.
+const SINGLE = new RegExp(`\\b(?:${ALTS.filter((a) => !TWO_SEGMENT.test(a)).join("|")})`, "g");
 const WORDISH = /[\w-]/;
+const WORD = /\w/;
 
-/** The [start, end) spans of CREDENTIAL_SHAPES matches in a text, whole tokens, in linear time. */
-function spans(text: string): Array<[number, number]> {
+/** The [start, end) spans of CREDENTIAL_SHAPES matches in a text, whole tokens, in linear time (round 16: the one matcher both screens use). */
+export function credentialSpans(text: string): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   SINGLE.lastIndex = 0;
   for (let m = SINGLE.exec(text); m; m = SINGLE.exec(text)) {
@@ -71,6 +73,11 @@ function spans(text: string): Array<[number, number]> {
           runEnd[text.length] = text.length;
           for (let i = text.length - 1; i >= 0; i--) runEnd[i] = WORDISH.test(text[i]) ? runEnd[i + 1] : i;
         }
+        // \b before the head (its first character is a word character): a start, or a non-word character before it.
+        if (at > 0 && WORD.test(text[at - 1])) {
+          at = text.indexOf(s.head, at + 1);
+          continue;
+        }
         const segStart = at + s.head.length;
         const e1: number = runEnd[segStart] ?? segStart;
         let next = at + 1;
@@ -81,8 +88,8 @@ function spans(text: string): Array<[number, number]> {
             if (s.third && text[e2] === ".") end = runEnd[e2 + 1] ?? e2 + 1;
             out.push([at, end]);
             next = end;
-          } else next = Math.max(next, e1);
-        } else next = Math.max(next, e1);
+          }
+        }
         at = text.indexOf(s.head, next);
       }
     }
@@ -95,7 +102,7 @@ export const byShape = (value: string) => `${value.slice(0, 4)}... (${value.leng
 
 /** A text with every CREDENTIAL_SHAPES token rendered by shape (overlapping matches: the earliest, longest wins). */
 export function screenText(text: string): string {
-  const found = spans(text).sort((x, y) => x[0] - y[0] || y[1] - x[1]);
+  const found = credentialSpans(text).sort((x, y) => x[0] - y[0] || y[1] - x[1]);
   if (found.length === 0) return text;
   let out = "";
   let last = 0;
@@ -109,7 +116,7 @@ export function screenText(text: string): string {
 
 /** Whether a text holds a CREDENTIAL_SHAPES token (round 14b: the argument stage uses this). */
 export function hasCredentialShape(text: string): boolean {
-  return spans(text).length > 0;
+  return credentialSpans(text).length > 0;
 }
 
 /** The same as screenText: each credential-shaped substring replaced by its shape (for arguments stored or sent). */

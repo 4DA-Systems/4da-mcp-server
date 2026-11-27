@@ -248,8 +248,13 @@ function* liveSources(): Generator<PrivateNameSource> {
   }
 }
 
-/** Zero-width and other invisible characters a name can carry without looking different. */
-const INVISIBLE = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]|\uDB40[\uDC00-\uDDEF]/g;
+/**
+ * Zero-width and other invisible characters a name can carry without looking different (round 16, C5): the Unicode
+ * property Default_Ignorable_Code_Point itself, not a hand list (U+1BCA0-1BCA3, U+1D173-1D17A and U+E01F0-E0FFF were
+ * missing from the list it replaces).
+ */
+export const DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+const INVISIBLE = DEFAULT_IGNORABLE;
 
 /**
  * Free text (a briefing task) as a reader sees it: percent-escapes decoded and invisible characters

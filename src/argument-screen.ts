@@ -20,7 +20,14 @@ export const CREDENTIAL_REFUSAL = (field: string) => `refused: a value of a cred
 /** Tools whose free-text arguments are stored or sent on purpose: masked, not refused. */
 export const MASKED_TOOLS: ReadonlySet<string> = new Set(["decision_memory", "check_decision_alignment", "agent_memory"]);
 /** Tools that screen their own arguments item by item (per-item refusals; their free text is never sent or stored). */
-const OWN_SCREEN: ReadonlySet<string> = new Set(["dependency_check", "what_should_i_know"]);
+const OWN_SCREEN: ReadonlySet<string> = new Set(["dependency_check"]);
+/**
+ * Round 16, C4: what_should_i_know's every string argument is screened here too (files, project_path, any other),
+ * except `task` (the documented exception: read, never sent or stored), `packages` (refused entry by entry,
+ * briefing-confirm.ts declarationProblem) and `not_packages` (words of the task the caller dismisses, a withheld
+ * credential among them: compared with the task, never sent or stored; G7c's truthful agent dismisses the token).
+ */
+const LEFT_TO_TOOL: Readonly<Record<string, ReadonlySet<string>>> = { what_should_i_know: new Set(["task", "packages", "not_packages"]) };
 
 /** What a field holds, as a refusal names it. */
 const FIELD_LABEL: Readonly<Record<string, string>> = {
@@ -29,6 +36,7 @@ const FIELD_LABEL: Readonly<Record<string, string>> = {
   from_version: "version",
   ecosystem: "ecosystem",
   project_path: "path",
+  files: "file path",
 };
 
 export type ArgumentScreen = { refused: string } | { args: Record<string, unknown>; masked: number };
@@ -52,7 +60,13 @@ export function screenArguments(tool: string, args: Record<string, unknown>): Ar
     return { args: out, masked };
   }
   for (const [key, value] of Object.entries(args)) {
-    const strings = typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : [];
+    if (LEFT_TO_TOOL[tool]?.has(key)) continue;
+    const strings: string[] = [];
+    const collect = (v: unknown, depth: number) => {
+      if (typeof v === "string") strings.push(v);
+      else if (depth < 8 && v && typeof v === "object") for (const x of Array.isArray(v) ? v : Object.values(v)) collect(x, depth + 1);
+    };
+    collect(value, 0);
     if (strings.some(hasCredentialShape)) return { refused: CREDENTIAL_REFUSAL(FIELD_LABEL[key] ?? key.replace(/_/g, " ")) };
   }
   return { args, masked: 0 };
