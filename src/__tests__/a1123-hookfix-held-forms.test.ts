@@ -74,10 +74,11 @@ describe("npm overrides, pnpm overrides and Yarn resolutions", () => {
     expect(run.items?.map((i) => i.package)).toEqual(names.split(","));
   });
 
-  it("an override that refers to a dependency ($name) or names a glob is not read", () => {
+  // Round 25: an override key that names a glob, and so no one package, is held as not read.
+  it("an override that refers to a dependency ($name) is not judged again; one that names a glob is held", () => {
     const file = s.file("package.json", PKG);
     expect(s.edit(file, ...overridesEdit('"overrides": {\n    "left-pad": "$left-pad"\n  }')).decision).toBe("allow");
-    expect(s.edit(file, ...overridesEdit('"resolutions": {\n    "semver*": "7.6.3"\n  }')).decision).toBe("allow");
+    expect(s.edit(file, ...overridesEdit('"resolutions": {\n    "semver*": "7.6.3"\n  }')).text).toContain("does not resolve to one package");
   });
 
   it("a nested override bump is held with its old version", () => {

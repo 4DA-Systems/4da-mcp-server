@@ -71,3 +71,20 @@ export function namesDataSegment(text: string, env: NodeJS.ProcessEnv): boolean;
 export const OWN_SOURCE_FORMS: ReadonlyArray<readonly [string, string]>;
 /** Round 24b: the prefixes after which the next word is started from PATH too (L2). */
 export const PATH_LAUNCHERS: ReadonlySet<string>;
+/** Round 25 (S6): the verbs that write a manager's own configuration. */
+export const CONFIG_WRITE_VERBS: Readonly<Record<string, readonly string[]>>;
+/** Round 25 (S6): the configuration keys whose write changes no release a manager resolves. */
+export const INERT_CONFIG_KEYS: readonly string[];
+/** Round 25 (S7): the verbs that fetch a named release to disk. */
+export const FETCH_VERBS: Readonly<Record<string, readonly string[]>>;
+/** Round 25 (S3): per manifest kind, the resolver settings that change no release resolved. */
+export const INERT_MANIFEST_KEYS: Readonly<Record<string, readonly string[]>>;
+/** Round 25 (S1): the requirements option lines that change no release resolved. */
+export const REQUIREMENTS_INERT_OPTIONS: readonly string[];
+/** Round 25 (S4): the keys a Cargo dependency entry may carry. */
+export const CARGO_ENTRY_KEYS: ReadonlySet<string>;
+/** Round 25 (S1): the bounds on following include and constraint lines. */
+export const REQUIREMENTS_DEPTH: number;
+export const REQUIREMENTS_FILES: number;
+/** Round 25 (S9): a manager word followed by an expansion as its first operand. */
+export const MANAGER_THEN_EXPANSION: RegExp;

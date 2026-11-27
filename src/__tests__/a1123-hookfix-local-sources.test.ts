@@ -35,6 +35,8 @@ describe("Cargo: path, git and another registry", () => {
     ['mylib = { version = "0.3.0", registry = "corp" }'],
     ['mylib = { version = "0.3.0", git = "https://example.com/x", branch = "main" }'],
   ])("inline: %s", (line) => {
+    // Round 25 (W1): a registry name is resolved from .cargo/config.toml; here a host private by its shape.
+    s.file(".cargo/config.toml", '[registries.corp]\nindex = "sparse+https://cargo.corp.internal/index/"\n');
     const file = s.file("Cargo.toml", CARGO);
     onlyReal(s.edit(file, 'anyhow = "1.0.89"\n', `anyhow = "1.0.89"\n${line}\nregex = "1.11.0"\n`), "mylib", "regex");
   });
@@ -79,7 +81,8 @@ describe("pyproject: direct references, [tool.uv.sources] and Poetry sources", (
   it.each([['{ path = "../mylib" }'], ['{ path = "../mylib", editable = true }'], ['{ git = "https://github.com/acme/mylib", tag = "v0.3.0" }'], ['{ url = "https://example.com/mylib.whl" }'], ['{ index = "corp" }'], ["{ workspace = true }"]])(
     "[tool.uv.sources] mylib = %s: the requirement goes ahead",
     (source) => {
-      const file = s.file("pyproject.toml", PYPROJECT + `\n[tool.uv.sources]\nmylib = ${source}\n`);
+      // Round 25 (W1): the index a source names is declared in the file (private by its shape, explicit).
+      const file = s.file("pyproject.toml", PYPROJECT + `\n[tool.uv.sources]\nmylib = ${source}\n\n[[tool.uv.index]]\nname = "corp"\nurl = "https://pypi.corp.internal/simple"\nexplicit = true\n`);
       onlyReal(s.edit(file, '    "requests==2.32.3",\n', '    "requests==2.32.3",\n    "mylib>=0.3.0",\n    "httpx==0.27.2",\n'), "mylib", "httpx");
     },
   );
@@ -102,7 +105,8 @@ describe("pyproject: direct references, [tool.uv.sources] and Poetry sources", (
     ['{ version = "0.3.0", source = "corp" }'],
     ['[{ version = "0.3.0", python = "<3.11", source = "corp" }, { version = "0.4.0", python = ">=3.11" }]'],
   ])("Poetry mylib = %s", (value) => {
-    const file = s.file("pyproject.toml", POETRY);
+    // Round 25 (W1): the source is declared in the file, at a host private by its shape.
+    const file = s.file("pyproject.toml", `${POETRY}\n[[tool.poetry.source]]\nname = "corp"\nurl = "https://pypi.corp.internal/simple"\npriority = "explicit"\n`);
     onlyReal(s.edit(file, 'requests = "2.32.3"\n', `requests = "2.32.3"\nmylib = ${value}\n`), "mylib");
   });
 

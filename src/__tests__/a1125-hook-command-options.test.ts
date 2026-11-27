@@ -53,6 +53,13 @@ describe("each spelling is held with an avoid on record, and released by the den
   });
 });
 
+describe("round 25 (S7): a fetch verb is judged as an install", () => {
+  it("pip --cert ca.pem download requests==2.19.0 -d wheels", () => {
+    s.ledger([NPM_AVOID, PY_AVOID]);
+    expect(run("pip --cert ca.pem download requests==2.19.0 -d wheels").decision).toBe("deny");
+  });
+});
+
 describe("what installs nothing is not held", () => {
   it.each([
     "npm --audit false ls lodash",
@@ -60,7 +67,6 @@ describe("what installs nothing is not held", () => {
     "npm --json true view lodash@4.17.20 version",
     "uv -q pip list",
     "uv --directory sub pip show requests",
-    "pip --cert ca.pem download requests==2.19.0 -d wheels",
     "pip --cert ca.pem list",
     "pnpm --prefix sub run build",
   ])("%s", (command) => {

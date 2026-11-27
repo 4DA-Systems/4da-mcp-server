@@ -29,6 +29,8 @@ const CASES: Case[] = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.
 let s: Sandbox;
 beforeEach(() => {
   s = sandbox();
+  // Round 25 (S2): the requirements and constraints files these lines name are read at the call: they exist, empty.
+  for (const f of ["requirements.txt", "c.txt", "o.txt", "r.txt", "reqs"]) s.file(f, "");
   s.ledger([]);
 });
 afterEach(() => s.dispose());

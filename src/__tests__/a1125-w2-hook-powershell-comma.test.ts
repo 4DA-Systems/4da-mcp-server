@@ -22,6 +22,8 @@ const REMEDY = "Run the install as a command of its own, each package a separate
 let s: Sandbox;
 beforeEach(() => {
   s = sandbox();
+  // Round 25 (S2): a requirements or constraints file a command names is read at the call: these exist, empty.
+  for (const f of ["requirements.txt", "requirements-dev.txt", "constraints.txt", "c.txt", "o.txt", "req.txt"]) s.file(f, "");
 });
 afterEach(() => s.dispose());
 
