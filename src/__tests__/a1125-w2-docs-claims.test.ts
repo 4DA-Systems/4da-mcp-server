@@ -13,11 +13,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
+import { CREDENTIAL_REFUSAL } from "../argument-screen.js";
 import { WORD_SCAN_CAP } from "../call-budget.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands, MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
-import { BEST_EFFORT_READING, OUTSIDE_COVERAGE, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { BEST_EFFORT_READING, INSTALLED_MALWARE, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -161,6 +162,18 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(next).toContain("Only known shapes are masked: a long random-looking folder name, a sha512 integrity string or a 64-hex digest is shown as it is");
     expect(text("src/tool-args.ts") + text("src/tools/dependency-check.ts")).toContain("an unknown parameter (");
     expect(readme).not.toContain("this stays `review_needed` for the command");
+  });
+
+  it("round 16: the fixed texts the CHANGELOG quotes are the code's", () => {
+    expect(INSTALLED_MALWARE(["crossenv@1.0.1"])).toBe("This project has crossenv@1.0.1 installed, which is recorded as malware: a person must deal with that before any task is delegated.");
+    expect(next).toContain(`("${INSTALLED_MALWARE(["crossenv@1.0.1"])}")`);
+    expect(PROJECT_FINDINGS_LISTED(1)).toContain('1 project-wide finding is listed below (advisories, scope "project")');
+    expect(next).toContain(`opens "${PROJECT_FINDINGS_LISTED(1)}"`);
+    expect(NO_DECISION_CONFLICT).toBe("no recorded-decision conflict for this task");
+    expect(next).toContain(`"${NO_DECISION_CONFLICT}" is said only where no decision conflict was found`);
+    expect(next).toContain(`"${CREDENTIAL_REFUSAL("package name")}"`);
+    expect(CREDENTIAL_REFUSAL("ecosystem")).toContain("not an ecosystem");
+    expect(next).not.toContain("an operand of a runner command, an entry of a snippet");
   });
 
   it("docs lane, round 14: the CHANGELOG quotes the reworded STAYS_REVIEW", () => {
