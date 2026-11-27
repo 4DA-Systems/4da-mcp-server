@@ -133,6 +133,17 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
 
   // Round 13: the docs lane writes the ROUND 13 sentences (docs-w2-confirm.txt) into the CHANGELOG; until then this
   // one fails on purpose, naming the two sentences the CHANGELOG still quotes from round 12.
+  it("round 13: the line cap, the requirements-file cap and the private basis, in the code and the CHANGELOG", () => {
+    const wsik = text("src/tools/what-should-i-know.ts");
+    expect(wsik).toContain("`a line longer than this briefing reads (${MAX_READ_LINE.toLocaleString(\"en-US\")} charac");
+    expect(next).toContain('"a line longer than this briefing reads (2,000 characters)"');
+    expect(wsik).toContain('"the requirements files it names are more than this briefing reads (');
+    expect(next).toContain('"the requirements files it names are more than this briefing reads (8)"');
+    expect(text("src/tools/briefing-confirm.ts")).toContain('"your FOURDA_PRIVATE_PACKAGES list"');
+    expect(next).toContain('its basis is "your FOURDA_PRIVATE_PACKAGES list" when that list names it');
+    expect(next).toContain("is shown as its first four characters and its length");
+  });
+
   it("docs lane, round 13: the CHANGELOG quotes the new last sentence and no longer the raw-text dismissal rule", () => {
     expect(next).toContain(`"${RESTS_ON_DECLARATION}"`);
     expect(next).not.toContain("it stands after a package manager's name in the task: make sure nothing installs it");
@@ -334,13 +345,13 @@ describe("what_should_i_know after confirmation round 10: the list, the bounds a
 });
 
 describe("what_should_i_know after confirmation round 11: one promise, the rest best effort", () => {
-  const promise = "The level rests on your declaration: each package you declare public is checked at the `version` you state. Declare the version the task writes.";
+  const promise = "The level rests on your declaration and on your statement of which words are not packages: each package you declare public is checked at the `version` you state. Declare the version the task writes.";
   it("the promise comes first, and the best-effort sentence is the one the code gives", () => {
     expect(next).toContain(`makes one promise. ${promise}`);
     expect(next).toContain(`- The one promise: ${promise}`);
     expect(readme).toContain(`| \`what_should_i_know\` |`);
     expect(readme).toContain(`${promise} Pass the request in the user's words`);
-    expect(readme).toContain("The briefing makes one promise: each package you declare public is checked at the `version` you state");
+    expect(readme).toContain("The briefing makes one promise, resting on your declaration and on your statement of which words are not packages: each package you declare public is checked at the `version` you state");
     expect(BEST_EFFORT_READING).toBe("The versions this briefing read in the task's commands and snippets are best effort: a version written in a spelling it does not read was not checked, so declare the version the task writes.");
     for (const doc of [readme, next]) expect(doc).toContain(`"${BEST_EFFORT_READING}"`);
   });
@@ -368,7 +379,9 @@ describe("what_should_i_know after confirmation round 12: the wordings the docs 
       expect(doc).not.toContain("Where the task holds a fenced block, a manifest file name or a command");
       expect(doc).not.toContain("Where the task holds a command, a fenced block or a manifest file name");
     }
-    expect(next).toContain("when a package manager's name stands anywhere earlier in the task");
+    // Round 13: the anywhere-earlier rule is gone.
+    for (const doc of [readme, next]) expect(doc).not.toContain("stands anywhere earlier in the task (");
+    expect(next).toContain("is the caller's statement and holds nothing by itself, wherever it stands");
     expect(next).toContain("In a call that declared at least one package, every `safe_to_delegate` reason says");
     expect(readme).toContain("In a call that declared at least one package, every `safe_to_delegate` reason says so");
   });
@@ -380,7 +393,7 @@ describe("what_should_i_know after confirmation round 12: the wordings the docs 
     expect(next).toContain("a refused entry holds the level at `review_needed` at least");
     expect(next).toContain("A requirements file the briefing says it did not read whole offers none of its entries");
     expect(next).toContain('or a PEP 735 `{include-group = "cli"}` entry');
-    expect(next).toContain("A word you put in `not_packages` keeps `what_should_i_know` at `review_needed` when a package manager's name");
+    expect(next).toContain("`not_packages` is your statement of which words of the task are not packages");
   });
   it("the near-miss cap wording in the code (a safeguard; not quoted in the docs)", () => {
     expect(wsik).toContain("than one call checks for near-miss names (${WORD_SCAN_CAP})");
