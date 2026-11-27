@@ -69,3 +69,5 @@ export function windowsPath(path: string, base?: string | null): string | null;
 export function namesDataSegment(text: string, env: NodeJS.ProcessEnv): boolean;
 /** Round 24 (Y1): the dependency value forms that name no registry release, with the managers that define each. */
 export const OWN_SOURCE_FORMS: ReadonlyArray<readonly [string, string]>;
+/** Round 24b: the prefixes after which the next word is started from PATH too (L2). */
+export const PATH_LAUNCHERS: ReadonlySet<string>;
