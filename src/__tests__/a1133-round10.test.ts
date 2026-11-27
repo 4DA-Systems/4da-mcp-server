@@ -16,6 +16,10 @@ import { MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { callBudgetMs, runWithCallBudget, WORD_SCAN_CAP } from "../call-budget.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 
+// A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
+// interrupted by the test timeout (a macOS CI job sat in one of these for 21 minutes until it was cancelled).
+const CHILD_TIMEOUT_MS = 120_000;
+
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
 beforeEach(() => {
@@ -147,7 +151,7 @@ describe("G4: CPU is bounded", () => {
         const u = process.cpuUsage(t0);
         console.log((u.user + u.system) / 1000);`;
       // The task goes in on stdin: a 199 KB environment value is over Linux's limit for one string (E2BIG).
-      const ms = Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input: c.task, maxBuffer: 1 << 24 }).trim().split("\n").pop());
+      const ms = Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input: c.task, maxBuffer: 1 << 24, timeout: CHILD_TIMEOUT_MS }).trim().split("\n").pop());
       expect(ms, c.id).toBeLessThan(3000);
     }
   }, 300_000);

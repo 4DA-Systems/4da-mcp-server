@@ -18,6 +18,10 @@ import { TOOL_REGISTRY } from "../schema-registry.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 import { resultText, serverEntry, stdioSession } from "./helpers/stdio-session.js";
 
+// A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
+// interrupted by the test timeout (a macOS CI job sat in one of these for 21 minutes until it was cancelled).
+const CHILD_TIMEOUT_MS = 120_000;
+
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
 beforeEach(() => {
@@ -165,7 +169,7 @@ describe("P4: CPU bounded on the reviewer's slow inputs and on every reader's tr
       await executeWhatShouldIKnow(null, { task, packages: [] }, null);
       const u = process.cpuUsage(t0);
       console.log((u.user + u.system) / 1000);`;
-    return Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input: task, maxBuffer: 1 << 24 }).trim().split("\n").pop());
+    return Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input: task, maxBuffer: 1 << 24, timeout: CHILD_TIMEOUT_MS }).trim().split("\n").pop());
   };
   const recipes = JSON.parse(readFileSync(path.join(__dirname, "fixtures", "a1134-confirm", "slow-recipes.json"), "utf8")) as Array<{ id: string; unit: string; head?: string; length: number }>;
   const grow = (unit: string, length: number, head = "") => `${head}${unit.repeat(Math.ceil(length / unit.length)).slice(0, length)}`;

@@ -14,6 +14,10 @@ import { RAW_SOURCE, STAYS_REVIEW } from "../tools/briefing-command-check.js";
 import { canonicalCommands } from "../tools/briefing-canonical.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 
+// A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
+// interrupted by the test timeout (a macOS CI job sat in one of these for 21 minutes until it was cancelled).
+const CHILD_TIMEOUT_MS = 120_000;
+
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
 beforeEach(() => {
@@ -163,7 +167,7 @@ describe("E4: minors", () => {
       await executeWhatShouldIKnow(null, { task, packages: [], not_packages: Array.from({ length: 100 }, (_, i) => "w" + i) }, null);
       const u = process.cpuUsage(t0);
       console.log((u.user + u.system) / 1000);`;
-    const ms = Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" }).trim().split("\n").pop());
+    const ms = Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: CHILD_TIMEOUT_MS }).trim().split("\n").pop());
     expect(ms).toBeLessThan(1500);
   }, 120_000);
   it.each(["npm it zqxok", "npm install-test zqxok"])("npm's %s is an install verb", (task) => {

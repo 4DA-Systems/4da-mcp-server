@@ -17,6 +17,10 @@ import { foldForNames, requirementsPairs, wordsAfterManager } from "../tools/bri
 import { MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
 
+// A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
+// interrupted by the test timeout (a macOS CI job sat in one of these for 21 minutes until it was cancelled).
+const CHILD_TIMEOUT_MS = 120_000;
+
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
 beforeEach(() => {
@@ -151,7 +155,7 @@ describe("R2: single characters repeated to 199,990: under 3 s of child CPU each
         const u = process.cpuUsage(t0);
         console.log((u.user + u.system) / 1000);
       }`;
-    return execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input, maxBuffer: 1 << 24 }).trim().split("\n").map(Number);
+    return execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input, maxBuffer: 1 << 24, timeout: CHILD_TIMEOUT_MS }).trim().split("\n").map(Number);
   };
   const CHARS = ["\n", "\r\n", " ", "\t", " ", "\f", "\v", "​", "`", "~", "#", "-", "=", "<", ">", "@", '"', "'", "\\", "(", ")", "[", "]", "{", "}", ",", "."];
   it.skipIf(!fs.existsSync(dist))("alone and between a word at each end, with packages [] and one not_packages word", () => {
