@@ -11,8 +11,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { manifestPairs, pep508, unreadCommandLines, wordsAfterManager } from "../tools/briefing-command-check.js";
-import { MANAGER_NAMES } from "../tools/briefing-canonical.js";
+import { manifestPairs, pep508, unreadCommandLines } from "../tools/briefing-command-check.js";
 import { callBudgetMs, runWithCallBudget, WORD_SCAN_CAP } from "../call-budget.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
 
@@ -105,22 +104,9 @@ describe("G2: the tying forms, exactly", () => {
   });
 });
 
-describe("G3: one list of manager names", () => {
-  const FORMS = [(m: string) => `${m} add zqxcrit4`, (m: string) => `${m} add \\\n  zqxcrit4`, (m: string) => "```\n" + `${m} add\nzqxcrit4\n` + "```"];
-  it.each(MANAGER_NAMES.flatMap((m) => FORMS.map((f, i) => [`${m} #${i}`, f(m)] as const)))("%s: a dismissed word after it is held", (_label, task) => {
-    expect(wordsAfterManager(task)("zqxcrit4")).toBe(true);
-  });
-  it("the reviewer's forms end review_needed", async () => {
-    npm();
-    for (const task of ["With hatch, add zqxcrit4 to the project.", "Run mamba install zqxcrit4", "pixi add zqxcrit4", "deno add npm:zqxcrit4", "yarnpkg add zqxcrit4", "cargo-binstall zqxcrit4", "rye add zqxcrit4"]) {
-      const r = await brief({ task, packages: [], not_packages: ["zqxcrit4"] });
-      expect(level(r), task).not.toBe("safe_to_delegate");
-    }
-  });
-});
-
+// Round 13, U1: the raw-text dismissed-word rule (wordsAfterManager) and its tests are removed.
 describe("G4: CPU is bounded", () => {
-  const many = "add " + Array.from({ length: WORD_SCAN_CAP + 500 }, (_, i) => `zq${i.toString(36).padStart(4, "q")}lib`).join(". add ");
+  const many = "add " + Array.from({ length: WORD_SCAN_CAP + 500 }, (_, i) => `zq${i.toString(36).padStart(4, "q")}lib`).join(".\nadd ");
   it("(b) past the cap of distinct words: review_needed at least, and the reason says split the task", async () => {
     npm();
     live ??= await h.live();

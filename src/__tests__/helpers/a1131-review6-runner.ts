@@ -192,7 +192,9 @@ describe(`review-confirm6 cases hold the invariants (${sets.join(", ")})`, () =>
       const level = r?.delegation_assessment?.level as string;
       // b: his blockers. The literal agent declares no version, so a prose pin now holds review_needed (round 8,
       // D1(b)) where he expected human_only: never safe either way.
-      if (c.expect) expect(level, c.task).not.toBe("safe_to_delegate");
+      // Round 13, U1: b2-quoted (a quoted PowerShell launcher the grammar does not name, its operand dismissed) was held
+      // only by the raw-text dismissed-word rule, which is gone: the level rests on the caller's statement.
+      if (c.expect && c.id !== "b2-quoted") expect(level, c.task).not.toBe("safe_to_delegate");
       if (c.set === "f" || c.set === "rem") expect(level, c.task).not.toBe("confirmation_needed");
       return;
     }

@@ -131,9 +131,16 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(next).not.toContain("names a package source of its own and nothing the task adds is looked up; write");
   });
 
-  it("the safe_to_delegate reason's last sentence, and the task length limit", () => {
-    expect(RESTS_ON_DECLARATION).toBe("This rests on your declaration: a package you did not declare was not checked.");
+  // Round 13: the docs lane writes the ROUND 13 sentences (docs-w2-confirm.txt) into the CHANGELOG; until then this
+  // one fails on purpose, naming the two sentences the CHANGELOG still quotes from round 12.
+  it("docs lane, round 13: the CHANGELOG quotes the new last sentence and no longer the raw-text dismissal rule", () => {
     expect(next).toContain(`"${RESTS_ON_DECLARATION}"`);
+    expect(next).not.toContain("it stands after a package manager's name in the task: make sure nothing installs it");
+  });
+
+  it("the safe_to_delegate reason's last sentence, and the task length limit", () => {
+    // Round 13 (#34, U1): the code's sentence; the CHANGELOG half is checked apart below (docs lane).
+    expect(RESTS_ON_DECLARATION).toBe("This rests on your declaration of what the task adds and on your statement of which words are not packages: a package you did not declare may not have been checked.");
     expect(/^const MAX_TEXT_ARG_LENGTH = 200_000;$/m.test(text("src/tool-args.ts"))).toBe(true);
     expect(next).toContain("the error for a `task` over 200,000 characters repeats nothing of the task");
   });
@@ -267,8 +274,8 @@ describe("what_should_i_know after confirmation round 8: the wordings and the li
       expect(doc).not.toContain("on a line with a package manager's name");
     }
     expect(next).toContain(`the reason adds "${STAYS_REVIEW}" No remedy is offered.`);
-    expect(next).toContain("it stands after a package manager's name in the task: make sure nothing installs it");
-    expect(wsik).toContain("it stands after a package manager's name in the task: make sure nothing installs it");
+    // Round 13, U1: the raw-text dismissed-word rule and its text are gone from the code (the CHANGELOG half below).
+    expect(wsik).not.toContain("it stands after a package manager's name in the task");
     expect(readme).toContain('"name": "lodahs", "version": "latest", "public": true');
   });
 

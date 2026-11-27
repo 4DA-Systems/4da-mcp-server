@@ -10,8 +10,10 @@
  *
  * Cost (round 11, P4): the task is split into lines once; fences are found in that pass, and every line belongs to
  * at most one segment (a fenced block, or a run of lines between fences). Each reader walks a segment once. At most
- * MAX_SNIPPETS snippets are read per call and the call's deadline is checked in every outer loop: past either, the
- * reading stops and the call is marked (call-budget.ts), which says "split the task" and holds review_needed.
+ * MAX_SNIPPETS snippets are read per call, and the call's deadline is checked between snippets and every 256 lines:
+ * past either, the remaining snippets are not read and the call is marked (call-budget.ts), which says so and holds
+ * review_needed. A line already being read is read to its end; lines are collapsed and capped at MAX_READ_LINE, so
+ * one line's cost is bounded (measured: the CPU tests).
  */
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { noteReadCut, readingStopped } from "../call-budget.js";
@@ -47,8 +49,15 @@ export interface SnippetRead {
 }
 
 const OPS = "(?:===|==|~=|!=|>=|<=|<|>)";
-const CLAUSE = `${OPS}\\s*[\\w.*+!-]+`;
-const PEP508 = new RegExp(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\\s*(?:\\[\\s*[A-Za-z0-9._-]+(?:\\s*,\\s*[A-Za-z0-9._-]+)*\\s*\\])?\\s*(\\(\\s*)?(${CLAUSE}(?:\\s*,\\s*${CLAUSE})*)?(\\s*\\))?$`);
+const CLAUSE = `${OPS}[\\w.*+!-]+`;
+// Round 13, U4: no whitespace class in the requirement grammar at all. The line is collapsed (each run of blanks one
+// space) and the blanks around brackets, parentheses, commas, `@` and operators are taken out first, so each
+// position is matched one way (three adjacent `\s*` cost 50 s on 6,000 blanks).
+const PEP508 = new RegExp(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\\])?(\\()?(${CLAUSE}(?:,${CLAUSE})*)?(\\))?$`);
+/** At most this long, after collapsing, is a requirement line this reader reads; a longer one is a line it cannot read. */
+export const MAX_READ_LINE = 2_000;
+/** A reading copy of a line: each run of blanks and tabs one space (round 13, U4). */
+export const collapseBlanks = (line: string) => line.replace(/[ \t\f\v\u00a0]+/g, " ");
 
 /**
  * A PEP 508 requirement line, as far as this reader reads one: a pair, "skip" (blank, a comment, an option line),
@@ -56,17 +65,19 @@ const PEP508 = new RegExp(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\\s*(?:\
  * extras (blanks allowed), a parenthesised spec (`name (<2)`), markers after `;` and trailing `--hash` options.
  */
 export function pep508(line: string): { name: string; spec?: string; url?: true } | "skip" | null {
-  let l = line.trim();
+  let l = collapseBlanks(line).trim();
+  if (l.length > MAX_READ_LINE) return null;
   if (!l || l.startsWith("#")) return "skip";
   if (/^-(?:r|c|e|-requirement|-constraint|-editable|-index-url|-extra-index-url|-find-links|i|f|-pre|-trusted-host|-only-binary|-no-binary|-prefer-binary|-hash)\b/.test(l)) return "skip";
-  l = l.replace(/(?:\s+--hash[= ]\S+)+\s*$/, "").trim();
+  l = l.replace(/(?: --hash[= ][^ ]+)+ ?$/, "").trim();
   const semi = l.indexOf(";");
   if (semi >= 0) l = l.slice(0, semi).trim();
-  const url = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[^\]]*\])?\s*@\s*\S+$/.exec(l);
+  l = l.replace(/ ?(===|==|~=|!=|>=|<=|<|>|[[\](),@]) ?/g, "$1");
+  const url = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\[[^\]]*\])?@[^ ]+$/.exec(l);
   if (url) return { name: url[1], url: true };
   const m = PEP508.exec(l);
   if (!m || Boolean(m[2]) !== Boolean(m[4])) return null;
-  const spec = m[3]?.replace(/\s+/g, "");
+  const spec = m[3];
   if (spec !== undefined && checkableSpec("PyPI", spec) === null) return null;
   return { name: m[1], ...(spec ? { spec } : {}) };
 }
@@ -221,7 +232,7 @@ export function readSnippets(task: string): SnippetRead {
       // The one-line form: "Add to requirements.txt: name ~= 1.0 (why)." A tail it cannot read is said.
       const tail = /^[^\n:]{0,40}:[ \t]*(\S.{0,300})$/.exec(line.slice(named.index + named[0].length));
       if (tail && another()) {
-        const t = tail[1].replace(/\s*\([^()]*\)\s*[.!]?\s*$/, "").replace(/[.,;!]+\s*$/, "").replace(/`/g, "").trim();
+        const t = collapseBlanks(tail[1]).replace(/ ?\([^()]*\) ?[.!]? ?$/, "").replace(/[.,;!]+ ?$/, "").replace(/`/g, "").trim();
         const parts = t.split(/\s*,\s+(?=[A-Za-z])|\s+and\s+/);
         if (!(t && (requirementOk(t) ? requirement(t) : parts.every(requirementOk) && parts.every(requirement)))) notWhole("PyPI", "a line it cannot read", t.slice(0, 300));
       }

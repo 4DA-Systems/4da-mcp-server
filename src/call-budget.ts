@@ -16,9 +16,12 @@
  *   dependency_health, upgrade_planner) size their own waits from what is left
  *   (`withinCallBudget`), and answer with what they have: the parts that did
  *   not finish are NOT CHECKED, as they are for any OSV outage, never clean.
- * - Whatever is still running when the budget ends is cut off by the
- *   dispatcher (`raceCallBudget`), which answers in the tool's place: every
- *   item `unknown`, or NOT CHECKED, with the budget that was actually spent.
+ * - When the budget ends while a call is waiting on a lookup, the dispatcher
+ *   (`raceCallBudget`) answers in the tool's place: every item `unknown`, or
+ *   NOT CHECKED, with the budget that was actually spent. It cannot cut a
+ *   synchronous step: the readers check the deadline themselves between stages
+ *   and between lines (briefing-snippets.ts, briefing-command-check.ts), and their
+ *   cost is bounded by measurement (the CPU tests), not by the dispatcher.
  *
  * Nothing is aborted. The lookups a late call started run on to their own
  * timeouts and fill the caches, so the same call made again answers from

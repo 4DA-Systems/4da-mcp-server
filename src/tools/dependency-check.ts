@@ -168,6 +168,16 @@ export const dependencyCheckTool = {
  * never waits on it or changes with it.
  */
 export async function runDependencyCheck(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
+  const answer = await checkAndRecord(db, params, liveIntel);
+  return shapeDependencyCheck(answer, params.response_format);
+}
+
+/**
+ * Round 13, U3: the one function that answers items AND records them in the check ledger, private outcomes included
+ * (`not_checked: "private"` with the private rule's scope). dependency_check and the briefing's declared items that
+ * the project's configuration makes private both go through it: no second implementation of a ledger line.
+ */
+export async function checkAndRecord(db: FourDADatabase | null, params: DependencyCheckParams, liveIntel: LiveIntelligence | null) {
   const answer = await executeDependencyCheck(db, params, liveIntel);
   // A withheld name is recorded as "private" only when a private-registry rule covers it, asked of the
   // rules themselves (check-ledger.ts withheldKind); otherwise "local_source", which the hook holds.
@@ -177,7 +187,7 @@ export async function runDependencyCheck(db: FourDADatabase | null, params: Depe
     privateRule: liveIntel?.privateRegistryRuleCovers ? (eco, name) => liveIntel.privateRegistryRuleCovers(eco, name) : null,
     privateScope: liveIntel?.privateRecordScope ? (eco, name) => liveIntel.privateRecordScope(eco, name) : null,
   });
-  return shapeDependencyCheck(answer, params.response_format);
+  return answer;
 }
 
 export async function executeDependencyCheck(

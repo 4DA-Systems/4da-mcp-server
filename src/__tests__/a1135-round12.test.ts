@@ -13,8 +13,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
-import { foldForNames, requirementsPairs, wordsAfterManager } from "../tools/briefing-command-check.js";
-import { MANAGER_NAMES } from "../tools/briefing-canonical.js";
+import { requirementsPairs } from "../tools/briefing-command-check.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
 
 // A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
@@ -38,33 +37,7 @@ const brief = async (args: Record<string, unknown>) => {
 const level = (r: Record<string, any>) => r.delegation_assessment.level as string;
 const npm = () => h.npmProject({}, {}, {});
 
-describe("R1: a dismissed word after a manager name anywhere earlier in the task", () => {
-  it.each([
-    "npm install\\\n  zqxfoo",
-    "npm install^\n  zqxfoo",
-    "npm install`\n  zqxfoo",
-    "```npm docs about zqxfoo```",
-    "npm zqx­foo",
-    "npm zqx​foo",
-    "Use pnpm.\n\nLater, much later, add zqxfoo to the docs.",
-    "ｎｐｍ install ZQXFOO",
-  ])("%j with zqxfoo dismissed: held", async (task) => {
-    expect(wordsAfterManager(task)("zqxfoo")).toBe(true);
-    npm();
-    const r = await brief({ task, packages: [], not_packages: ["zqxfoo"] });
-    expect(level(r)).not.toBe("safe_to_delegate");
-  });
-  it("a word only BEFORE any manager name is not held by this rule", () => {
-    expect(wordsAfterManager("Rename zqxfoo, then run npm test")("zqxfoo")).toBe(false);
-  });
-  it.each(MANAGER_NAMES.filter((_, i) => i % 4 === 0))("%s far before the word: held", (m) => {
-    expect(wordsAfterManager(`${m}\n${"text\n".repeat(500)}zqxfoo@1.0.0`)("zqxfoo")).toBe(true);
-  });
-  it("default-ignorables are removed and case is folded", () => {
-    expect(foldForNames("ZQX­FOO‍️")).toBe("zqxfoo");
-  });
-});
-
+// Round 13, U1: the raw-text dismissed-word rule (wordsAfterManager) and its tests are removed.
 describe("R3: every safe reason of a call that declared a package carries the best-effort sentence", () => {
   // Verified on the vendored worlds (helpers/a1134-review9-runner.ts, a1135-review10-runner.ts): there the scan is
   // ready and safe answers occur; this harness has no ready scan. Here: the rule as written in the code.

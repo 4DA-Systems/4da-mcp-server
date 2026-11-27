@@ -138,7 +138,7 @@ describe("P2: only public, screened declarations are sent", () => {
     try {
       const r = await brief("add zqxcorp-auth", { packages: [{ ecosystem: "npm", name: "zqxcorp-auth", public: true }] });
       expect(namesSent().map((n) => n.name)).not.toContain("zqxcorp-auth");
-      expect(r.task_packages.private).toContainEqual(expect.objectContaining({ name: "zqxcorp-auth", basis: "this project's registry configuration" }));
+      expect(r.task_packages.private).toContainEqual(expect.objectContaining({ name: "zqxcorp-auth", basis: "your FOURDA_PRIVATE_PACKAGES list" }));
     } finally {
       vi.unstubAllEnvs();
     }

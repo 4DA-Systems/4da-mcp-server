@@ -124,34 +124,7 @@ describe("D2: C3 is a courtesy check on an exact list", () => {
   });
 });
 
-describe("D3: a dismissed word after a package manager's name keeps review_needed", () => {
-  it.each([
-    '```\n& "C:\\Program Files\\nodejs\\npm.cmd" install zqxevil\n```',
-    "```\n& 'C:\\Program Files\\nodejs\\npm.cmd' install zqxevil\n```",
-    "ｎｐｍ install zqxevil",
-    "NODE_ENV=dev npm.exe i zqxevil",
-    "py -m pip install zqxevil",
-    "python -m pip install zqxevil",
-    "npm install \\\n  zqxevil",
-    "```\npnpm add \\\n  --silent\nzqxevil\n```",
-  ])("%s", async (task) => {
-    npm();
-    const r = await brief({ task, packages: [], not_packages: ["zqxevil"] });
-    expect(level(r)).not.toBe("safe_to_delegate");
-    expect(r.delegation_assessment.reason).toMatch(/you said zqxevil is not a package; it stands (?:after a package manager's name|where a package name stands)/i);
-  });
-  it("a word before the manager's name on its line is no operand of it (G7c d01)", async () => {
-    npm();
-    const r = await brief({ task: "Set NPM_TOKEN in the CI config, then npm install zqxok", packages: [{ ecosystem: "npm", name: "zqxok", public: true }], not_packages: ["CI", "NPM_TOKEN"] });
-    expect(r.delegation_assessment.reason).not.toMatch(/you said (?:CI|NPM_TOKEN) is not a package/);
-  });
-  it("a dismissed word in plain prose is no command", async () => {
-    npm();
-    const r = await brief({ task: "Fix the zqxevil test in src/app.ts", packages: [], not_packages: ["zqxevil"] });
-    expect(r.delegation_assessment.reason).not.toContain("you said zqxevil");
-  });
-});
-
+// Round 13, U1: the raw-text dismissed-word rule (D3) and its tests are removed.
 describe("D4: consumption is by occurrence", () => {
   it.each([
     ["Keep smallvec at 1.6.0 and add rmp-serde:\n```\ncargo add rmp-serde -F smallvec\n```", "smallvec"],

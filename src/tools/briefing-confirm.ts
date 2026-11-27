@@ -16,6 +16,7 @@
 
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { credentialShape, looksLikeSecret } from "./briefing-task-screen.js";
+import { bareName, foldForNames } from "./briefing-command-check.js";
 import { lengthProblem, MAX_NAME_ARG_LENGTH, MAX_VERSION_ARG_LENGTH } from "../tool-args.js";
 import { quoteThirdParty } from "../untrusted-text.js";
 import { ecosystemKey, type TaskWordSeen } from "./briefing-new-packages.js";
@@ -73,7 +74,7 @@ export interface CheckedIndex {
 export interface PrivateIndex {
   name: string;
   ecosystem: string;
-  basis: "marked private by you" | "this project's registry configuration" | "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" | "the manifest snippet in the task takes it from git, a path, a registry or the workspace, not the public registry";
+  basis: "marked private by you" | "this project's registry configuration" | "your FOURDA_PRIVATE_PACKAGES list" | "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" | "the manifest snippet in the task takes it from git, a path, a registry or the workspace, not the public registry";
 }
 
 export interface TaskPackages {
@@ -103,7 +104,7 @@ export const SCAN_STILL_READS =
 export const SOURCE_HELD = "not looked up: the task names a package source of its own; if it is on the public registry, check it with dependency_check";
 
 /** The last sentence of every safe_to_delegate reason (contract K1). */
-export const RESTS_ON_DECLARATION = "This rests on your declaration: a package you did not declare was not checked.";
+export const RESTS_ON_DECLARATION = "This rests on your declaration of what the task adds and on your statement of which words are not packages: a package you did not declare may not have been checked.";
 /** Round 11, P1: the task-text reading is best effort. */
 export const BEST_EFFORT_READING = "The versions this briefing read in the task's commands and snippets are best effort: a version written in a spelling it does not read was not checked, so declare the version the task writes.";
 
@@ -321,7 +322,14 @@ export function sameName(a: string, b: string, ecosystem: CheckEcosystem): boole
 /** Whether a word the task gives is settled by a `not_packages` word, in any ecosystem it was read for. */
 export function dismissedBy(word: string, ecosystems: readonly string[], notPackages: readonly string[]): string | undefined {
   const ecos = (ecosystems.length > 0 ? ecosystems : ECOSYSTEMS).filter((e): e is CheckEcosystem => (ECOSYSTEMS as readonly string[]).includes(e));
-  return notPackages.find((n) => n.toLowerCase() === word.toLowerCase() || ecos.some((e) => sameName(n, word, e)));
+  // Round 13, U1: one fold for every dismissal: NFKC, default-ignorables out, case, the bare name (version, extras and
+  // quotes off), then each ecosystem's own rule (PEP 503 for PyPI).
+  const fold = (x: string) => bareName(foldForNames(x));
+  const w = fold(word);
+  return notPackages.find((n) => {
+    const f = fold(n);
+    return f === w || ecos.some((e) => sameName(f, w, e));
+  });
 }
 
 /**

@@ -284,7 +284,7 @@ export function gemfileDeclared(content: string): GemfileDeclared | { error: str
       // `<<~EOS` starts a heredoc: its body, up to the terminator, is no code.
       const doc = /<<[~-]?(['"]?)([A-Za-z_]\w*)\1/.exec(code);
       if (doc) heredoc = doc[2];
-      const declaredKey = /^git_source\s*\(?\s*:(\w+)/.exec(code);
+      const declaredKey = /^git_source(?:\s*\()?\s*:(\w+)/.exec(code);
       if (declaredKey) gitKeys.add(declaredKey[1]);
       const gem = /^gem(?:\s+|\s*\(\s*)(['"])([^'"]*)\1/.exec(raw);
       const guarded = /(?<![\w.:])(?:if|unless)(?![\w?!:])/.test(code) || open.other > 0;

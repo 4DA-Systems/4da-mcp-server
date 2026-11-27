@@ -8,8 +8,9 @@
  *   how far the requested upgrade jumps;
  * - this project's other version-confirmed findings, counted separately;
  * - recorded decisions and decision windows relevant to the task;
- * - a delegation verdict that ONLY version-confirmed evidence about the task
- *   (or install drift actually running) can raise.
+ * - a delegation verdict, raised for example by version-confirmed evidence about the task, a finding on a checked
+ *   package, install drift actually running, a decision conflict, or what the briefing noticed it could not read
+ *   (each cause is listed in K1).
  *
  * THE CONTRACT OF THE LEVEL (round 11, P1). One promise, first: THE LEVEL RESTS ON YOUR DECLARATION. Each package
  * you declare public is checked at the `version` you state; declare the version the task writes. Second, and
@@ -20,8 +21,9 @@
  *     and every package the caller declared public); whether anything still waits; and what this briefing noticed
  *     it could not read, each of which holds review_needed at least: a command or snippet it says it did not read
  *     whole (K3), a package-source spelling of the C3 list, a refused argument, a word the screen withheld where a
- *     package stands, a dismissed name (compared folded and without its version or scope decoration) that stands where a
- *     package stands, or after a package manager's name anywhere earlier in the task (D3, round 12), a command
+ *     package stands, a dismissed name the briefing itself read and reported (an operand of a command it reads, an entry of a snippet
+ *     it reads, a version form on it, a near miss; compared by dismissedBy: folded, bare name, each ecosystem's rule;
+ *     round 13, U1), a command
  *     of a tool it does not read (`xargs` before a manager name; a manager it does not read followed by its own
  *     install verb, such as `gem install`, `composer require`, `brew install`), more candidate names than one call
  *     can declare (m7), and a task longer than one call reads (too many snippets or distinct words, or the time
@@ -73,7 +75,7 @@
  */
 
 import { WORD_SCAN_CAP, wordScanCut } from "../call-budget.js";
-import { MAX_SNIPPETS } from "./briefing-snippets.js";
+import { collapseBlanks, MAX_READ_LINE, MAX_SNIPPETS } from "./briefing-snippets.js";
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import { checkRequestedVersions, gateTaskNames, MAX_REQUESTED, type UnverifiedWord, readTaskVersions, sayRequested, type RequestedVersion, type RequestedVersionFinding, type TaskWordWithheld } from "./briefing-requested-versions.js";
 import {
@@ -106,10 +108,11 @@ import {
   type PrivateIndex,
   type TaskPackages,
 } from "./briefing-confirm.js";
-import { credentialShape, knownCompromised, knownMalwareOnly } from "./briefing-task-screen.js";
+import { credentialShape, knownCompromised, knownMalwareOnly, looksLikeSecret } from "./briefing-task-screen.js";
 import { nameProblem } from "./dependency-check-screen.js";
 import { checkableSpec } from "./briefing-names.js";
 import { recordVerdicts, type CheckedItem } from "../check-ledger.js";
+import { checkAndRecord, type DependencyCheckParams } from "./dependency-check.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import { ADVISORY_SUMMARY_MAX, quoteThirdParty } from "../untrusted-text.js";
 import { privateAdvisoryText, privateAnywhere, privateTaskPackages, type PrivateTaskPackage } from "./briefing-private.js";
@@ -157,7 +160,7 @@ import {
   type WisdomRecallMode,
 } from "./briefing-wisdom.js";
 import { maxOf, pushAll } from "../array-utils.js";
-import { STAYS_REVIEW, RAW_SOURCE, unreadCommandLines, wordsAfterManager, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
+import { STAYS_REVIEW, RAW_SOURCE, unreadCommandLines, readingText, requirementsPairs, strictEvidence, unreadableReason } from "./briefing-command-check.js";
 import * as fs from "node:fs";
 
 // ============================================================================
@@ -394,7 +397,7 @@ const UNTRUSTED =
 export const whatShouldIKnowTool = {
   name: "what_should_i_know",
   description:
-    "Pre-task briefing built from the task outward. The level rests on your declaration: each package you declare public is checked at the `version` you state. Declare the version the task writes. The briefing also checks versions it happens to read in the task (on a command's operand, in a snippet, beside a name); that reading is best effort and promises nothing: a version written in a spelling it does not read is not checked. Pass the request as it was given, in the user's words: do not correct spellings or drop names (a misspelt package name may be the finding). Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in. Declare public: false for anything the task or the project takes from a private registry, an index of its own, git or a path (never looked up for the task; the project's own scan still reads installed dependencies); a name declared public: true is sent to the public registry and checked in this call, and needs `version` (the version or range you will write, or \"latest\") for a complete answer; `packages: []` for a task that changes no dependency; words of the task that are not packages go in `not_packages`. A call without `packages` answers confirmation_needed. The level follows from the project's scan, the verdicts of what was looked up (the briefing's own lookups and what you declare public), whether anything waits, and what the briefing noticed it could not read (a command or snippet it says it did not read whole, a package-source spelling it knows), which holds review_needed. to_confirm is what the briefing noticed in the text, never a complete reading: declare every package the task adds or changes, in each ecosystem. A name it noticed comes back in task_packages.to_confirm (confirmation_needed): do task_packages.next_step. For each dependency the task names (exact names from the lockfiles, plus named families: \"all tauri plugins\" adds the project's tauri-* and @tauri-apps/* packages): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the declared version, and at versions it happens to read on that package (best effort); malware is human_only. It adds the project's other confirmed findings, install drift, your recorded decisions and conflicts with them. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); only version-confirmed evidence, a finding on a checked package, running install drift or a decision conflict raises it, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
+    "Pre-task briefing built from the task outward. The level rests on your declaration and on your statement of which words are not packages: each package you declare public is checked at the `version` you state. Declare the version the task writes. The briefing also checks versions it happens to read in the task (on a command's operand, in a snippet, beside a name); that reading is best effort and promises nothing: a version written in a spelling it does not read is not checked. Pass the request as it was given, in the user's words: do not correct spellings or drop names (a misspelt package name may be the finding). Pass `packages` on the FIRST call: every package the task adds, pins, bumps, downgrades or swaps in. Declare public: false for anything the task or the project takes from a private registry, an index of its own, git or a path (never looked up for the task; the project's own scan still reads installed dependencies); a name declared public: true is sent to the public registry and checked in this call, and needs `version` (the version or range you will write, or \"latest\") for a complete answer; `packages: []` for a task that changes no dependency; words of the task that are not packages go in `not_packages`. A call without `packages` answers confirmation_needed, or human_only when something it looked up on its own is malicious or critical. The level follows from the project's scan, the verdicts of what was looked up (the briefing's own lookups and what you declare public), whether anything waits, and what the briefing noticed it could not read (a command or snippet it says it did not read whole, a package-source spelling it knows), which holds review_needed. to_confirm is what the briefing noticed in the text, never a complete reading: declare every package the task adds or changes, in each ecosystem. A name it noticed comes back in task_packages.to_confirm (confirmation_needed): do task_packages.next_step. For each dependency the task names (exact names from the lockfiles, plus named families: \"all tauri plugins\" adds the project's tauri-* and @tauri-apps/* packages): installed versions, version-confirmed vulnerabilities with fix versions, majors a requested upgrade crosses (for \"latest\": the newest stable release), and newer releases the desktop app's feed recorded (newer_releases). For each package checked that the task adds (new_packages) or pins (requested_versions): dependency_check's verdict at the declared version, and at versions it happens to read on that package (best effort); malware is human_only. It adds the project's other confirmed findings, install drift, your recorded decisions and conflicts with them. delegation_assessment is safe_to_delegate | review_needed | human_only | unknown | confirmation_needed (you act first: do task_packages.next_step); it is raised, for example, by version-confirmed evidence, a finding on a checked package, running install drift, a decision conflict or something it could not read, and without a ready scan it is \"unknown\", never \"safe\". For an upgrade, follow with upgrade_impact.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -429,7 +432,7 @@ export const whatShouldIKnowTool = {
         type: "array",
         maxItems: 100,
         items: { type: "string" },
-        description: "Words of the task that are not packages (at most 100): not looked up; the scan still reads installed ones.",
+        description: "Words that are not packages, at most 100 (your statement): not looked up; the scan still reads installed ones.",
       },
       project_path: {
         type: "string",
@@ -474,15 +477,74 @@ function getOpenDecisionWindows(db: FourDADatabase): WindowRow[] {
 // Execute
 // ============================================================================
 
+/** Round 13 (#62): one basis wording per true cause of a private status from the project's side. */
+const privateBasis = (why: string | null | undefined): PrivateIndex["basis"] => (why && /^FOURDA_PRIVATE_PACKAGES lists /.test(why) ? "your FOURDA_PRIVATE_PACKAGES list" : "this project's registry configuration");
+
+/**
+ * Round 13, U2: the one place where caller- or file-supplied strings leave in an answer. Every string the caller gave
+ * (task words, names, versions, not_packages words, field keys, ecosystems, file names, at any depth) and every line of
+ * a file the briefing read for the task is cut into words; a word of a credential's shape (the task screen's own
+ * tests: credentialShape, looksLikeSecret) is rendered by shape only, its first four characters and its length,
+ * wherever it stands in any text of the answer. The echoed `task` is the caller's own input and is left as given.
+ */
+const SUPPLIED = new WeakMap<object, string[]>();
+const suppliedWords = (value: unknown, out: string[], depth = 0): void => {
+  if (depth > 6 || out.length > 20_000) return;
+  if (typeof value === "string") {
+    for (const w of value.slice(0, 200_000).split(/[\s"'`,;()[\]{}<>=|&]+/)) if (w.length >= 8 && w.length <= 2000) out.push(w);
+    return;
+  }
+  if (Array.isArray(value)) for (const v of value.slice(0, 400)) suppliedWords(v, out, depth + 1);
+  else if (value && typeof value === "object") for (const [k, v] of Object.entries(value).slice(0, 400)) {
+    suppliedWords(k, out, depth + 1);
+    suppliedWords(v, out, depth + 1);
+  }
+};
+/** Note a text the briefing read for this call (a requirements file): its credential-shaped words are screened too. */
+const noteSupplied = (params: object, text: string) => suppliedWords(text, SUPPLIED.get(params) ?? []);
+function screenAnswer<T>(answer: T, words: readonly string[]): T {
+  const secrets = [...new Set(words.filter((w) => credentialShape(w) || looksLikeSecret(w)))].sort((a, b) => b.length - a.length);
+  if (secrets.length === 0) return answer;
+  const shape = (w: string) => `${w.slice(0, 4)}... (${w.length} characters)`;
+  const clean = (text: string) => secrets.reduce((t, w) => (t.includes(w) ? t.split(w).join(shape(w)) : t), text);
+  const walk = (v: unknown, depth: number): unknown => {
+    if (typeof v === "string") return clean(v);
+    if (depth > 12) return v;
+    if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, depth + 1)]));
+    return v;
+  };
+  const out = walk(answer, 0) as Record<string, unknown>;
+  if (answer && typeof answer === "object" && "task" in (answer as object)) out.task = (answer as Record<string, unknown>).task;
+  return out as T;
+}
+
 export async function executeWhatShouldIKnow(
   db: FourDADatabase | null,
   params: WhatShouldIKnowParams,
   liveIntel: BriefingLiveIntel | null = getLiveIntelligence(),
 ): Promise<WhatShouldIKnowResult> {
+  const words: string[] = [];
+  suppliedWords(params, words);
+  const own = { ...params };
+  SUPPLIED.set(own, words);
+  const answer = await executeBriefing(db, own, liveIntel);
+  return screenAnswer(answer, words);
+}
+
+async function executeBriefing(
+  db: FourDADatabase | null,
+  params: WhatShouldIKnowParams,
+  liveIntel: BriefingLiveIntel | null,
+): Promise<WhatShouldIKnowResult> {
   // Names are read from the task as a person reads it: `%40acme%2Fui` is @acme/ui, never `40acme`
   // and `2fui` (which went out as package names; black-box round 3).
   // Markup a chat wraps a command in (`<code>`, `**`) is dropped and line continuations are joined (V3, V4).
-  const task = readingText(readableText(params.task));
+  // Round 13, U4: every reader works on a reading copy: each run of blanks and tabs inside a line is one space, and a
+  // line longer than MAX_READ_LINE after that is a line it cannot read (left out of the copy, said: not read whole).
+  const collapsed = readingText(readableText(params.task)).split("\n").map(collapseBlanks);
+  const longLine = collapsed.some((l) => l.length > MAX_READ_LINE);
+  const task = longLine ? collapsed.map((l) => (l.length > MAX_READ_LINE ? "" : l)).join("\n") : collapsed.join("\n");
   const files = params.files || [];
   const relevance = createRelevanceScorer([task, ...files].join(" "));
 
@@ -500,6 +562,7 @@ export async function executeWhatShouldIKnow(
   // whole, both from the canonical grammar (briefing-canonical.ts) read on the task as written.
   const evidenceScreen = screenFor(task, [...allDeps(), ...(liveIntel?.getPrivateAuditDeps?.() ?? [])]);
   const evidence = strictEvidence(task);
+  if (longLine) evidence.unreadable.push({ text: "", ecosystem: "npm", operands: [], manager: "a line", verb: "", unreadable: `a line longer than this briefing reads (${MAX_READ_LINE.toLocaleString("en-US")} characters)` });
   /** Round 7, C3: the task's raw text names a package source of its own (a registry, an index, a git or path source). */
   const namesSource = RAW_SOURCE.test(params.task);
   // V2: `pip install -r <file>` names that file's packages: they are task packages (a finding on one is about this
@@ -514,7 +577,10 @@ export async function executeWhatShouldIKnow(
           const real = fs.realpathSync.native(path.resolve(root, f));
           const inside = real === realRoot || real.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep);
           if (!inside) return { why: "outside" };
-          return fs.statSync(real).size <= 262_144 ? fs.readFileSync(real, "utf8") : { why: "unreadable" };
+          if (fs.statSync(real).size > 262_144) return { why: "unreadable" };
+          const text = fs.readFileSync(real, "utf8");
+          noteSupplied(params, text);
+          return text;
         } catch {
           return { why: "unreadable" };
         }
@@ -522,12 +588,13 @@ export async function executeWhatShouldIKnow(
     : [];
   // Round 11, #72: a line of the file it cannot read (or a direct reference) makes the file not read whole. Round 12b:
   // a file not read whole offers none of its entries (as a snippet not read whole: round 7c, F4).
-  const requirementsRead = fromRequirements as { notWhole?: boolean; outside?: boolean; unreadable?: boolean };
+  const requirementsRead = fromRequirements as { notWhole?: boolean; outside?: boolean; unreadable?: boolean; capped?: boolean };
   const fileEntries = requirementsRead.notWhole ? [] : fromRequirements;
   pushAll(evidence.pairs, fileEntries);
   if (requirementsRead.notWhole) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "a line of a requirements file it cannot read" });
   // Round 12, R5: a file outside the project, or one that could not be read, is said and holds review_needed.
   if (requirementsRead.outside) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "a requirements file outside the project is not read" });
+  if (requirementsRead.capped) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "the requirements files it names are more than this briefing reads (8)" });
   if (requirementsRead.unreadable) evidence.unreadable.push({ text: "", ecosystem: "PyPI", operands: [], manager: "a manifest", verb: "", unreadable: "the requirements file it names could not be read" });
   const depsText = fileEntries.length > 0 ? `${task}\n${fileEntries.map((p) => p.name).join(" ")}` : task;
   // ── 0. The vulnerability scan — awaited, bounded, never assumed ───────
@@ -725,6 +792,8 @@ export async function executeWhatShouldIKnow(
   const forbidden = new Set([...declared.entries.filter((d) => !d.public).map((d) => forbiddenKey(d.name)), ...declared.forbidOnly.map(forbiddenKey), ...notPackages.words.map(forbiddenKey)]);
   const isForbidden = (name: string) => forbidden.size > 0 && forbidden.has(forbiddenKey(name));
   const declaredPrivate: PrivateIndex[] = [];
+  /** Declared public entries the project's configuration makes private: answered and recorded by dependency_check's path. */
+  const configPrivate: Array<{ ecosystem: CheckEcosystem; package: string; to: string }> = [];
   /** Names the task adds that were not looked up because the task names a package source of its own (C3). */
   // (said in not_read as SOURCE_HELD)
   const sourceHeld: string[] = [];
@@ -750,7 +819,10 @@ export async function executeWhatShouldIKnow(
     const why = (snippetSource ? SNIPPET_SOURCE : null) ?? taskSource ?? registryReason(d.ecosystem, d.name) ?? privateAnywhere(liveIntel, d.name) ?? (privateShort.has(d.name.toLowerCase()) ? "a private package of this project" : null);
     if (why) {
       // Round 6b, item 3: a private status the task's own command gives is said as such, not as the project's.
-      if (!declaredPrivate.some((x) => x.ecosystem === d.ecosystem && forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: snippetSource ? SNIPPET_SOURCE_BASIS : taskSource ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : "this project's registry configuration" });
+      if (!declaredPrivate.some((x) => x.ecosystem === d.ecosystem && forbiddenKey(x.name) === forbiddenKey(d.name))) declaredPrivate.push({ name: d.name, ecosystem: d.ecosystem, basis: snippetSource ? SNIPPET_SOURCE_BASIS : taskSource ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : privateBasis(why) });
+      // Round 13, U3: private by the project's own configuration: dependency_check's own answer and record for the item,
+      // through the very function it uses (one implementation; nothing about a private item is sent).
+      if (!snippetSource && !taskSource) configPrivate.push({ ecosystem: d.ecosystem, package: d.name, to: d.version ?? "latest" });
       if (!privateTask.some((x) => forbiddenKey(x.package) === forbiddenKey(d.name))) privateTask.push({ package: d.name, ecosystem: d.ecosystem, installed: [], why });
       continue;
     }
@@ -851,6 +923,15 @@ export async function executeWhatShouldIKnow(
     else waiting.push({ ...w });
   }
   const dismissedWords = gated.unverified.filter((w) => !settles(w) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) !== undefined);
+  // Round 13, U3: a declared public entry the project's configuration makes private is answered and recorded by
+  // dependency_check's own function (its `not_checked: "private"` record, the private rule's scope included).
+  if (configPrivate.length > 0) {
+    try {
+      await checkAndRecord(db, { items: configPrivate.slice(0, MAX_DECLARED) } as DependencyCheckParams, liveIntel as unknown as LiveIntelligence | null);
+    } catch {
+      // The record is best kept; the briefing's own answer for the item (private, not checked) stands either way.
+    }
+  }
   // Only what the caller declared goes to the check ledger, once per verdict: the briefing's own lookups stay unrecorded.
   const privateRule = (liveIntel as { privateRegistryRuleCovers?: (e: string, n: string) => boolean } | null)?.privateRegistryRuleCovers;
   const privateScope = (liveIntel as { privateRecordScope?: (e: string, n: string) => { rule: "listed" | "project"; root: string | null } } | null)?.privateRecordScope;
@@ -949,8 +1030,9 @@ export async function executeWhatShouldIKnow(
   // I4: a dismissal never makes the briefing reassuring about a name that stands where a package stands. The word
   // is dismissed as asked, and the level is at least review_needed, naming it.
   const replacedBy = (word: string) => declaredPublic.find((d) => oneEditApart(d.name, word))?.name;
-  // D3 reads the raw task, whatever the screen blanked (a quoted launcher path).
-  const afterManager = notPackages.words.length > 0 ? wordsAfterManager(params.task) : () => false;
+  // Round 13, U1: the raw-text rule (a dismissed word after a package manager's name anywhere) is gone. What holds is
+  // what the briefing itself READ and reported: a name it read as an operand of a command it reads, an entry of a
+  // snippet it reads, a version form on it, or a near miss, that the caller dismissed (compared by dismissedBy).
   const standing = dismissedWords.flatMap((w) => {
     const near = /^one edit from (\S+): /.exec(w.note ?? "")?.[1];
     const instead = replacedBy(w.word);
@@ -972,16 +1054,8 @@ export async function executeWhatShouldIKnow(
             : `${w.name} was not sent because you marked it private or not a package, but this briefing would have checked it (a well-known name): it is unchecked; make sure nothing installs it unchecked`,
         ),
     )
-    .concat(withheldDismissed.filter((w) => w.standing).map((w) => `you said ${w.shown} is not a package; it stands where a package name stands in the task's command: make sure nothing installs it`))
-    // D3 (round 12, R1): on the raw text, whatever the grammar made of it: a word the caller dismissed that stands
-    // after a package manager's name anywhere earlier in the task (no lines, units or fences).
-    .concat(
-      notPackages.words
-        // Not again where a standing reason above names the word already (a command operand, a manifest entry, a near miss).
-        .filter((n) => !dismissedWords.some((w) => w.word.toLowerCase() === n.toLowerCase() && (w.seen === "command" || w.seen === "runner" || w.seen === "manifest" || w.seen === "form" || /^one edit from /.test(w.note ?? "") || replacedBy(w.word))) && afterManager(n))
-        .slice(0, 10)
-        .map((n) => `you said ${n} is not a package; it stands after a package manager's name in the task: make sure nothing installs it`),
-    );
+    // A word the screen withheld where a package stands (its shape only, never its value): no command is named.
+    .concat(withheldDismissed.filter((w) => w.standing).map((w) => `you said ${w.shown} is not a package; it stands where a package name stands in the task: make sure nothing installs it`));
   // A bundled known-malicious name is known without a lookup: human_only whatever the caller says (I1).
   const maliciousWithheld = withheldByCaller.filter((w) => w.malicious);
   // Versions the task writes that could be tied to no package: the briefing cannot vouch for them.
@@ -1182,12 +1256,9 @@ export async function executeWhatShouldIKnow(
     }
     // Round 10 (docs lane B): a command of a tool this briefing does not read, on the raw text (`xargs npm install`,
     // `gem install x`, `composer require x`): said as such, review_needed at most.
-    const unreadLines = unreadCommandLines(params.task);
-    const foreignLines = [
-      ...unreadLines,
-      // A registry this server does not read, found by the version reader: said by its registry only (round 11, P6).
-      ...(unreadLines.length > 0 || evidence.unreadable.some((u) => u.manager !== "a manifest") ? [] : (taskVersions.foreign ?? []).map((f) => /\(([^():]+): not read by this server\)$/.exec(f)?.[1]).filter((r): r is string => Boolean(r))),
-    ].filter((x, i, all) => all.indexOf(x) === i);
+    // Round 13 (#45): only a command at a command position (unreadCommandLines); the version reader's registry guess
+    // ("a hidden gem: install dayjs" read as RubyGems) is no command and holds nothing.
+    const foreignLines = unreadCommandLines(task);
     if (foreignLines.length > 0) {
       const said = `This task holds a command this briefing does not read (${foreignLines.slice(0, 5).join(", ")}): check what it installs with dependency_check.`;
       if (assessed.level === "safe_to_delegate") {
@@ -1529,7 +1600,9 @@ function taskPackagesSection(input: {
   }
   const privateRows: PrivateIndex[] = [...input.declaredPrivate];
   for (const p of input.privateTask) {
-    if (!privateRows.some((d) => d.ecosystem === p.ecosystem && d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: /^the task installs it from its own package index/.test(p.why) ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : p.why === SNIPPET_SOURCE ? SNIPPET_SOURCE_BASIS : "this project's registry configuration" });
+    // Round 13 (#62): a declared name keeps the ecosystem the caller stated: no extra row in another ecosystem.
+    if (input.declaredPrivate.some((d) => d.name.toLowerCase() === p.package.toLowerCase())) continue;
+    if (!privateRows.some((d) => d.ecosystem === p.ecosystem && d.name.toLowerCase() === p.package.toLowerCase())) privateRows.push({ name: p.package, ecosystem: p.ecosystem, basis: /^the task installs it from its own package index/.test(p.why) ? "the command in the task installs it from its own package index or registry (-i, --index-url, --registry), not the public one" : p.why === SNIPPET_SOURCE ? SNIPPET_SOURCE_BASIS : privateBasis(p.why) });
   }
   const waiting = input.waiting.slice(0, MAX_TO_CONFIRM).map((w) => toConfirmEntry(input.task, w));
   return {

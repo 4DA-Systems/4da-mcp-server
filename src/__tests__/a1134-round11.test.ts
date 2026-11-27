@@ -11,8 +11,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow, whatShouldIKnowTool } from "../tools/what-should-i-know.js";
-import { bareName, manifestPairs, pep508, requirementsPairs, strictEvidence, unreadCommandLines, wordsAfterManager } from "../tools/briefing-command-check.js";
-import { MANAGER_NAMES } from "../tools/briefing-canonical.js";
+import { manifestPairs, pep508, requirementsPairs, strictEvidence, unreadCommandLines } from "../tools/briefing-command-check.js";
 import { MAX_SNIPPETS } from "../tools/briefing-snippets.js";
 import { TOOL_REGISTRY } from "../schema-registry.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
@@ -129,25 +128,7 @@ describe("P2: everyday spellings (improvements, not promises)", () => {
   });
 });
 
-describe("P3: a dismissed word is compared by its bare name", () => {
-  const DECORATIONS = ["@1.0.0", "@^1.0.0", "==1.0.0", ">=1,<2", "[extra]", "~=1.0", "."];
-  const QUOTED = (w: string) => `"${w}"`;
-  const PLACE = [(m: string, w: string) => `With ${m}, use ${w} here.`, (m: string, w: string) => `With ${m} \\\n  use ${w}.`, (m: string, w: string) => "```\n" + `${m}\n${w}\n` + "```"];
-  const sample = MANAGER_NAMES.filter((_, i) => i % 3 === 0);
-  it.each(sample.flatMap((m) => [...DECORATIONS.map((d) => `zqxcrit4${d}`), QUOTED("zqxcrit4@1.0.0")].flatMap((w) => PLACE.map((p, i) => [`${m} ${w} #${i}`, p(m, w)] as const))))("%s", (_label, task) => {
-    expect(wordsAfterManager(task)("zqxcrit4")).toBe(true);
-  });
-  it("a scoped name compares as @s/n", () => {
-    expect(bareName("@zqxs/core@1.0.0")).toBe("@zqxs/core");
-    expect(wordsAfterManager("With pnpm, use @zqxs/core@1.0.0 here.")("@zqxs/core")).toBe(true);
-  });
-  it.each(["With pnpm, use zqxcrit4@1.0.0 here.", "In this pnpm workspace, pin zqxcrit4@^1.0.0.", "pnpm: zqxcrit4@1.0.0", 'With npm, use "zqxcrit4@1.0.0" here.', "With pnpm \\\n  use zqxcrit4@1.0.0.", "```\npnpm\nzqxcrit4@1.0.0\n```"])("%s with zqxcrit4 dismissed: never safe", async (task) => {
-    npm();
-    const r = await brief({ task, packages: [], not_packages: ["zqxcrit4"] });
-    expect(level(r)).not.toBe("safe_to_delegate");
-  });
-});
-
+// Round 13, U1: the raw-text dismissed-word rule (wordsAfterManager) and its tests are removed.
 describe("P5: a command this briefing does not read, two cases only", () => {
   it.each(["Make the counter go up by one when the button is clicked.", "Go add a unit test for the date parser.", "Publish the npm package after the release notes.", "The go package docs need an example.", "Commit the yarn lock with the change.", "Explain how pip resolves extras."])("%s: no command", (task) => {
     expect(unreadCommandLines(task)).toEqual([]);

@@ -485,7 +485,7 @@ export function privateDirectReference(location: string): boolean {
 export function pep508DirectReferences(content: string): Array<{ name: string; location: string }> {
   const out: Array<{ name: string; location: string }> = [];
   for (const s of tomlStrings(content)) {
-    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*@\s*((?:git\+)?[a-z][a-z0-9+.-]*:\S+)/i.exec(s);
+    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*@\s*((?:git\+)?[a-z][a-z0-9+.-]*:\S+)/i.exec(s);
     if (m) out.push({ name: m[1], location: m[2] });
   }
   return out;

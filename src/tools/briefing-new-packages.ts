@@ -6,8 +6,9 @@
  * of the project's own dependencies the task names (briefing-task-scope.ts), and a package about
  * to be added is, by definition, not one of them. `lodahs` is a name npm took down as malware.
  *
- * So the briefing also reads the names a task is about to add, and runs each through
- * dependency_check at `latest`: the same name-level checks an agent gets when it asks before
+ * So the briefing also reads, best effort, names a task is about to add. A name it knows on its own (a bundled-list
+ * name, a dependency) is run through dependency_check; any other name waits in to_confirm for the caller's
+ * declaration, which is checked at its `version`. The checks are the same name-level checks an agent gets when it asks before
  * writing the version (a malware name is avoid, a near-miss of a popular package is review or
  * avoid, a name the registry does not have is unknown). Whatever is not `proceed` raises the
  * delegation verdict, and a check that could not run never reads as safe.
@@ -1135,8 +1136,8 @@ function badness(f: NewPackageFinding): number {
  * dependency_check's answer for each package at `latest`, within the briefing's budget. Offline,
  * without the live layer, or past the budget, a package is `unknown`: never read as safe.
  *
- * A name the task gives no ecosystem for is checked in every ecosystem the project uses, all at
- * once, and the worst answer is the finding: "add ctx" in a project with package.json and
+ * A name the briefing checks on its own (a bundled-list name) that the task gives no ecosystem for is checked in each
+ * ecosystem the project uses where the list holds it, all at once, and the worst answer is the finding: "add ctx" in a project with package.json and
  * requirements.txt looked up only npm's `ctx` (clean) and came back safe_to_delegate, while PyPI's
  * `ctx` is malware (PYSEC-2022-199; black-box audit of 60c9edc, 2026-11-14). The other
  * ecosystems' answers are listed in `also_checked`.

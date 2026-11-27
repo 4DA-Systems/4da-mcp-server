@@ -237,13 +237,13 @@ export function detectRequestedVersions(task: string, deps: readonly ResolvedDep
 }
 
 /**
- * Every version-like token in the task is tied to the nearest word before it that can be a package,
+ * A version-like token this reader finds in the task is tied, best effort, to the nearest word before it that can be a package,
  * over connector words ("to", "at", "version", "==", "->", "back", "the ... package"), or after it in
  * "version X of name". The last version tied to a package is its target ("from 1.0 to 1.2",
  * "4.18.1 -> 4.17.20"). Wording the parser was not written for used to drop the version and judge
  * latest instead ("add event-stream at version 3.3.6" came back safe_to_delegate; blind audit round
- * 3, B3); now a dotted version tied to nothing is reported as unread, which keeps the briefing from
- * safe_to_delegate.
+ * 3, B3); now a dotted version tied to nothing is listed as unread. That list is information, not a hold: the level
+ * rests on the declaration, checked at its `version`.
  */
 /** Tokens of a (normalized) task: arrows, and words that keep package and version punctuation (a joined constraint whole). */
 const TOKEN = new RegExp("(?:->|=>|→)|[@A-Za-z0-9`'\"(^~<>=][\\w./@*=<>~^!`'\"+:" + SPEC_JOINERS + "-]*", "g");

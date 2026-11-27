@@ -106,7 +106,7 @@ export function parseRequiresDist(requiresDist: unknown): ReleaseRequirements {
       if (value === false || (!node && /\bextra\b/.test(marker))) continue;
       if (value === null) gate = node ? { marker: markerText(node) } : {};
     }
-    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(head);
+    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*(.*)$/.exec(head);
     const rest = m ? m[2].trim() : "";
     const spec = rest.replace(/^\(\s*/, "").replace(/\s*\)$/, "").replace(/\s+/g, "");
     if (!m || !PYPI_NAME.test(m[1]) || m[1].length > 100 || rest.startsWith("@") || !isReadableSpecifier(spec)) {

@@ -95,7 +95,7 @@ function includesRequirements(file: string): boolean {
     const stat = fs.statSync(file);
     if (!stat.isFile() || stat.size > MAX_SNIFF_BYTES) return false;
     const content = readTextFile(file);
-    return /^\s*(?:-r|--requirement)[\s=]+\S+\.txt\s*$/m.test(content) && parseRequirements(content).length > 0;
+    return /^[ \t]*(?:-r|--requirement)[ \t=]+\S+\.txt[ \t\r]*$/m.test(content) && parseRequirements(content).length > 0;
   } catch {
     return false;
   }
@@ -510,7 +510,7 @@ function pythonLockDamage(name: string, content: string, pyproject: string | nul
   let cut = false;
   /** An entry another package needs is missing (review item 5). */
   let interior = false;
-  if (name === "poetry.lock" && !/^\[metadata\]\s*$/m.test(content)) {
+  if (name === "poetry.lock" && !/^\[metadata\][ \t\r]*$/m.test(content)) {
     parts.push("it has no [metadata] table, which Poetry writes last");
     cut = true;
   }
@@ -573,7 +573,7 @@ function pythonLockDamage(name: string, content: string, pyproject: string | nul
  * environment marker may legitimately have none, and is not counted.
  */
 function pdmLockGraph(content: string): { names: Set<string>; dangling: string[] } {
-  const blocks = content.split(/^\[\[package\]\]\s*$/m).slice(1).map((block) => block.split(/^\[/m)[0]);
+  const blocks = content.split(/^\[\[package\]\][ \t\r]*$/m).slice(1).map((block) => block.split(/^\[/m)[0]);
   const names = new Set<string>();
   for (const body of blocks) {
     const name = /^name\s*=\s*"([^"]*)"/m.exec(body)?.[1];
@@ -609,7 +609,7 @@ const POETRY_LOCKED_KEYS = new Set(["version", "extras", "source"]);
  * platform-restricted dependency, or an array of them, may legitimately have no table.
  */
 function poetryLockGraph(content: string): { names: Set<string>; dangling: string[] } {
-  const blocks = content.split(/^\[\[package\]\]\s*$/m).slice(1);
+  const blocks = content.split(/^\[\[package\]\][ \t\r]*$/m).slice(1);
   const names = new Set<string>();
   for (const block of blocks) {
     const name = /^name\s*=\s*"([^"]*)"/m.exec(block.split(/^\[/m)[0])?.[1];
@@ -758,7 +758,7 @@ function requirementName(requirement: string): string | null {
  * no supported environment needs has no table: it is not read for this.
  */
 function uvLockTables(content: string): { tables: Set<string>; dangling: string[] } {
-  const blocks = content.split(/^\[\[package\]\]\s*$/m).slice(1);
+  const blocks = content.split(/^\[\[package\]\][ \t\r]*$/m).slice(1);
   const tables = new Set<string>();
   for (const block of blocks) {
     const name = /^name\s*=\s*"([^"]*)"/m.exec(block.split(/^\[/m)[0])?.[1];
@@ -1103,7 +1103,7 @@ function viaAnnotations(lines: string[]): Map<string, string[]> {
     if (!line.startsWith("#")) {
       listing = false;
       if (line.startsWith("--hash") || line === "" || line.startsWith("-")) continue; // a hash continuation or an option keeps the pin
-      const pin = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*===?/.exec(line);
+      const pin = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*===?/.exec(line);
       current = pin ? normalizePythonName(pin[1]) : null;
       const inline = /\s#\s*via\s+(.+)$/.exec(line);
       if (current && inline) for (const e of inline[1].split(",")) add(e);
@@ -1214,7 +1214,7 @@ export function unpinnedRequirements(content: string): {
       references.push({ name: normalizePythonName(archiveName(spec)), location: spec });
       continue;
     }
-    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(spec);
+    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*(.*)$/.exec(spec);
     if (!m) continue;
     // PEP 508 direct reference: `name @ https://…` or `name @ git+https://…`.
     const reference = /^@\s*(\S+)/.exec(m[2]);
@@ -1254,7 +1254,7 @@ function packageOrigin(block: string, body: string): "index" | "git" | "url" | "
   // `path = ...`): until 6.5.2 such a package read as an index release (audit 2026-11-25, F6).
   const pdm = /^(git|url|path)\s*=\s*["']/m.exec(body)?.[1];
   if (pdm) return pdm === "path" ? "local" : pdm === "git" ? "git" : "url";
-  const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
+  const poetrySource = /^\[package\.source\][ \t\r]*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
   const poetryType = /^type\s*=\s*"([^"]*)"/m.exec(poetrySource)?.[1];
   if (poetryType === "git" || poetryType === "url" || poetryType === "file") return poetryType;
   return poetryType === "directory" ? "local" : "index";
@@ -1282,7 +1282,7 @@ export function readTomlPackageLock(content: string): {
   const instances = new InstanceSet();
   const uncheckable: Array<{ name: string; version: string | null; kind: "git" | "url" | "file" }> = [];
   const privateIndex: Array<{ name: string; version: string; registry: string; local?: true }> = [];
-  for (const block of content.split(/^\[\[package\]\]\s*$/m).slice(1)) {
+  for (const block of content.split(/^\[\[package\]\][ \t\r]*$/m).slice(1)) {
     // Stop at the next table header (e.g. [package.dependencies], [metadata]).
     const body = block.split(/^\[/m)[0];
     const field = (key: string) => new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, "m").exec(body)?.[1] ?? null;
@@ -1315,7 +1315,7 @@ function originLocation(block: string, body: string): string | null {
   if (uv) return uv;
   const pdm = /^(?:git|url|path)\s*=\s*"([^"]+)"/m.exec(body)?.[1];
   if (pdm) return pdm;
-  const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
+  const poetrySource = /^\[package\.source\][ \t\r]*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
   return /^url\s*=\s*"([^"]+)"/m.exec(poetrySource)?.[1] ?? null;
 }
 
@@ -1328,7 +1328,7 @@ function directLabel(location: string): string {
 function indexUrl(block: string, body: string): string | null {
   const uv = /^source\s*=\s*\{\s*registry\s*=\s*"([^"]+)"/m.exec(body)?.[1];
   if (uv) return uv;
-  const poetrySource = /^\[package\.source\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
+  const poetrySource = /^\[package\.source\][ \t\r]*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1] ?? "";
   return /^url\s*=\s*"([^"]+)"/m.exec(poetrySource)?.[1] ?? null;
 }
 
@@ -1340,7 +1340,7 @@ function indexUrl(block: string, body: string): string | null {
  * it (audit 2026-11-11, M12).
  */
 export function tomlLockDamage(content: string): { reason: string; missing: number } | null {
-  const blocks = content.split(/^\[\[package\]\]\s*$/m).slice(1);
+  const blocks = content.split(/^\[\[package\]\][ \t\r]*$/m).slice(1);
   let nameless = 0;
   for (const block of blocks) {
     const body = block.split(/^\[/m)[0];
@@ -1417,7 +1417,7 @@ export function parseRequirements(content: string): Array<{ name: string; versio
     // Per-requirement options (pip-compile writes `--hash=sha256:...` on
     // continuation lines) follow the specifier; they are not part of it.
     const spec = line.split(";")[0].replace(REQUIREMENT_OPTION, "").trim();
-    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(spec);
+    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*(.*)$/.exec(spec);
     const version = match ? exactClause(match[2]) : null;
     if (!match || version === null) continue;
     out.push({ name: normalizePythonName(match[1]), version });

@@ -292,10 +292,11 @@ const MANAGER_SET: ReadonlySet<string> = new Set(MANAGER_NAMES);
 const MANAGER_NAME = new RegExp(`(?:^|[^\\p{L}\\p{N}_-])(?:${[...MANAGER_NAMES].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")}|pip[\\d.]+)(?:\\.(?:cmd|exe|ps1|bat))?(?=$|[^\\p{L}\\p{N}_-])`, "iu");
 
 /**
- * Round 11, P5: a command this briefing does not read, in two cases only, on the raw text: (a) `xargs` followed, with
- * only options between, by a name of MANAGER_NAMES; (b) a package manager the grammar does not read, followed at once
- * (options between) by one of its own install verbs. Nothing else: "go up", "npm package" or "yarn lock" in prose are
- * no command (the grammar reads npm, yarn, pip, go and the others' own commands).
+ * Round 13, U5 (#45): a command this briefing does not read, in two cases only, each at a COMMAND POSITION (the start
+ * of a line, the start of a code span, right after a shell separator `;` `&&` `||` `|`, or after `$ ` / `xargs` and its
+ * options): (a) `xargs` followed, options aside, by a name of MANAGER_NAMES; (b) a package manager the grammar does not
+ * read, written as a bare word (no punctuation on it), and its own install verb as the very next word. "For the docs
+ * bundle, add hono", "a hidden gem: install dayjs" and "Let it brew; install ky" are no command.
  */
 const UNREAD_VERBS: ReadonlyMap<string, readonly string[]> = new Map(Object.entries({
   pipenv: ["install"],
@@ -315,34 +316,46 @@ const UNREAD_VERBS: ReadonlyMap<string, readonly string[]> = new Map(Object.entr
   apt: ["install"],
   "apt-get": ["install"],
 }));
+const SEPARATOR_END = /(?:;|&&|\|\||\|)$/;
+/** A raw word as a program name: a leading backtick, a directory and a launcher extension off; null with any other mark. */
+const programWord = (raw: string): string | null => {
+  const w = raw.replace(/^`/, "").replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|ps1|bat)$/i, "");
+  return /^[a-z0-9][a-z0-9_.-]*$/i.test(w) ? w.toLowerCase() : null;
+};
 export function unreadCommandLines(task: string): string[] {
   const found: string[] = [];
-  for (const raw of task.slice(0, 200_000).normalize("NFKC").split(/\r?\n/).slice(0, 20_000)) {
-    if (!MANAGER_NAME.test(raw)) continue;
-    const words = raw.split(/\s+/).map((w) => w.replace(/^[`"'(&]+|[`"'),.;:!?]+$/g, "").replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|ps1|bat)$/i, "").toLowerCase());
+  for (const line of task.slice(0, 200_000).normalize("NFKC").split(/\r?\n/).slice(0, 20_000)) {
+    if (!MANAGER_NAME.test(line)) continue;
+    const raw = line.split(/[ \t]+/).filter(Boolean);
     // Whether the grammar names a command on this line: read once per line, never per word (round 11, P4).
     let named: boolean | undefined;
-    for (let k = 0; k < words.length; k++) {
-      const w = words[k];
-      const next = () => {
-        let j = k + 1;
-        while (j < words.length && j - k <= 8 && words[j].startsWith("-")) j++;
-        return words[j] ?? "";
-      };
+    let atCommand = true;
+    for (let k = 0; k < raw.length; k++) {
+      const token = raw[k];
+      const here = atCommand || token.startsWith("`");
+      // "Run gem install x", "run: brew install jq": an imperative "run" introduces a command like a prompt does.
+      atCommand = SEPARATOR_END.test(token) || token === "$" || /^run:?$/i.test(token);
+      if (!here) continue;
+      const w = programWord(token);
       if (w === "xargs") {
-        const m = next();
-        if (MANAGER_NAMES.includes(m) || /^pip[\d.]+$/.test(m)) {
+        let j = k + 1;
+        while (j < raw.length && j - k <= 8 && raw[j].startsWith("-")) j++;
+        const m = raw[j] === undefined ? null : programWord(raw[j]);
+        if (m !== null && (MANAGER_NAMES.includes(m) || /^pip[\d.]+$/.test(m))) {
           const name = `${m} (through xargs)`;
           if (!found.includes(name)) found.push(name);
         }
         continue;
       }
-      const verbs = UNREAD_VERBS.get(w);
-      if (verbs && verbs.includes(next())) {
+      const verbs = w === null ? undefined : UNREAD_VERBS.get(w);
+      // Its own verb next, switches (`-y`) aside; no punctuation on the manager word or between.
+      let v = k + 1;
+      while (v < raw.length && v - k <= 8 && /^-[\w-]+$/.test(raw[v])) v++;
+      if (verbs && verbs.includes((raw[v] ?? "").replace(/`$/, ""))) {
         // A manager the grammar names itself (K3: pipenv, pdm, rye, conda, mamba, micromamba, pixi) is said there.
-        named ??= canonicalCommands(raw).length > 0;
+        named ??= canonicalCommands(line).length > 0;
         if (named) continue;
-        if (!found.includes(w)) found.push(w);
+        if (!found.includes(w!)) found.push(w!);
       }
     }
   }
@@ -362,35 +375,9 @@ export function bareName(word: string): string {
  * Default-ignorable code points (soft hyphen, zero-width characters, variation selectors, bidi marks, tags): taken out
  * before any name is compared, so "zqx\u00adfoo" is zqxfoo.
  */
-const DEFAULT_IGNORABLE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/gu;
+const DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
 /** A text as names are compared in it: NFKC, case folded, default-ignorables removed. */
 export const foldForNames = (text: string) => text.normalize("NFKC").replace(DEFAULT_IGNORABLE, "").toLowerCase();
-
-/**
- * Round 12, R1 (D3): the words that stand after a package manager's name ANYWHERE EARLIER in the task, as a predicate.
- * No lines, units, fences or continuations: the first position of any MANAGER_NAMES entry in the folded task, and every
- * word after it. One linear pass. Compared folded (foldForNames) and by bare name (bareName).
- */
-export function wordsAfterManager(task: string): (word: string) => boolean {
-  const text = foldForNames(task.length > 200_000 ? task.slice(0, 200_000) : task);
-  const after = new Set<string>();
-  const at = text.search(MANAGER_NAME);
-  if (at >= 0) {
-    for (const raw of text.slice(at + 1).split(/[^\p{L}\p{N}_@/.\-]+/u)) {
-      let e = raw.length;
-      while (e > 0 && raw[e - 1] === ".") e--;
-      if (e === 0) continue;
-      after.add(raw.slice(0, e));
-      // Compared by the bare name, its decoration taken off: x@1.0.0 x, @s/n@1 @s/n (round 11, P3).
-      const bare = bareName(raw.slice(0, e));
-      if (bare) after.add(bare);
-    }
-  }
-  return (word: string) => {
-    const w = foldForNames(word);
-    return after.has(w) || after.has(bareName(w));
-  };
-}
 
 const asInstallCommand = (c: CanonicalCommand): InstallCommand => ({
   text: c.text,
@@ -412,15 +399,16 @@ export type RequirementsRead = string | null | { why: "outside" | "unreadable" }
 
 /**
  * The packages of a requirements file the task installs with `-r` (V2), with the spec each line writes, as the
- * snippet reader reads a requirements line (best effort: briefing-snippets.ts pep508). A `-r` or `-c` file it names is
- * read too (8 files at most). The caller reads a file only when its real path is inside the project's real root, and at
- * most 256 KB (round 12, R5). What is not read is said: a file outside the project, or one that could not be read
- * (missing, too large), makes the reading not whole (review_needed). A line it cannot read, a direct reference
+ * snippet reader reads a requirements line (best effort: briefing-snippets.ts pep508; blanks collapsed, a line over
+ * 2,000 characters is a line it cannot read). A `-r` or `-c` file it names is read too, 8 files at most; files left
+ * past that are said. The caller reads a file only when its real path is inside the project's real root, and at most
+ * 256 KB (round 12, R5). A file outside the project, one that could not be read (missing, too large), and files past the
+ * cap each make the reading not whole (review_needed), and the answer says which. A line it cannot read, a direct reference
  * (`name @ url`), or a word of a credential's shape (the task screen's own test, round 12, R4) makes the file not
  * read whole; such a word is never offered, repeated or looked up.
  */
-export function requirementsPairs(root: string, files: readonly string[], read: (path: string) => RequirementsRead): StrictPair[] & { notWhole?: boolean; outside?: boolean; unreadable?: boolean } {
-  const out: StrictPair[] & { notWhole?: boolean; outside?: boolean; unreadable?: boolean } = [];
+export function requirementsPairs(root: string, files: readonly string[], read: (path: string) => RequirementsRead): StrictPair[] & { notWhole?: boolean; outside?: boolean; unreadable?: boolean; capped?: boolean } {
+  const out: StrictPair[] & { notWhole?: boolean; outside?: boolean; unreadable?: boolean; capped?: boolean } = [];
   const queue = [...files];
   const done = new Set<string>();
   while (queue.length > 0 && done.size < 8) {
@@ -457,6 +445,8 @@ export function requirementsPairs(root: string, files: readonly string[], read: 
       out.push({ ecosystem: "PyPI", name: d.name, ...(d.spec ? { version: d.spec } : {}), seen: "file" });
     }
   }
+  // Round 13 (#112): files left when the cap is reached are said (the caller holds review_needed).
+  if (queue.some((f) => !done.has(f))) out.capped = true;
   return out;
 }
 
@@ -539,6 +529,8 @@ export function unreadCommand(task: string, accounted: (ecosystem: CheckEcosyste
 
 /** The review reason for a command whose shape could not be read (K3): its manager and verb only, never its words. */
 export const unreadableReason = (c: InstallCommand) =>
-  c.manager === "a manifest"
+  c.manager === "a line"
+    ? `This task holds ${c.unreadable}: it was not read; check what it adds with dependency_check.`
+    : c.manager === "a manifest"
     ? `This task holds a manifest snippet this briefing could not read whole (${c.unreadable}): check what it adds with dependency_check.`
     : `This task holds a command (${[c.manager, c.verb].filter(Boolean).join(" ")}) this briefing could not read whole (${c.unreadable}): check what it installs with dependency_check.${c.unreadable === "a comma in its list of packages" || (c.unreadable ?? "").startsWith("a word that is not a plain package name") || c.unreadable === "a redirection among its words" ? ` ${STAYS_REVIEW}` : ""}`;

@@ -296,7 +296,7 @@ export const mutations = [
     intent: "yarn.lock: only the first block per package name is kept; other installed versions of the same package are never scanned",
     tests: ["src/__tests__/conformance-drift.test.ts", "src/__tests__/coverage-ledger.test.ts", "src/__tests__/conformance.test.ts"] },
   { id: "L06", area: "lockfile", file: "src/live/lockfile-parsers-pygo.ts",
-    find: "    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\\s*(?:\\[[^\\]]*\\])?\\s*(.*)$/.exec(spec);",
+    find: "    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\\s*\\[[^\\]]*\\])?\\s*(.*)$/.exec(spec);",
     replace: "    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\\s*(.*)$/.exec(spec);",
     intent: "requirements.txt: a pin with extras (`uvicorn[standard]==0.30.0`) is skipped, never scanned",
     tests: ["src/__tests__/conformance.test.ts", "src/__tests__/scan-parity.test.ts"] },
