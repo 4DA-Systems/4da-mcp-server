@@ -51,3 +51,19 @@ export const PROJECT_DEPTH: number;
 /** The manifest kind of a path, or null (THE CONTRACT, P1). */
 export function manifestKind(filePath: string): string | null;
 export const INERT_SETTING: RegExp;
+/** Round 23 (V3): the first server version whose proceed and review answers the hook counts. */
+export const MIN_VERDICT_SERVER: string;
+/** Round 23 (W5): the longest piece of a call a denial repeats. */
+export const CALL_PIECE_MAX: number;
+/** Round 23 (V1): the characters cmd.exe treats specially in a .cmd or .bat program's arguments. */
+export const CMD_SPECIAL: RegExp;
+/** Round 23 (W3): the managers that read each kind of configuration a named rule sits in. */
+export const CONFIG_READERS: Readonly<Record<string, readonly string[]>>;
+/** What builds a command from other words (P1). */
+export const BUILDS_COMMAND: RegExp;
+/** Round 23 (W5): a piece of the call as a denial repeats it. */
+export function callData(text: unknown): string;
+/** Round 23 (V2): a path as Claude Code opens it, or null. */
+export function windowsPath(path: string, base?: string | null): string | null;
+/** Round 23 (W4): whether a command's text names the data folder or ledger as a path segment. */
+export function namesDataSegment(text: string, env: NodeJS.ProcessEnv): boolean;

@@ -853,7 +853,7 @@ export async function executeWhatShouldIKnow(
   const dismissedWords = gated.unverified.filter((w) => !settles(w) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) !== undefined);
   // Only what the caller declared goes to the check ledger, once per verdict: the briefing's own lookups stay unrecorded.
   const privateRule = (liveIntel as { privateRegistryRuleCovers?: (e: string, n: string) => boolean } | null)?.privateRegistryRuleCovers;
-  const privateScope = (liveIntel as { privateRecordScope?: (e: string, n: string) => { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null } } | null)?.privateRecordScope;
+  const privateScope = (liveIntel as { privateRecordScope?: (e: string, n: string) => { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null; config?: string } } | null)?.privateRecordScope;
   const recorded = new Set<string>();
   const recordDeclared = (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string; declared?: boolean }>) => {
     // Round 6, item 5: only the answers to the declared items themselves, as the engine wrote them: the briefing's

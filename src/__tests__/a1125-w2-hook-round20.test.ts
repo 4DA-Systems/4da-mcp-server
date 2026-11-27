@@ -26,7 +26,7 @@ const run = (command: string, cwd = s.project, tool = "Bash") => s.run({ session
 const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
 /** Ledger lines with their own times (s.ledger stamps them now). */
 function lines(entries: Array<Record<string, string>>): void {
-  writeFileSync(join(s.home, "check-ledger.jsonl"), entries.map((e) => JSON.stringify({ t: at(1), ...e })).join("\n") + "\n");
+  writeFileSync(join(s.home, "check-ledger.jsonl"), entries.map((e) => JSON.stringify({ sv: "6.6.0", t: at(1), ...e })).join("\n") + "\n");
 }
 
 describe("Q1: a verdict for one reading never releases another", () => {
@@ -100,7 +100,7 @@ describe("Q1: a verdict for one reading never releases another", () => {
 
 describe("Q2: a verdict for latest is honoured for 1 hour", () => {
   const LATEST = (minutes: number) => ({ t: at(minutes), ecosystem: "npm", package: "ms", version: "2.1.3", requested: "latest", verdict: "proceed", reason: "ok" });
-  const write = (e: Record<string, string>) => writeFileSync(join(s.home, "check-ledger.jsonl"), JSON.stringify(e) + "\n");
+  const write = (e: Record<string, string>) => writeFileSync(join(s.home, "check-ledger.jsonl"), JSON.stringify({ sv: "6.6.0", ...e }) + "\n");
   it("59 minutes old: a name alone goes ahead", () => {
     write(LATEST(59));
     expect(run("npm install ms").decision).toBe("allow");
@@ -122,7 +122,7 @@ describe("Q2: a verdict for latest is honoured for 1 hour", () => {
         { t: at(23 * 60), ecosystem: "npm", package: "ms", version: "2.1.3", verdict: "proceed" },
         { t: at(23 * 60), ecosystem: "npm", package: "ms", version: "2.1.3", requested: "^2.1.0", verdict: "proceed" },
       ]
-        .map((e) => JSON.stringify(e))
+        .map((e) => JSON.stringify({ sv: "6.6.0", ...e }))
         .join("\n") + "\n",
     );
     expect(run("npm install ms@2.1.3").decision).toBe("allow");
@@ -137,7 +137,7 @@ describe("Q3: a private record applies in its own project; a listed name everywh
     const b = mkdtempSync(join(tmpdir(), "a1125-q3-b-"));
     try {
       s.file("package.json", '{"name":"a"}');
-      lines([{ ecosystem: "npm", package: "@acme/x", version: "latest", verdict: "unknown", reason: "NOT CHECKED (private)", not_checked: "private", private_rule: "named", config_dir: s.project }]);
+      lines([{ ecosystem: "npm", package: "@acme/x", version: "latest", verdict: "unknown", reason: "NOT CHECKED (private)", not_checked: "private", private_rule: "named", config_dir: s.project, config_of: "npm" }]);
       expect(run("npm install @acme/x@1.0.0").decision).toBe("allow");
       s.file("sub/.keep", "");
       expect(run("npm install @acme/x@1.0.0", join(s.project, "sub")).decision).toBe("allow");

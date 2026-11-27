@@ -42,7 +42,7 @@ const fill = (command: string) =>
   command.replaceAll("<L1>", L1).replaceAll("<LB>", `${HB}\\check-ledger.jsonl`).replaceAll("<L>", L).replaceAll("<HB>", HB).replaceAll("<H>", home).replaceAll("<F>", forged());
 const cmd = (command: string, tool = "Bash") => s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: tool, tool_input: { command: fill(command) } });
 const tool = (name: string, input: Record<string, unknown>) => s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: name, tool_input: input });
-const forged = () => JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "proceed" });
+const forged = () => JSON.stringify({ sv: "6.6.0", t: new Date().toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "proceed" });
 const msys = (p: string) => (/^[A-Za-z]:/.test(p) ? `/${p[0].toLowerCase()}${p.slice(2)}` : p);
 
 describe("a command that names the ledger is held unless it is plainly a read", () => {
@@ -169,8 +169,10 @@ describe("what does not name it goes ahead", () => {
     expect(tool("Write", { file_path: join(s.project, "src", "check-ledger.ts"), content: "export {};\n" }).decision).toBe("allow");
   });
 
-  it("a path built from a variable and naming neither is not seen (a stated limit)", () => {
-    expect(cmd("rm -rf $FOURDA_MCP_HOME").decision).toBe("allow");
+  // Round 23 (W4): the setting's name is a path segment the guard reads; a path assembled from other pieces stays a stated limit (L4).
+  it("a path built from the data folder's setting is held; one assembled from other pieces is not seen (a stated limit)", () => {
+    expect(cmd("rm -rf $FOURDA_MCP_HOME").decision).toBe("deny");
+    expect(cmd("rm -rf $D/$X").decision).toBe("allow");
   });
 });
 

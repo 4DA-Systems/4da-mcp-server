@@ -49,7 +49,7 @@ describe("a PEP 440 epoch reaches the ledger check whole", () => {
   it("a proceed for 2.0 does not cover ==1!2.0; one for 1!2.0 does", () => {
     const dir = mkdtempSync(join(tmpdir(), "a651-epoch-"));
     try {
-      const entry = (version: string) => JSON.stringify({ t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "PyPI", package: "requests", version, verdict: "proceed" }) + "\n";
+      const entry = (version: string) => JSON.stringify({ sv: "6.6.0", t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "PyPI", package: "requests", version, verdict: "proceed" }) + "\n";
       const decide = () => respond({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: dir, tool_input: { command: "pip install 'requests==1!2.0'" } }, { FOURDA_MCP_HOME: dir }, Date.now());
       writeFileSync(join(dir, LEDGER_FILE), entry("2.0"));
       expect((JSON.parse(decide()) as { hookSpecificOutput: { permissionDecisionReason: string } }).hookSpecificOutput.permissionDecisionReason).toContain('"requests" "==1!2.0" (PyPI)');

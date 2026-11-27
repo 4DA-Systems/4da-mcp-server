@@ -30,7 +30,7 @@ afterEach(() => s.dispose());
 const run = (command: string, cwd = s.project, tool = "Bash") => s.run({ session_id: "s", cwd, hook_event_name: "PreToolUse", tool_name: tool, tool_input: { command } });
 const at = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 function lines(entries: Array<Record<string, string>>): void {
-  writeFileSync(join(s.home, "check-ledger.jsonl"), entries.map((e) => JSON.stringify({ t: at(1), ...e })).join("\n") + "\n");
+  writeFileSync(join(s.home, "check-ledger.jsonl"), entries.map((e) => JSON.stringify({ sv: "6.6.0", t: at(1), ...e })).join("\n") + "\n");
 }
 const PRIV = (eco: string, pkg: string, extra: Record<string, string>) => ({ ecosystem: eco, package: pkg, version: "latest", verdict: "unknown", reason: "NOT CHECKED (private)", not_checked: "private", ...extra });
 
@@ -57,12 +57,12 @@ describe("S1 (server): the ledger says why a name is private", () => {
     writeFileSync(join(root, "package.json"), '{"name":"r"}');
     writeFileSync(join(root, ".npmrc"), "@seamco:registry=https://npm.seamco.internal/\n");
     const rules = new PrivatePackageRules([root], env);
-    expect(rules.privateRuleKind("npm", "@seamco/utils", [root])).toEqual({ rule: "named", dir: root, host: null });
+    expect(rules.privateRuleKind("npm", "@seamco/utils", [root])).toEqual({ rule: "named", dir: root, host: null, config: "npm" });
   });
   it("a scope mapped in the environment, and GOPRIVATE: named, environment", () => {
     const rules = new PrivatePackageRules([root], { ...env, "npm_config_@envco:registry": "https://npm.envco.internal/", GOPRIVATE: "example.internal/*" });
-    expect(rules.privateRuleKind("npm", "@envco/x", [root])).toEqual({ rule: "named", dir: "environment", host: null });
-    expect(rules.privateRuleKind("Go", "example.internal/mod", [root])).toEqual({ rule: "named", dir: "environment", host: null });
+    expect(rules.privateRuleKind("npm", "@envco/x", [root])).toEqual({ rule: "named", dir: "environment", host: null, config: "npm" });
+    expect(rules.privateRuleKind("Go", "example.internal/mod", [root])).toEqual({ rule: "named", dir: "environment", host: null, config: "go" });
   });
   it("FOURDA_PRIVATE_PACKAGES: listed", () => {
     const rules = new PrivatePackageRules([root], { ...env, FOURDA_PRIVATE_PACKAGES: "acme-utils" });
@@ -119,7 +119,7 @@ describe("S2 (hook): a named record releases only in its config folder, with not
     s.file("package.json", '{"name":"r"}');
     s.file("examples/demo/package.json", '{"name":"demo"}');
     s.file("src/.keep", "");
-    lines([PRIV("npm", "@seamco/utils", { private_rule: "named", config_dir: s.project })]);
+    lines([PRIV("npm", "@seamco/utils", { private_rule: "named", config_dir: s.project, config_of: "npm" })]);
   });
   it("in the config folder, and in a folder below it that holds no package.json: released", () => {
     expect(run("npm i @seamco/utils@9.9.9").decision).toBe("allow");
@@ -149,7 +149,7 @@ describe("S2 (hook): a named record releases only in its config folder, with not
     }
   });
   it("an avoid for the version still denies a named record's release", () => {
-    lines([PRIV("npm", "@seamco/utils", { private_rule: "named", config_dir: s.project }), { ecosystem: "npm", package: "@seamco/utils", version: "9.9.9", verdict: "avoid", reason: "test avoid" }]);
+    lines([PRIV("npm", "@seamco/utils", { private_rule: "named", config_dir: s.project, config_of: "npm" }), { ecosystem: "npm", package: "@seamco/utils", version: "9.9.9", verdict: "avoid", reason: "test avoid" }]);
     expect(run("npm i @seamco/utils@9.9.9").decision).toBe("deny");
   });
 });

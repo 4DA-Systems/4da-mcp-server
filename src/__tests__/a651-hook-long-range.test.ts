@@ -32,7 +32,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function ledger(entries: Array<Record<string, unknown>>) {
-  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "npm", ...e })).join("\n") + "\n");
+  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ sv: "6.6.0", t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "npm", ...e })).join("\n") + "\n");
 }
 function decide(input: Record<string, unknown>): { decision: "allow" | "deny"; text: string } {
   const out = respond({ hook_event_name: "PreToolUse", cwd: dir, ...input }, { FOURDA_MCP_HOME: home }, Date.now());

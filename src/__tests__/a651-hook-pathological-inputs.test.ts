@@ -28,7 +28,7 @@ const BIG = 60_000;
 // Made when the table is built (the table writes the manifests the Write cases name).
 const home = mkdtempSync(join(tmpdir(), "a651-patho-home-"));
 const dir = mkdtempSync(join(tmpdir(), "a651-patho-proj-"));
-writeFileSync(join(home, "check-ledger.jsonl"), JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "zz", version: "1.0.0", verdict: "proceed" }) + "\n");
+writeFileSync(join(home, "check-ledger.jsonl"), JSON.stringify({ sv: "6.6.0", t: new Date().toISOString(), ecosystem: "npm", package: "zz", version: "1.0.0", verdict: "proceed" }) + "\n");
 afterAll(() => {
   rmSync(home, { recursive: true, force: true });
   rmSync(dir, { recursive: true, force: true });

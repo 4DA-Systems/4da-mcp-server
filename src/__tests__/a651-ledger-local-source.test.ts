@@ -72,7 +72,7 @@ describe("the hook holds local_source in every folder", () => {
   it("npm i lodash@3.10.1 is held", () => {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "a651-local-source-hook-"));
     try {
-      fs.writeFileSync(path.join(scratch, LEDGER_FILE), JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "unknown", not_checked: "local_source" }) + "\n");
+      fs.writeFileSync(path.join(scratch, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t: new Date().toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "unknown", not_checked: "local_source" }) + "\n");
       const env: Record<string, string | undefined> = { ...process.env, FOURDA_MCP_HOME: scratch };
       delete env.FOURDA_GUARD;
       const out = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: scratch, tool_input: { command: "npm i lodash@3.10.1" } }), encoding: "utf8", env }).stdout;

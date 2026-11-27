@@ -19,7 +19,7 @@ beforeEach(() => {
 afterEach(() => s.dispose());
 
 const at = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
-const line = (e: Record<string, string>) => JSON.stringify(e);
+const line = (e: Record<string, string>) => JSON.stringify({ sv: "6.6.0", ...e });
 const PROCEED = { ecosystem: "npm", package: "lodash", version: "4.17.21", verdict: "proceed" };
 const cmd = (command: string) => s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });
 const write = (lines: string[]) => writeFileSync(join(s.home, "check-ledger.jsonl"), lines.join("\n"));
