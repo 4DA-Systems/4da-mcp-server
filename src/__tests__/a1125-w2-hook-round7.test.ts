@@ -96,7 +96,7 @@ describe("G3b: a changed line with a TOML escape is held as not read, with a rem
     const file = s.file("Cargo.toml", text);
     expect(s.write(file, text).decision).toBe("allow");
     expect(s.edit(file, 'name = "probe"', 'name = "probe2"').decision).toBe("allow");
-    expect(s.edit(file, 'serde = "1.0.100"', "serde = \"1.0.100\"\n# a \\comment\nregex = 'C:\\\\x'").text).not.toContain(NOT_READ);
+    expect(s.edit(file, 'serde = "1.0.100"', "serde = \"1.0.100\"\n# a \\comment\nregex = '1.10.0'").text).not.toContain(NOT_READ);
     const py = `[tool.ruff]\nexclude = ["a\\\\b"]\n`;
     const pf = s.file("pyproject.toml", py);
     expect(s.edit(pf, "[tool.ruff]", "[tool.ruff]\nline-length = 100").decision).toBe("allow");

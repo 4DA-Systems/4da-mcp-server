@@ -66,7 +66,7 @@ describe("H2: a declaration that bounds nothing is the request latest; a tag wor
     expect(write("Cargo.toml", ct('[dependencies]\nrand = { workspace = true }\nlocal = { path = "../local" }')).decision).toBe("allow");
   });
   it("a specifier that is none of these is held as not read", () => {
-    expect(write("package.json", '{"dependencies":{"vite":"~>!"}}').text).toContain("a specifier this hook does not read");
+    expect(write("package.json", '{"dependencies":{"vite":"~>!"}}').text).toContain("a version form this hook does not read");
   });
 });
 

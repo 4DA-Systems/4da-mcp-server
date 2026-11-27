@@ -67,3 +67,5 @@ export function callData(text: unknown): string;
 export function windowsPath(path: string, base?: string | null): string | null;
 /** Round 23 (W4): whether a command's text names the data folder or ledger as a path segment. */
 export function namesDataSegment(text: string, env: NodeJS.ProcessEnv): boolean;
+/** Round 24 (Y1): the dependency value forms that name no registry release, with the managers that define each. */
+export const OWN_SOURCE_FORMS: ReadonlyArray<readonly [string, string]>;

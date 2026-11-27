@@ -1,5 +1,5 @@
 {
-  "description": "4DA guard: before an edit or an install command writes a dependency version, it needs a dependency_check verdict of proceed or review from the last 24 hours. FOURDA_GUARD=advise advises after the edit instead; FOURDA_GUARD=off turns the hook off. Beside a 4da server older than 6.5.0, which records no verdict, it denies nothing and advises after the edit.",
+  "description": "4DA guard: before an edit or an install command writes a dependency version, it needs a dependency_check verdict of proceed or review from the last 24 hours. FOURDA_GUARD=advise advises after the edit instead; FOURDA_GUARD=off turns the hook off. Until a 4da server has started its ledger it denies nothing and advises after the edit; it counts proceed and review only from a server at 6.6.0 or later.",
   "hooks": {
     "PreToolUse": [
       {

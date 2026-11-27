@@ -149,7 +149,7 @@ describe("V3: a releasing answer counts only from a server at least MIN_VERDICT_
     lines([{ ...P, ...extra }]);
     const r = run("npm i vite@8.4.0");
     expect(r.decision).toBe("deny");
-    expect(r.text.match(/is older than this guard needs/g)).toHaveLength(1);
+    expect(r.text.match(/The 4da server that recorded/g)).toHaveLength(1);
     expect(r.text).toContain("and check again");
   });
   it.each(["6.6.0", "6.10.0", "7.0.0", "6.6.0-rc.1"])("sv %s counts (compared numerically)", (sv) => {
