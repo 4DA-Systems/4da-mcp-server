@@ -18,6 +18,7 @@ import { dismissedBy, RESTS_ON_DECLARATION } from "../tools/briefing-confirm.js"
 import { pep508 } from "../tools/briefing-snippets.js";
 import { LEDGER_FILE, ledgerWritesSettled } from "../check-ledger.js";
 import { runDependencyCheck } from "../tools/dependency-check.js";
+import { screenValue } from "../output-screen.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
 
 let h: Harness;
@@ -96,7 +97,8 @@ describe("U2: a credential-shaped value is never repeated, from any argument pos
     npm();
     py();
     h.write("cred.txt", `zqxok==1.0\n${tok}==1.0\n`);
-    const r = await brief(args(tok));
+    // Round 14, X1: the screen is the server's, on what it returns (output-screen.ts), as here.
+    const r = screenValue(await brief(args(tok)), "task") as Record<string, any>;
     const out = JSON.stringify({ ...r, task: undefined });
     expect(out.includes(tok)).toBe(false);
   });

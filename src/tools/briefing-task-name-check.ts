@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * The name-level check of a loose word a task adds (pre-publish round 10, W3).
  *
  * A word after a verb that names a way of working as often as a package ("use blueprints", "try

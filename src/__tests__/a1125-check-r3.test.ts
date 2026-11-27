@@ -44,7 +44,9 @@ describe("1: an item field this tool does not define refuses that item, and noth
   ])("%j", async (item, field) => {
     const { results } = await check([item, { ecosystem: "npm", package: "lodash", to: "4.17.21" }]);
     expect(results[0]).toMatchObject({ verdict: "unknown", not_checked: "input" });
-    expect(results[0].reason).toContain(`unknown field "${field}": this tool reads only the public registry`);
+    // Round 14, X1: counted, never named.
+    expect(results[0].reason).toContain("an unknown field (1 unknown): this tool reads only the public registry");
+    expect(results[0].reason).not.toContain(`"${field}"`);
     expect(results[0].reason).toMatch(/nothing was sent/);
     // The rest of the batch is still answered.
     expect(results[1].not_checked).not.toBe("input");

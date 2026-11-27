@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * The manifest snippets of a task (round 11): requirements lines, pyproject arrays and tables, Poetry and Cargo
  * tables, package.json dependency objects and go.mod require blocks, read in ONE pass over the task.
  *

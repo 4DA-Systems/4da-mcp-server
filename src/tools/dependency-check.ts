@@ -63,7 +63,7 @@ import { findingReason } from "../late-answer.js";
 import { unquotePackageName } from "./package-name.js";
 import type { Verdict } from "./dependency-check-signals.js";
 import { parseTarget, rangeAdmits } from "./dependency-check-versions.js";
-import { cleanText, lengthProblem } from "../tool-args.js";
+import { lengthProblem } from "../tool-args.js";
 import { UNTRUSTED_TEXT_FIELDS, quoteThirdParty } from "../untrusted-text.js";
 import { shapeDependencyCheck, type DependencyCheckFormat } from "./dependency-check-concise.js";
 import { cargoBareVersion, cargoPartialBare, mergeCargoBare, mergeCargoPartial, mergeNpmPicks, type NpmWhy } from "./dependency-check-resolution.js";
@@ -540,7 +540,8 @@ export function validateItem(r: unknown, i: number): Requested {
   if (typeof r === "object" && r !== null && !Array.isArray(r)) {
     const unknown = Object.keys(o).find((k) => !ITEM_FIELDS.has(k));
     if (unknown !== undefined) {
-      throw new Error(`${where}: unknown field ${fieldName(unknown)}: this tool reads only the public registry and defines only ecosystem, package, to and from; nothing was sent`);
+      // Round 14, X1: counted, never named (a key may be a secret); a known field written with a blank is said so.
+      throw new Error(`${where}: an unknown field (${Object.keys(o).filter((k) => !ITEM_FIELDS.has(k)).length} unknown)${fieldNote(unknown)}: this tool reads only the public registry and defines only ecosystem, package, to and from; nothing was sent`);
     }
   }
   // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
@@ -608,11 +609,11 @@ const ITEM_FIELDS = new Set(["ecosystem", "package", "to", "from"]);
  * never reads as `"to"`, a field the tool defines (wave 2 review). Capped; invisible characters
  * dropped and "|" (the reason's separator) shown as "/", as quoteThirdParty does.
  */
-function fieldName(name: string): string {
-  const shown = JSON.stringify(cleanText(name).slice(0, 40).replace(/\|/g, "/"));
+function fieldNote(name: string): string {
   const lead = /^\s/.test(name);
   const trail = /\s$/.test(name);
-  return `${shown}${lead && trail ? " (with a leading and a trailing blank)" : lead ? " (with a leading blank)" : trail ? " (with a trailing blank)" : ""}`;
+  if (!ITEM_FIELDS.has(name.trim())) return "";
+  return ` (a known field written ${lead && trail ? "with a leading and a trailing blank" : lead ? "with a leading blank" : "with a trailing blank"})`;
 }
 
 /** A version's build metadata or local label (`+build.5`) after its last digit. Linear: one character class each side. */

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * Advisory-database rows in the 4DA feed about a package a task touches.
  *
  * Only the feed's advisory sources count (`cve`, `osv`). A row is about a package only when the

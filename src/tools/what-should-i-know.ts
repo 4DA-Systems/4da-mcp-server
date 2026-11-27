@@ -8,62 +8,30 @@
  *   how far the requested upgrade jumps;
  * - this project's other version-confirmed findings, counted separately;
  * - recorded decisions and decision windows relevant to the task;
- * - a delegation verdict, raised for example by version-confirmed evidence about the task, a finding on a checked
- *   package, install drift actually running, a decision conflict, or what the briefing noticed it could not read
- *   (each cause is listed in K1).
+ * - a delegation verdict (THE CONTRACT below).
  *
- * THE CONTRACT OF THE LEVEL (round 11, P1). One promise, first: THE LEVEL RESTS ON YOUR DECLARATION. Each package
- * you declare public is checked at the `version` you state; declare the version the task writes. Second, and
- * promising nothing: the briefing also checks versions it happens to read in the task (on a command's operand, in a
- * snippet, beside a name). That reading is best effort: a version written in a spelling it does not read is not
- * checked, and its silence never says that everything was read.
- * K1. The level follows from: this project's scan; the verdicts of what was looked up (the briefing's own lookups
- *     and every package the caller declared public); whether anything still waits; and what this briefing noticed
- *     it could not read, each of which holds review_needed at least: a command or snippet it says it did not read
- *     whole (K3), a package-source spelling of the C3 list, a refused argument, a word the screen withheld where a
- *     package stands, a dismissed name the briefing itself read and reported (an operand of a command it reads, an entry of a snippet
- *     it reads, a version form on it, a near miss; compared by dismissedBy: folded, bare name, each ecosystem's rule;
- *     round 13, U1), a command
- *     of a tool it does not read (`xargs` before a manager name; a manager it does not read followed by its own
- *     install verb, such as `gem install`, `composer require`, `brew install`), more candidate names than one call
- *     can declare (m7), and a task longer than one call reads (too many snippets or distinct words, or the time
- *     budget spent: "split the task"). "A package manager's name" is one of the names of briefing-canonical.ts
- *     MANAGER_NAMES. A public entry without `version` leaves the declaration incomplete: never safe_to_delegate:
- *     confirmation_needed, or a stricter or equal level another rule sets (round 9, E1; round 12, #14): a refused
- *     entry holds review_needed on its own, and with a versionless public entry the answer is confirmation_needed. `public: true` says the name is on the public registry, and it is sent
- *     there; `public: false` is for anything from a private registry, an index of its own, git or a path.
- *     `to_confirm` is what this briefing noticed, a prompt, never a complete reading. A safe_to_delegate reason ends
- *     "This rests on your declaration: a package you did not declare was not checked."; in a call that declared at
- *     least one package it is preceded, always, by the sentence that the versions read in the task are best effort.
- * K2. Task-text evidence, best effort (briefing-command-check.ts strictEvidence): the operands of a command the
- *     canonical grammar reads, the entries of a manifest snippet the snippet readers read (briefing-snippets.ts),
- *     and tokens that tie a version to a name, for example name@spec (bare or quoted), `alias@npm:name@spec` (tied
- *     to name), name==spec and PEP 440's other operators, `name = "spec"`, `"name": "spec"`. Where the form decides
- *     the ecosystem it is a (name as written, ecosystem) pair that waits in to_confirm until a declaration of exactly
- *     that pair settles it; dismissed, it keeps review_needed. A prose candidate is offered once with every ecosystem
- *     the project uses, and any declaration of the name settles it. A word the grammar consumed (program, verb,
- *     switch, option, value) is consumed at that occurrence only (D4).
- * K3. When the briefing notices it cannot read a command the grammar names (an option not on its manager's list, a
- *     source or path option, a substitution, a quote problem, a comma in its list, a word that is no plain name, a
- *     redirection, a Poetry ^ or ~ spec, a runner, scaffold or lockfile verb, a package manager it does not read:
- *     pipenv, pdm, rye, hatch, conda, mamba, micromamba, pixi), or a line or entry of a snippet, it says so by the
- *     manager and verb (or "a manifest snippet") only; nothing of it is offered, repeated or looked up, and the
- *     level is at most review_needed whatever is declared. That is a thing the briefing says when it notices; it
- *     does not promise that what it did not flag was read in full.
- * C3. A courtesy check on an exact list (briefing-command-check.ts SOURCE_SPELLINGS), not a promise about sources:
- *     when the task holds one of those spellings, the names the task adds are not looked up, also when declared
- *     public, and each is said "not looked up"; the level is at most review_needed and nothing is written to the
- *     check ledger. Any other way a task names a source is not noticed: the declaration decides. The project's own
- *     private rules (its configuration on disk, FOURDA_PRIVATE_PACKAGES) override a public declaration as before.
- * C4/C6. A declared public package is checked as dependency_check would be asked for it: at its declared `version`,
- *     and in addition at any spec the briefing happens to read on that exact pair (best effort). Without `version`
- *     it is checked at those specs, else at latest, and the declaration is incomplete: never safe_to_delegate
- *     (confirmation_needed, or a stricter or equal level another rule sets) until each public entry states its version; that completeness depends on the declaration alone (round 9, E1). The worst
- *     answer stands, and the ledger gets dependency_check's line for each check. Build metadata and a local label
- *     (`+x`) are dropped by dependency_check itself before any lookup (Go's `+incompatible` is kept).
- * Privacy. A declaration keeps the briefing from looking a name up for the task; it does not change this
- *     project's own scan, which reads the installed dependencies and sends their names unless the project's
- *     configuration marks them private. No task text goes to an embedding provider.
+ * THE CONTRACT (round 14). Each numbered sentence ends with the tests that pin it; nothing outside this block is.
+ * 1. The level rests on the caller's declaration: each package declared public is checked at the `version` it states, and a public entry without `version` never leaves the answer at safe_to_delegate. [tests: a1137-confirm-review12 (generated), a1132-round9]
+ * 2. A name the briefing read and reported (a seen kind marked "read" in `SEEN_KINDS`) that the caller dismissed holds the answer from safe_to_delegate, with its `DISMISSED_READ` text. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
+ * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), is never in a request the task's lookups make, and a public entry in that set is refused. [tests: a1137-round14 (property), a1137-confirm-review12 (generated)]
+ * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) is never in a tool result or error the server returns (`screenToolResult`), outside the `task` field of a what_should_i_know answer. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
+ * 5. That `task` field is the reading copy of the caller's task: markup dropped, line continuations joined, each run of blanks one space, a line over `MAX_READ_LINE` characters left out. [tests: a1136-round13]
+ * 6. A declared item's check ledger line is the line dependency_check writes for the same item: its engine and `recordVerdicts` for a looked-up item, `checkAndRecord` for one the project's configuration makes private. [tests: a1136-round13]
+ * 7. The briefing also checks versions it happens to read in the task, for example on a command's operand, in a snippet or beside a name; that reading is best effort, and a version written in a spelling it does not read is not checked. [tests: a1134-round11, a1135-round12]
+ * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of the project, running install drift, a decision conflict, a name waiting in to_confirm, or something the briefing noticed it could not read. [tests: a1135-confirm-review10, a1137-confirm-review12]
+ * 9. When the briefing notices it cannot read a command or a snippet whole, for example a quote problem, a source option, or a line over `MAX_READ_LINE` characters, it says so with `unreadableReason` and the answer is not safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
+ * 10. A command of a manager the briefing does not read, for example gem, brew or composer at a command position with its own verb, is said and holds the answer from safe_to_delegate; its words are not offered or looked up. [tests: a1137-round14, a1136-round13]
+ * 11. With a package-source spelling of `SOURCE_SPELLINGS` in the task, the names the task adds are not looked up (`SOURCE_HELD`); the answer is held from safe_to_delegate when that held a name, and a task that holds such a spelling but no name to hold can be safe. [tests: a1137-confirm-review12 (generated), a1127-confirm-promises]
+ * 12. A call reads at most `MAX_SNIPPETS` snippets and checks at most `WORD_SCAN_CAP` distinct words for near-miss names, and checks its deadline between stages and lines; past a bound the answer says which and is not safe_to_delegate. [tests: a1133-round10, a1134-round11]
+ * 13. The cost bounds are measured, not enforced by the dispatcher: the CPU tests keep each generated input of up to 200,000 characters under 3 s of child CPU. [tests: a1134-round11, a1135-round12, a1136-round13]
+ * 14. A text constant is said only where its rule in `TEXT_RULES` holds, for example `RESTS_ON_DECLARATION` ends a safe reason, `BEST_EFFORT_READING` precedes it in a call that declared a package, and `STAYS_REVIEW` is not said with safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
+ * 15. `to_confirm` lists names the briefing noticed: a prompt for the caller, not a complete reading. [tests: a1134-round11]
+ * 16. The project's own scan reads the installed dependencies and sends their names unless the project's configuration marks them private; a declaration does not change that, and no task text goes to an embedding provider. [tests: a1127-confirm-promises, a1136-round13]
+ * END OF THE CONTRACT.
+ *
+ * NOTES: how it reads; not part of the contract. The readers are briefing-command-check.ts (commands and forms),
+ * briefing-snippets.ts (manifest snippets), briefing-new-packages.ts and briefing-requested-versions.ts (prose), each
+ * with its own notes; the level is assembled in this file.
  *
  * Measured 2026-10-01 (live), the old briefing for "bump fastembed 5 -> 7":
  * eleven advisories, none about fastembed — an arXiv dataset paper, three
@@ -90,6 +58,8 @@ import {
   declarationFor,
   refusedClasses,
   dismissedBy,
+  DISMISSED_READ,
+  SEEN_KINDS,
   MAX_TO_CONFIRM,
   NEXT_STEP,
   oneEditApart,
@@ -102,14 +72,16 @@ import {
   readDeclarations,
   readNotPackages,
   sameName,
+  baseName,
   toConfirmEntry,
   type CheckedIndex,
   type DeclaredPackage,
   type PrivateIndex,
   type TaskPackages,
 } from "./briefing-confirm.js";
-import { credentialShape, knownCompromised, knownMalwareOnly, looksLikeSecret } from "./briefing-task-screen.js";
+import { credentialShape, knownCompromised, knownMalwareOnly } from "./briefing-task-screen.js";
 import { nameProblem } from "./dependency-check-screen.js";
+import { ECOSYSTEMS } from "./dependency-check-items.js";
 import { checkableSpec } from "./briefing-names.js";
 import { recordVerdicts, type CheckedItem } from "../check-ledger.js";
 import { checkAndRecord, type DependencyCheckParams } from "./dependency-check.js";
@@ -295,7 +267,7 @@ export interface WhatShouldIKnowResult {
    */
   requested_versions?: RequestedVersionFinding[];
   /**
-   * Every package-like thing of the task, exactly once: what waits for the caller's confirmation
+   * The package-like names of the task this briefing read, each listed once: what waits for the caller's confirmation
    * (to_confirm, with next_step), what was checked and on what basis, what is private, what the screen
    * or the argument check kept from being read (its value never repeated), and the caller's dismissed words.
    */
@@ -481,55 +453,15 @@ function getOpenDecisionWindows(db: FourDADatabase): WindowRow[] {
 const privateBasis = (why: string | null | undefined): PrivateIndex["basis"] => (why && /^FOURDA_PRIVATE_PACKAGES lists /.test(why) ? "your FOURDA_PRIVATE_PACKAGES list" : "this project's registry configuration");
 
 /**
- * Round 13, U2: the one place where caller- or file-supplied strings leave in an answer. Every string the caller gave
- * (task words, names, versions, not_packages words, field keys, ecosystems, file names, at any depth) and every line of
- * a file the briefing read for the task is cut into words; a word of a credential's shape (the task screen's own
- * tests: credentialShape, looksLikeSecret) is rendered by shape only, its first four characters and its length,
- * wherever it stands in any text of the answer. The echoed `task` is the caller's own input and is left as given.
+ * The tool's executor. Round 14, X1: what it returns is screened for credential shapes at the server's exit
+ * (output-screen.ts screenToolResult, applied to every tool result and error), not here.
  */
-const SUPPLIED = new WeakMap<object, string[]>();
-const suppliedWords = (value: unknown, out: string[], depth = 0): void => {
-  if (depth > 6 || out.length > 20_000) return;
-  if (typeof value === "string") {
-    for (const w of value.slice(0, 200_000).split(/[\s"'`,;()[\]{}<>=|&]+/)) if (w.length >= 8 && w.length <= 2000) out.push(w);
-    return;
-  }
-  if (Array.isArray(value)) for (const v of value.slice(0, 400)) suppliedWords(v, out, depth + 1);
-  else if (value && typeof value === "object") for (const [k, v] of Object.entries(value).slice(0, 400)) {
-    suppliedWords(k, out, depth + 1);
-    suppliedWords(v, out, depth + 1);
-  }
-};
-/** Note a text the briefing read for this call (a requirements file): its credential-shaped words are screened too. */
-const noteSupplied = (params: object, text: string) => suppliedWords(text, SUPPLIED.get(params) ?? []);
-function screenAnswer<T>(answer: T, words: readonly string[]): T {
-  const secrets = [...new Set(words.filter((w) => credentialShape(w) || looksLikeSecret(w)))].sort((a, b) => b.length - a.length);
-  if (secrets.length === 0) return answer;
-  const shape = (w: string) => `${w.slice(0, 4)}... (${w.length} characters)`;
-  const clean = (text: string) => secrets.reduce((t, w) => (t.includes(w) ? t.split(w).join(shape(w)) : t), text);
-  const walk = (v: unknown, depth: number): unknown => {
-    if (typeof v === "string") return clean(v);
-    if (depth > 12) return v;
-    if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
-    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, depth + 1)]));
-    return v;
-  };
-  const out = walk(answer, 0) as Record<string, unknown>;
-  if (answer && typeof answer === "object" && "task" in (answer as object)) out.task = (answer as Record<string, unknown>).task;
-  return out as T;
-}
-
 export async function executeWhatShouldIKnow(
   db: FourDADatabase | null,
   params: WhatShouldIKnowParams,
   liveIntel: BriefingLiveIntel | null = getLiveIntelligence(),
 ): Promise<WhatShouldIKnowResult> {
-  const words: string[] = [];
-  suppliedWords(params, words);
-  const own = { ...params };
-  SUPPLIED.set(own, words);
-  const answer = await executeBriefing(db, own, liveIntel);
-  return screenAnswer(answer, words);
+  return executeBriefing(db, params, liveIntel);
 }
 
 async function executeBriefing(
@@ -578,9 +510,7 @@ async function executeBriefing(
           const inside = real === realRoot || real.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep);
           if (!inside) return { why: "outside" };
           if (fs.statSync(real).size > 262_144) return { why: "unreadable" };
-          const text = fs.readFileSync(real, "utf8");
-          noteSupplied(params, text);
-          return text;
+          return fs.readFileSync(real, "utf8");
         } catch {
           return { why: "unreadable" };
         }
@@ -764,6 +694,7 @@ async function executeBriefing(
   // rules and the credential shapes, and recorded in the check ledger as dependency_check records it.
   // ── The caller's statement (briefing-confirm.ts). Invariants, each proved by a property test over generated
   // cases (a1127-confirm-invariants.test.ts):
+  // NOTES (not part of the contract): how the declaration is applied.
   //  I1. A declaration only ADDS checks: what a bare call looks up and concludes (project dependencies,
   //      bundled-list names, the versions the task writes) is looked up and weighed the same with any arguments.
   //      Privacy is the one exception: a name the caller marks `public: false` or lists in not_packages is not
@@ -879,7 +810,7 @@ async function executeBriefing(
   // tied by position to this name) in addition; with no declared version, also `latest` (and the call stays
   // confirmation_needed, round 9, E1). The worst answer sets the level.
   for (const d of declaredPublic) {
-    const onPair = evidence.pairs.filter((p) => p.ecosystem === d.ecosystem && p.name === d.name);
+    const onPair = evidence.pairs.filter((p) => p.ecosystem === d.ecosystem && sameName(p.name, d.name, d.ecosystem));
     // Round 8, D1(a): a spec the task writes in a form that ties it to this name (name@spec, name==spec,
     // `name = "spec"`, `"name": "spec"`, in prose or a code span) is a written spec of this pair too, where the form
     // allows the declared ecosystem and the spec is one that ecosystem's grammar reads.
@@ -892,7 +823,11 @@ async function executeBriefing(
     const versions = d.version ? [...specs, d.version] : versionlessAt;
     if (!d.version) checkedSoFar.set(`${d.ecosystem}\0${d.name}`, { name: d.name, ecosystem: d.ecosystem, at: versionlessAt.join(", ") });
     declaredName.set(`${d.ecosystem}\0${ecosystemKey(d.name, d.ecosystem)}`, d.name);
-    for (const version of [...new Set(versions)]) {
+    // F12 (round 14): one clause per (pair, version): PyPI's `==1.0.0` is the release 1.0.0; the declared spelling wins.
+    const sameVersion = (v: string) => (d.ecosystem === "PyPI" && /^===?[^,*=<>!~]+$/.test(v) ? v.replace(/^===?/, "") : v).toLowerCase();
+    const ordered = d.version ? [d.version, ...specs] : versions;
+    const unique = ordered.filter((v, i) => ordered.findIndex((x) => sameVersion(x) === sameVersion(v)) === i);
+    for (const version of unique) {
       const latest = /^latest$/i.test(version);
       // Round 7c, R3: one check, one row, one clause per (pair, version). A version is judged as a requested version
       // (a critical on it is human_only); latest of a package the project does not have is judged as a new package.
@@ -905,7 +840,7 @@ async function executeBriefing(
   // Round 7, C2: a strict pair (a canonical operand, a manifest entry) is settled only by a declaration of that exact
   // pair: the name as written, in that ecosystem; a prose candidate by any declaration of the name.
   const settles = (w: UnverifiedWord) =>
-    w.seen === "prose" ? declarationFor(w.word, declared.entries) : declared.entries.find((d) => d.name === w.word && w.read_as.split(" or ").includes(d.ecosystem));
+    w.seen === "prose" ? declarationFor(w.word, declared.entries) : declared.entries.find((d) => w.read_as.split(" or ").includes(d.ecosystem) && (d.ecosystem === "npm" ? baseName(d.name) === baseName(w.word) && d.name.toLowerCase() === d.name : sameName(d.name, w.word, d.ecosystem as CheckEcosystem)));
   const unanswered = gated.unverified.filter((w) => !settles(w) && dismissedBy(w.word, w.read_as.split(" or "), notPackages.words) === undefined);
   // C3: with a package source of the task's own, nothing waits for a declaration that could not release it: each name
   // the task adds is said not looked up (SOURCE_HELD) instead, and holds review_needed.
@@ -917,7 +852,15 @@ async function executeBriefing(
   const tooMany = gated.unverified.length > MAX_DECLARED || readerCut;
   // Round 9 (#29): one entry per name, its ecosystems merged (`x==1.0.0` read as PyPI and as a prose word).
   const waiting: UnverifiedWord[] = [];
-  for (const w of namesSource || tooMany ? [] : unanswered) {
+  // Round 14: a string that is no valid name in any ecosystem it was read for is never offered (a Go `module/...`
+  // pattern is its module).
+  const offerable = (w: UnverifiedWord): UnverifiedWord | null => {
+    const word = w.read_as.split(" or ").includes("Go") ? w.word.replace(/\/(?:\.\.\.)?$/, "") : w.word;
+    return w.read_as.split(" or ").some((e) => (ECOSYSTEMS as readonly string[]).includes(e) && nameProblem(e as CheckEcosystem, word) === null) ? { ...w, word } : null;
+  };
+  for (const w0 of namesSource || tooMany ? [] : unanswered) {
+    const w = offerable(w0);
+    if (!w) continue;
     const same = waiting.find((x) => x.word === w.word);
     if (same) same.read_as = [...new Set([...same.read_as.split(" or "), ...w.read_as.split(" or ")])].join(" or ");
     else waiting.push({ ...w });
@@ -986,7 +929,7 @@ async function executeBriefing(
       ...ownNamed.slice(MAX_NEW_PACKAGES).map((p) => p.name),
       ...wanted.slice(MAX_REQUESTED).map((r) => `${r.name} ${r.to}`),
       ...overflowTask,
-      // Round 11, P6: a package of a command this briefing does not read (`gem install rails`, `conda install x`) is
+      // NOTES: a package of a command this briefing does not read is consumed by the readers (unreadCommands) and
       // not offered here: the command is said as such (K3, or "a command this briefing does not read").
     ]),
   ];
@@ -1037,10 +980,8 @@ async function executeBriefing(
     const near = /^one edit from (\S+): /.exec(w.note ?? "")?.[1];
     const instead = replacedBy(w.word);
     if (instead) return [`you said ${w.word} is not a package and declared ${instead} instead: the task names ${w.word}; say so to the user, and make sure nothing installs ${w.word}`];
-    if (w.seen === "command") return [`you said ${w.word} is not a package; it stands where a package name stands in the task's command: make sure nothing installs it`];
-    if (w.seen === "runner") return [`you said ${w.word} is not a package; it stands where a package name stands in the task's runner command, which downloads and runs it: make sure nothing runs it`];
-    if (w.seen === "manifest") return [`you said ${w.word} is not a package; it stands where a package name stands in a manifest entry of the task: make sure nothing installs it`];
-    if (w.seen === "form") return [`you said ${w.word} is not a package; the task writes a version on it: make sure nothing installs it`];
+    // Round 14, X2: one table classifies every seen kind (briefing-confirm.ts SEEN_KINDS); a read kind holds.
+    if (w.seen && w.seen !== "prose" && SEEN_KINDS[w.seen] === "read") return [DISMISSED_READ[w.seen](w.word)];
     if (near) return [`you said ${w.word} is not a package; it is one edit from ${near}: make sure nothing installs it`];
     return [];
   })
@@ -1548,7 +1489,7 @@ function notCheckedPackages(names: string[]): string {
 }
 
 /**
- * The one section that holds every package-like thing of the task exactly once (briefing-confirm.ts):
+ * The section that lists the package-like names of the task this briefing read, each once (briefing-confirm.ts):
  * what waits (shaped so it cannot be pasted back as the `packages` argument: no `public`, a list of
  * ecosystems), a compact index of what was checked and on what basis, what is private, what was not read.
  */
