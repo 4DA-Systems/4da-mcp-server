@@ -23,7 +23,6 @@ afterEach(() => s.dispose());
 
 const bash = (command: string, tool = "Bash") => ({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: tool, tool_input: { command } });
 const G = (pkg: string, version: string, verdict: string, extra: Record<string, string> = {}) => ({ ecosystem: "Go", package: pkg, version, verdict, ...extra });
-const WAY = "check the module that contains the package, then name the module, not the package: go get <module>@<version>";
 
 describe("a verdict for one module never releases a longer path", () => {
   it.each([
@@ -43,28 +42,20 @@ describe("a verdict for one module never releases a longer path", () => {
   });
 });
 
-describe("the way through the denial names", () => {
-  it("a package path is held with the way through; naming the module, checked, passes", () => {
+describe("the way through: the denial's own call (round 22, F3)", () => {
+  it("a package path is held with the call for the path; the server's answer for it (the module judged in its place) releases it", () => {
     s.ledger([]);
     const pkg = "go get golang.org/x/net/http2@v0.23.0";
     const first = s.run(bash(pkg));
     expect(first.decision).toBe("deny");
     expect(first.items).toEqual([{ ecosystem: "Go", package: "golang.org/x/net/http2", to: "v0.23.0" }]);
-    expect(first.text).toContain(WAY);
-    expect(first.text).toContain("A verdict for a module never releases a longer path.");
-    // No call that guesses the module from the path.
-    expect([...first.text.matchAll(/dependency_check \{"items"/g)]).toHaveLength(1);
-    // The server answers unknown for the package path; the module is checked; the command names the module.
-    record(s, [G("golang.org/x/net/http2", "v0.23.0", "unknown", { reason: "not a module the Go proxy can resolve" })]);
-    const again = s.run(bash(pkg));
-    expect(again.decision).toBe("deny");
-    expect(again.text).toContain(WAY);
-    record(s, [G("golang.org/x/net", "v0.23.0", "proceed")]);
+    // The answer dependency_check records since round 22 (F3): the path, with the module that contains it.
+    record(s, [G("golang.org/x/net/http2", "v0.23.0", "proceed", { go_module: "golang.org/x/net" })]);
+    expect(s.run(bash(pkg)).decision).toBe("allow");
+    // A verdict for the module alone still releases only the module (a nested module starts with its path).
+    s.ledger([G("golang.org/x/net", "v0.23.0", "proceed")]);
+    expect(s.run(bash(pkg)).decision).toBe("deny");
     expect(s.run(bash("go get golang.org/x/net@v0.23.0")).decision).toBe("allow");
-    // The package-path form stays held after that same verdict, with the same way through.
-    const still = s.run(bash(pkg));
-    expect(still.decision).toBe("deny");
-    expect(still.text).toContain(WAY);
   });
 
   it("a module the server answers avoid for stays held when named", () => {
@@ -79,7 +70,6 @@ describe("the way through the denial names", () => {
     const file = s.file("go.mod", "module example.com/demo\n\ngo 1.22\n");
     const run = s.edit(file, "go 1.22\n", "go 1.22\n\nrequire github.com/aws/aws-sdk-go-v2/service/s3 v1.30.0\n");
     expect(run.decision).toBe("deny");
-    expect(run.text).not.toContain(WAY);
   });
 
   it("go.mod edits that change no version are not held", () => {

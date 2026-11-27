@@ -63,17 +63,27 @@ export interface LedgerEntry {
   /** For "unreadable_lockfile": the lockfile or manifest that could not be read. */
   unreadable_file?: string;
   /**
-   * For "private" (round 20 of the hook lane, Q3): "listed" when the user's own FOURDA_PRIVATE_PACKAGES
-   * covers the name (the hook honours it in every project), "project" for any other private rule (a
-   * registry, index, scope or proxy of the project): the hook honours it only inside `project_root`.
+   * For "private" (round 22 of the hook lane, S1): why the name was withheld. "listed": the user's own
+   * FOURDA_PRIVATE_PACKAGES covers it (the hook honours it in every folder). "named": a rule names the
+   * package or its scope (an npm scope mapped to a registry, a GOPRIVATE pattern); the hook honours it
+   * in `config_dir` only, or everywhere when that is "environment". "registry-wide": the ecosystem's
+   * default registry, index or proxy is a host this server does not know as public; the hook never
+   * honours it (a public name there was simply not checked).
    */
-  private_rule?: "listed" | "project";
-  /** For private_rule "project": the root of the project whose rules made the name private. */
-  project_root?: string;
+  private_rule?: "listed" | "named" | "registry-wide";
+  /**
+   * For "named" and "registry-wide": the folder whose file holds the rule, or "environment" for an
+   * environment or user-level rule.
+   */
+  config_dir?: string;
+  /** For "registry-wide": the host of the registry, index or proxy (a host name only, never credentials). */
+  registry_host?: string;
+  /** Round 22 (F3): Go: the module that contains the package path recorded in `package`. */
+  go_module?: string;
 }
 
 /** Where a private record applies (LiveIntelligence.privateRecordScope). */
-export type PrivateScope = (ecosystem: string, name: string) => { rule: "listed" | "project"; root: string | null };
+export type PrivateScope = (ecosystem: string, name: string) => { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null };
 
 /** The fields of a dependency_check result item the ledger keeps. */
 export interface CheckedItem {
@@ -86,6 +96,8 @@ export interface CheckedItem {
   not_checked?: string;
   /** Set when a name was withheld only because this file could not be read (dependency-check-screen.ts privateResult). */
   unreadable_file?: string | null;
+  /** Go: the module that contains the package path asked (F3). */
+  go_module?: string;
 }
 
 /** A path kept as it is, or null when it is empty, too long or holds a control character. */
@@ -140,6 +152,7 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
       verdict: oneLine(item.verdict, 20),
       ...(typeof item.to_requested === "string" && item.to_requested ? { requested: oneLine(item.to_requested, MAX_FIELD) } : {}),
       ...(typeof item.reason === "string" && item.reason ? { reason: oneLine(item.reason, MAX_REASON) } : {}),
+      ...(typeof item.go_module === "string" && item.go_module && item.go_module !== pkg ? { go_module: oneLine(item.go_module, MAX_FIELD) } : {}),
       ...(unread
         ? { not_checked: "unreadable_lockfile", unreadable_file: unread }
         : withheld
@@ -153,17 +166,22 @@ export function ledgerEntries(items: readonly CheckedItem[], at: Date = new Date
 }
 
 /**
- * Q3: a private record's scope. With no scope known (no project, or the call failed), the record is
- * "project" with no root, which the hook honours nowhere: never a release in every project by default.
+ * Q3 + round 22 (S1): why a private record is private. With nothing known (no project, or the call
+ * failed), the record is "registry-wide" with no folder, which the hook never releases.
  */
-function scopeFields(item: { ecosystem: string; package: string }, scope: PrivateScope | null): Pick<LedgerEntry, "private_rule" | "project_root"> {
+function scopeFields(item: { ecosystem: string; package: string; reason?: unknown }, scope: PrivateScope | null): Pick<LedgerEntry, "private_rule" | "config_dir" | "registry_host"> {
   try {
     const s = scope ? scope(item.ecosystem, item.package) : null;
     if (s?.rule === "listed") return { private_rule: "listed" };
-    const root = s ? pathField(s.root) : null;
-    return root ? { private_rule: "project", project_root: root } : { private_rule: "project" };
+    const dir = s && s.dir === "environment" ? "environment" : s ? pathField(s.dir) : null;
+    // A registry the rules did not name (a requirements file's --index-url, a lockfile source): its host from the answer's own reason.
+    const fromReason = typeof item.reason === "string" ? /\bhttps?:\/\/(?:[^\s/@]*@)?([a-z0-9.-]{1,253})/i.exec(item.reason)?.[1] : undefined;
+    const raw = s && typeof s.host === "string" ? s.host : fromReason;
+    const host = typeof raw === "string" && /^[a-z0-9.-]{1,253}$/i.test(raw) ? raw.toLowerCase() : null;
+    const rule = s?.rule === "named" ? "named" : "registry-wide";
+    return { private_rule: rule, ...(dir ? { config_dir: dir } : {}), ...(host && rule === "registry-wide" ? { registry_host: host } : {}) };
   } catch {
-    return { private_rule: "project" };
+    return { private_rule: "registry-wide" };
   }
 }
 

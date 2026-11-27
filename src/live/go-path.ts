@@ -152,6 +152,32 @@ async function declaredCase(path: string, version: string | null | undefined, fe
 }
 
 /** The sentence an answer gives for a rejected path. */
+/**
+ * Round 22 (F3): the module that contains a Go package path (`golang.org/x/tools/cmd/stringer` is a
+ * package of module `golang.org/x/tools`), as go install and go get resolve it: the path itself when
+ * the proxy serves it as a module at `version` (or @latest), else the longest prefix of at least two
+ * elements the proxy serves at that version; null when none does or the proxy cannot be read.
+ * `isPrivate` is asked of every prefix first: a private one is never sent.
+ */
+export async function goModuleContaining(path: string, version: string | null, isPrivate: (p: string) => boolean, fetchFn: typeof fetchWithTimeout = fetchWithTimeout): Promise<string | null> {
+  const parts = path.split("/");
+  // A path of three elements or fewer is taken as a module (host/owner/repo): nothing is asked for it.
+  if (parts.length <= 3) return null;
+  const at = version && /^v\d/.test(version) ? `@v/${escapeModulePath(version)}.info` : "@latest";
+  for (let n = parts.length; n >= 2; n--) {
+    const prefix = parts.slice(0, n).join("/");
+    if (isPrivate(prefix)) return null;
+    try {
+      const res = await fetchFn(`${PROXY}/${escapeModulePath(prefix)}/${at}`, {}, TIMEOUT_MS);
+      if (res.ok) return prefix;
+      if (res.status !== 404 && res.status !== 410) return null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export function goPathNotCheckedText(raw: string, verdict: Extract<GoPathVerdict, { ok: false }>): string {
   const use = verdict.canonical ? ` Check \`${verdict.canonical}\` instead.` : "";
   return `NOT CHECKED: \`${raw}\` is not a Go module path the go command accepts as written (${verdict.reason}), and OSV.dev matches advisories by the exact module path, so nothing about it was checked.${use} This is not a clean result.`;

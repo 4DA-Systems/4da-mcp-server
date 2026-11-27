@@ -52,8 +52,9 @@
  *
  * P3 (verdicts): for each release an examined call names in a form the hook reads, the call is
  * denied unless the ledger holds a proceed or review answer that counts for that reading, or a
- * private record that applies, or the release comes from the project's own source (both below)
- * [test: a1125-w2-hook-forms, a1125-w2-hook-round20, a1123-guard-hook]. P3: among the answers that
+ * private record that applies, or the release comes from the project's own source (both below),
+ * and a review answer, for example for a low or moderate advisory, lets it through as a proceed
+ * answer does [test: a1125-w2-hook-forms, a1125-w2-hook-round20, a1123-guard-hook]. P3: among the answers that
  * count for a reading, the newest proceed, review, avoid or wait answer decides, an avoid or wait
  * one denies the call, and an unknown answer decides nothing [test: a651-hook-ledger-order,
  * a1125-w2-hook-ledger-unknown, a1125-w2-hook-forms, a1125-w2-hook-round20]. P3: an answer counts
@@ -61,7 +62,7 @@
  * release it records, an avoid or wait answer for a release also counts for a Cargo bare version of
  * it (which Cargo reads as a range that a lockfile holding the release keeps), and where no answer
  * counts for a range, the answer for the release its inclusive upper bound names counts when its
- * other bounds are lower bounds (judge) [test: a1125-w2-hook-round20, a651-hook-ranges,
+ * other bounds are lower bounds (judge) [test: a1125-w2-hook-round22, a1125-w2-hook-round20, a651-hook-ranges,
  * a1125-w2-hook-contract]. P3: an answer counts for LEDGER_WINDOW_MS (24 hours) after it was
  * recorded, and for the reading latest for LATEST_WINDOW_MS (1 hour) [test: a1125-w2-hook-round20,
  * a1125-w2-hook-contract]. P3: a name given without a version where the manager then installs its
@@ -77,10 +78,14 @@
  * (sourceVerdict, urlDependency) [test: a1125-w2-hook-round18, a1125-w2-hook-round19,
  * a1123-hookfix-local-sources]. P3: where no proceed, review, avoid or wait answer counts for a
  * reading, a private record lets the release through when it is the name's newest withheld line,
- * newer than the name's last answer for that reading, and applies to the call's folder: a record
- * from the user's own list applies in every folder, a record from a project's rules in that
- * project's root and the folders up to PROJECT_DEPTH levels below it, and a record that says
- * neither applies nowhere [test: a1125-w2-hook-round20, a651-hook-withheld].
+ * newer than the name's last answer for that reading, and it applies: a record of a name on the
+ * user's own list applies in every folder; a record of a rule that names the package or its scope
+ * applies in every folder when that rule is set in the environment or a user-level file, and
+ * otherwise only when the command changes no folder, names no directory option and installs
+ * nothing globally, and the nearest folder at or above the call's folder that holds the
+ * ecosystem's manifest is the folder of the file that holds the rule; a record made because the
+ * ecosystem's default registry is a host the server does not know as public, and any other
+ * record, applies nowhere [test: a1125-w2-hook-round22, a1125-w2-hook-round20, a651-hook-withheld].
  *
  * P4 (text): a simple command that dataCommand reads as a data program (its program and options on
  * the DATA_SPECS list), with no setting on its line but those INERT_SETTING allows, whose output
@@ -116,6 +121,7 @@
  * manager resolves on its own, for example transitive dependencies, a release a lockfile or an
  * installed copy already holds, the release a range picks, overrides and pins elsewhere in the
  * project, the runtime's own constraints, and a release published after the verdict was recorded
+ * or after the server last read the registry's version list, which it keeps for up to an hour
  * [test: a1125-w2-hook-round10, a1125-w2-hook-round19]. L1: vulnerability_scan reads the releases
  * actually installed, and the advice line (P6) says to run it [test: a1125-w2-hook-round16]. L2:
  * the hook examines what P1 detects and nothing else, so an install started another way goes ahead
@@ -128,7 +134,8 @@
  * to defeat the hook can, for example with a script that runs the install, a command the shell
  * decodes before it runs, or a change of folder made in an earlier call [test:
  * a1125-w2-hook-contract]. L5: the ledger is taken as the server wrote it, so the verdicts, and
- * whether a record is private and where it applies, are the server's (src/check-ledger.ts), and a
+ * why a record is private and where the rule behind it is set, are the server's
+ * (src/check-ledger.ts), and a
  * ledger line the hook cannot read is no verdict and makes the verdicts it may stand beside unknown
  * (readLedger) [test: a1125-w2-hook-ledger-unknown, a1125-w2-hook-round20].
  *
@@ -244,10 +251,16 @@
  * packageExtensions, configDependencies) nor on PNPM_INERT_LIST (settings known to put no registry
  * release into node_modules or the lockfile, each with its reason) is held. A package the server
  * recorded private goes ahead at any version unless an avoid or wait for that version came first, and
- * only where the record applies: one the user's own FOURDA_PRIVATE_PACKAGES made (`private_rule:
- * "listed"`) in every project; one a project's own registry, index, scope or proxy made (`private_rule:
- * "project"`, with `project_root`) only for a call whose folder is that root or inside it (12 levels);
- * a private line with neither (an older server's) nowhere.
+ * only where the record applies (round 22, S2): `private_rule: "listed"` (FOURDA_PRIVATE_PACKAGES) in
+ * every folder; `"named"` (an npm scope mapped to a registry, a GOPRIVATE pattern) everywhere when
+ * `config_dir` is "environment", else only for a call that moves nothing (no cd, directory option or
+ * global install: commandMoves) whose nearest folder holding the ecosystem's manifest is `config_dir`
+ * (measured: npm 10.9.2 and pnpm 10.34.6 read a project's .npmrc in its own folder, not in a nested
+ * standalone package or a workspace member; Cargo 1.97.0 reads .cargo/config.toml from every folder
+ * above, which the hook does not use: equal folder only); `"registry-wide"` (the default registry,
+ * index or proxy is not known as public) never, denied with how to have it checked
+ * (FOURDA_PUBLIC_MIRRORS, FOURDA_PRIVATE_PACKAGES); a line with none of these (an older server's)
+ * never. A named record that does not apply here is denied with where its rule applies.
  *
  * WHAT IS HELD
  *
@@ -6055,17 +6068,54 @@ let callFolder = process.cwd();
  * project's root or inside it (the same PROJECT_DEPTH ancestor walk); a record with neither (an
  * older server's line, or one whose project was not known) applies nowhere.
  */
+/** Round 22 (S2): the manifest that marks a project folder, per ecosystem. */
+const PROJECT_MANIFESTS = { npm: ["package.json"], PyPI: ["pyproject.toml"], "crates.io": ["Cargo.toml"], Go: ["go.mod"] };
+/** Round 22 (S2): whether the command moves its install out of the call's folder or makes it global (judgeCall). */
+let callMoved = false;
+/** The nearest folder at or above `dir` (PROJECT_DEPTH levels) that holds the ecosystem's manifest, or null. */
+function projectFolderOf(dir, eco) {
+  const names = PROJECT_MANIFESTS[eco] ?? [];
+  let d = dir;
+  for (let level = 0; level <= PROJECT_DEPTH; level++) {
+    if (names.some((n) => existsSync(join(d, n)))) return d;
+    const up = dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  return null;
+}
+/**
+ * Round 22 (S2): whether a private record releases a release in this call. "listed" (the user's own
+ * FOURDA_PRIVATE_PACKAGES): everywhere. "named" (a rule naming the package or its scope): with
+ * config_dir "environment" everywhere; otherwise only when the install's own project folder (the
+ * call's folder, or its nearest ancestor holding the ecosystem's manifest) is that config folder,
+ * and the command moves nothing (no directory change or option, no global install): the measured
+ * rule is that npm and pnpm read a project's .npmrc in its own folder only. "registry-wide", and a
+ * record that says none of these: never.
+ */
 function privateApplies(e) {
   if (e.private_rule === "listed") return true;
-  if (e.private_rule !== "project" || typeof e.project_root !== "string" || !e.project_root) return false;
-  const same = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
-  const root = resolve(e.project_root);
-  let dir = callFolder;
-  for (let level = 0; level <= PROJECT_DEPTH; level++) {
-    if (same(dir, root)) return true;
-    const up = dirname(dir);
-    if (up === dir) break;
-    dir = up;
+  if (e.private_rule !== "named" || typeof e.config_dir !== "string" || !e.config_dir) return false;
+  if (e.config_dir === "environment") return true;
+  if (callMoved) return false;
+  const eco = ["npm", "crates.io", "PyPI", "Go"].find((x) => x.toLowerCase() === String(e.ecosystem).toLowerCase());
+  const folder = projectFolderOf(callFolder, eco);
+  if (folder === null) return false;
+  const same = (x, y) => (process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y);
+  return same(resolve(folder), resolve(e.config_dir));
+}
+
+/** Round 22 (S2): the words that move an install out of the call's folder, or make it global. */
+const MOVES_INSTALL = /^(?:-g|--global|--location=global|--prefix(?:=.*)?|-C\S*|--dir(?:=.*)?|--cwd(?:=.*)?|--directory(?:=.*)?|--project(?:=.*)?|--manifest-path(?:=.*)?|--root(?:=.*)?|--target(?:=.*)?|--user|global)$/;
+/** Round 22 (S2): whether a command line changes folder, names a directory option, or installs globally (conservative: unreadable = moves). */
+function commandMoves(command, dialect) {
+  const commands = quietly(() => simpleCommands(command, dialect, null, null, MAX_ACCOUNT_CHARS));
+  if (!commands) return true;
+  for (const words of commands) {
+    const start = Math.max(0, commandStart(words));
+    const program = programName(words[start] ?? "");
+    if (DIRECTORY_CHANGES.has(program) || program === "builtin" || /^[A-Za-z]:$/.test(words[start] ?? "")) return true;
+    if (words.some((w) => MOVES_INSTALL.test(w) || WRAPPER_FOLDER.test(w) || PREFIX_FOLDER.test(w))) return true;
   }
   return false;
 }
@@ -6141,7 +6191,11 @@ function judge(index, c) {
   }
   const withheld = forPackage.filter(isWithheld).at(-1);
   if (withheld && (!last || forPackage.indexOf(withheld) > forPackage.indexOf(last))) {
-    if (isPrivateRule(withheld)) return privateApplies(withheld) ? "allow" : { check: last ?? null, foreignPrivate: withheld };
+    if (isPrivateRule(withheld)) {
+      if (privateApplies(withheld)) return "allow";
+      // S2: a registry-wide record never releases; a named one that does not apply here is held with its own remedy.
+      return withheld.private_rule === "registry-wide" ? { registryWide: withheld } : { foreignPrivate: withheld };
+    }
     return isUnreadable(withheld) ? { unreadable: withheld } : { localSource: withheld };
   }
   return { check: last ?? null, ...(stale && !last ? { stale } : {}) };
@@ -6186,6 +6240,8 @@ function denialFor(introduced, ledger, dir, what) {
   const unchecked = [];
   const tagged = [];
   const urls = [];
+  const registryWide = [];
+  const foreign = [];
   const index = byPackage(ledger);
   for (const c of introduced) {
     // Past the budget the call is held as not read (judgeCall), whatever is left to judge.
@@ -6195,11 +6251,13 @@ function denialFor(introduced, ledger, dir, what) {
     if (verdict.deny) held.push({ c, entry: verdict.deny });
     else if (verdict.unreadable) unreadable.push({ c, entry: verdict.unreadable });
     else if (verdict.localSource) local.push({ c, entry: verdict.localSource });
+    else if (verdict.registryWide) registryWide.push({ c, entry: verdict.registryWide });
+    else if (verdict.foreignPrivate) foreign.push({ c, entry: verdict.foreignPrivate });
     else if (c.url) urls.push({ c });
     else if (c.tag) tagged.push({ c });
     else unchecked.push({ c, last: verdict.check, stale: verdict.stale ?? null });
   }
-  if (held.length === 0 && unreadable.length === 0 && local.length === 0 && unchecked.length === 0 && tagged.length === 0 && urls.length === 0) return null;
+  if (held.length === 0 && unreadable.length === 0 && local.length === 0 && unchecked.length === 0 && tagged.length === 0 && urls.length === 0 && registryWide.length === 0 && foreign.length === 0) return null;
   const lines = [`4DA guard: this ${what} was stopped before it ran.`];
   for (const { c, entry } of held.slice(0, 10)) {
     lines.push(`- ${quotedChange(c)}: dependency_check answered ${entry.verdict} at ${when(entry)}, recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}. Write a version it answers proceed for.`);
@@ -6214,6 +6272,18 @@ function denialFor(introduced, ledger, dir, what) {
   for (const { c, entry } of local.slice(0, 10)) {
     lines.push(
       `- ${quotedChange(c)}: at ${when(entry)} dependency_check did not look it up, because a project installs it from somewhere other than its public registry (recorded reason ${entry.reason ? quoted(serverText(entry.reason), 420) : "(none)"}). This ${what} would install ${quoted(c.name)} ${quoted(c.spec)} from the public registry, which was not checked: a public release of a name a project takes from elsewhere is how dependency confusion starts. If the registry release is what is wanted: first remove that non-registry spec from the manifest that declares it (that edit goes ahead; one that puts a registry version in its place is held like this command), or, if the recorded reason says a catalog could not be read, repair the catalog; then call dependency_check for this version: this ${what} passes once it answers proceed. If the name is a package of this workspace: with pnpm or Yarn install it as ${quoted(`${c.name}@workspace:*`)} (that command goes ahead); with any manager, have it marked private with FOURDA_PRIVATE_PACKAGES=${quoted(c.name)} in the 4da server's environment (the name then never leaves this machine: the next dependency_check call for it sends nothing, records it private, and this ${what} passes), or add it to the manifest by hand as a file: path (that edit goes ahead). FOURDA_GUARD is the user's setting, not yours to change.`,
+    );
+  }
+  // S2: a name the server withheld because the project's default registry is not one it knows as public.
+  for (const { c, entry } of registryWide.slice(0, 10)) {
+    const host = typeof entry.registry_host === "string" && /^[a-z0-9.-]{1,253}$/i.test(entry.registry_host) ? entry.registry_host.toLowerCase() : null;
+    lines.push(
+      `- ${quotedChange(c)}: this project's registry (${host ?? "its default registry"}) is not one 4DA knows as public, so its packages were not checked. If it proxies the public registry, add its host to FOURDA_PUBLIC_MIRRORS and they are checked like any other; if ${quoted(c.name)} is your organisation's own package, list it in FOURDA_PRIVATE_PACKAGES.`,
+    );
+  }
+  for (const { c } of foreign.slice(0, 10)) {
+    lines.push(
+      `- ${quotedChange(c)}: the registry rule that makes this name private belongs to another folder (or this command moves the install or makes it global), so here it would be fetched from the public registry, which was not checked. Run the install in the project folder whose configuration holds that rule, or add the rule to this project's own configuration; if ${quoted(c.name)} is your organisation's own package, list it in FOURDA_PRIVATE_PACKAGES.`,
     );
   }
   for (const { c } of urls.slice(0, 10)) {
@@ -6248,16 +6318,9 @@ function denialFor(introduced, ledger, dir, what) {
     lines.push(
       `- ${named}: ${fresh.length === 0 ? "no proceed or review verdict" : "no dependency_check verdict"} in the last 24 hours. If ${one ? "it is the package" : "they are the packages"} you mean to add, call the 4da MCP tool dependency_check ${JSON.stringify({ items })}${batches}, and this ${what} will pass once that call answers proceed or review.`,
     );
-    // dependency_check reads Go modules and answers unknown for a package path, so a command that
-    // names one could never pass (audit 2026-11-25, D-M3). The hook cannot know where a module ends,
-    // and a verdict for one module never releases a longer path (a nested module starts with it):
-    // the way through is to name the module itself, which the exact-path rule then releases.
-    const goPaths = what === "command" ? unchecked.filter(({ c }) => c.ecosystem === "Go") : [];
-    if (goPaths.length > 0) {
-      lines.push(
-        `- ${goPaths.slice(0, 8).map(({ c }) => quotedChange(c)).join(", ")}${goPaths.length > 8 ? `, and ${goPaths.length - 8} more` : ""}: a Go path may be a package inside a module, and dependency_check reads modules: it answers unknown for a package path (golang.org/x/net/http2 is a package of the module golang.org/x/net). If so, check the module that contains the package, then name the module, not the package: go get <module>@<version>. This ${what} passes once dependency_check answers proceed or review for each path exactly as the ${what} names it. A verdict for a module never releases a longer path.`,
-      );
-    }
+    // Round 22 (F3): dependency_check answers for a Go package path as the module that contains it,
+    // and records the path itself, so the call above releases it. A verdict for a module still never
+    // releases a longer path: a nested module starts with its parent's path (otel/sdk, tools/gopls).
     lines.push(
       "dependency_check sends each name to its public registry and to OSV.dev unless this project's private rules cover it (an .npmrc scope mapped to a private registry, GOPRIVATE, a private Cargo or Python index, FOURDA_PRIVATE_PACKAGES); a name they cover is never sent, it is recorded private, and any version of it then goes ahead. " +
         "A package from a private registry that no such rule covers must NOT be checked: the call would send its name to the public registry. Add the rule first (the registry line in .npmrc, pip.conf or GOPRIVATE, or FOURDA_PRIVATE_PACKAGES=<name> in the 4da server's environment, which the user sets), then make the call: it sends nothing, records the name private, and this " +
@@ -6519,6 +6582,7 @@ function judgeCall(input, env, now) {
   const cwd = resolve(typeof input?.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd());
   const file = typeof input?.tool_input?.file_path === "string" ? input.tool_input.file_path : null;
   callFolder = file && input.tool_name !== "Bash" && input.tool_name !== "PowerShell" ? dirname(resolve(cwd, file)) : cwd;
+  callMoved = (input?.tool_name === "Bash" || input?.tool_name === "PowerShell") && typeof input?.tool_input?.command === "string" ? commandMoves(input.tool_input.command, input.tool_name === "PowerShell" ? "powershell" : "bash") : false;
   if (overBudget()) {
     // Already past the budget before reading (a slow start or stdin): read nothing more.
   }

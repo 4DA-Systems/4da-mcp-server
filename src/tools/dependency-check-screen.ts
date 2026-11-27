@@ -50,7 +50,7 @@ export async function screenItems(all: Requested[], liveIntel: LiveIntelligence 
   const requested = all.filter((_, i) => !privateWhy[i] && !(goPath[i] && !goPath[i]!.ok) && !badName[i]);
   const privateItems = all.flatMap((r, i) => {
     const why = privateWhy[i];
-    if (why) return [{ at: i, result: privateResult(r, why, liveIntel?.withheldUnreadableFile?.(why) ?? null) }];
+    if (why) return [{ at: i, result: privateResult(r, why, liveIntel?.withheldUnreadableFile?.(why) ?? null, privateKind(liveIntel, r)) }];
     const bad = badName[i];
     if (bad) return [{ at: i, result: badNameResult(r, bad) }];
     const g = goPath[i];
@@ -200,7 +200,17 @@ function badNameResult(r: Requested, problem: string): ItemResult {
  * installed from is not known, and the remedy is to repair that file (6.5.0 called lodash "a
  * private package" beside an unparseable package-lock.json and sent the agent to a private registry).
  */
-function privateResult(r: Requested, why: string, unreadFile: string | null): ItemResult {
+/** Round 22 (S3): why a withheld name is private (LiveIntelligence.privateRecordScope), or null when it cannot be asked. */
+function privateKind(liveIntel: LiveIntelligence | null, r: Requested): { rule: string; host: string | null } | null {
+  try {
+    const scope = (liveIntel as { privateRecordScope?: (e: string, n: string) => { rule: string; host: string | null } } | null)?.privateRecordScope;
+    return scope ? scope.call(liveIntel, r.ecosystem, r.package) : null;
+  } catch {
+    return null;
+  }
+}
+
+function privateResult(r: Requested, why: string, unreadFile: string | null, kind: { rule: string; host: string | null } | null = null): ItemResult {
   if (unreadFile) {
     const kind = unreadFileKind(unreadFile);
     return {
@@ -237,6 +247,18 @@ function privateResult(r: Requested, why: string, unreadFile: string | null): It
       ...head(provisional(r)),
       verdict: "unknown",
       reason: `NOT CHECKED (not a registry release): ${r.package}: ${why}. Nothing about it was sent to OSV.dev or a registry, and nothing about ${provisional(r).to} is known. This is not a clean result: review the code it comes from, or ask about the registry package it installs.`,
+      signals: [],
+      not_checked: "private",
+    };
+  }
+  // S3: a public name withheld only because the project's default registry is not known as public
+  // is no private package: the answer says what was not checked, and how to have it checked.
+  if (kind?.rule === "registry-wide") {
+    const where = kind.host ? `this project's default registry is ${kind.host}, which 4DA does not know as public (${why})` : `this project installs from a registry 4DA does not know as public (${why})`;
+    return {
+      ...head(provisional(r)),
+      verdict: "unknown",
+      reason: `NOT CHECKED (private): not checked: ${where}, so nothing about ${r.package} was sent to OSV.dev or a public registry, and nothing about ${provisional(r).to} is known. This is not a clean result: if that registry proxies the public one, add its host to FOURDA_PUBLIC_MIRRORS and the package is checked like any other; if ${r.package} is your organisation's own package, list it in FOURDA_PRIVATE_PACKAGES.`,
       signals: [],
       not_checked: "private",
     };
