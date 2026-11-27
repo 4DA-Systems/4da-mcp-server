@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * What a word in a task can and cannot be, as a package name (blind audit round 4): shared by the
  * briefing's readers of named versions (briefing-requested-versions.ts) and new packages
  * (briefing-new-packages.ts). The forms that tie a version to a name live in briefing-command-check.ts

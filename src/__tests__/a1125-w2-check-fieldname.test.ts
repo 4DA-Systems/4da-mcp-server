@@ -31,16 +31,18 @@ const refusal = async (item: Record<string, unknown>) => {
   return out.results[0].reason;
 };
 
-describe("an unknown field is named as written, blanks included", () => {
+// Round 14, X1: an unknown field is counted, never named; a known field written with a blank is said so.
+describe("an unknown field is counted, never named; a blank on a known field is said", () => {
   it('" to": a leading blank', async () => {
-    expect(await refusal({ ecosystem: "npm", package: "lodash", " to": "4.17.21", to: "4.17.21" })).toContain('unknown field " to" (with a leading blank)');
+    expect(await refusal({ ecosystem: "npm", package: "lodash", " to": "4.17.21", to: "4.17.21" })).toContain("an unknown field (1 unknown) (a known field written with a leading blank)");
   });
   it('"to ": a trailing blank', async () => {
-    expect(await refusal({ ecosystem: "npm", package: "lodash", "to ": "4.17.21", to: "4.17.21" })).toContain('unknown field "to " (with a trailing blank)');
+    expect(await refusal({ ecosystem: "npm", package: "lodash", "to ": "4.17.21", to: "4.17.21" })).toContain("an unknown field (1 unknown) (a known field written with a trailing blank)");
   });
   it("a plain unknown field carries no blank note, and a '|' cannot split the reason", async () => {
     const reason = await refusal({ ecosystem: "npm", package: "lodash", to: "4.17.21", "a|b": "x" });
-    expect(reason).toContain('unknown field "a/b": this tool');
+    expect(reason).toContain("an unknown field (1 unknown): this tool");
+    expect(reason).not.toContain("a|b");
     expect(reason).not.toMatch(/blank\)/);
   });
 });

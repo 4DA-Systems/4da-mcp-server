@@ -28,7 +28,7 @@ async function brief(task: string, more: Record<string, unknown> = {}): Promise<
 
 describe("a dismissed name that stands where a package stands keeps the task at review_needed at least", () => {
   it.each([
-    ["npm install zqxlodahs", "zqxlodahs", "in the task's command"],
+    ["npm install zqxlodahs", "zqxlodahs", "in a command of the task"],
     ['add "zqxthing": "1.0.0" to package.json', "zqxthing", "in a manifest entry of the task"],
     ["add lodahs to the helpers", "lodahs", "one edit from lodash"],
   ])("%s", async (task, word, where) => {

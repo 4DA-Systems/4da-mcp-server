@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * One time budget per tool call.
  *
  * Every lookup had its own timeout (15 s for OSV, up to 30 s for a registry

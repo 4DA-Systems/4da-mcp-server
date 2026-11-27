@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * Task-text evidence of the task's packages (contract K2), best effort: the level rests on the caller's declaration,
  * and a version written in a spelling these readers do not read is not checked (round 11, P1). It is:
  * - the operands of a command the grammar reads whole, each a (name as written, ecosystem) pair;
@@ -215,6 +217,10 @@ export function strictEvidence(task: string): StrictEvidence {
   if (manifestNotWhole) for (const w of manifest.entryWords) wordWide.add(w);
   const operandNames = new Set(commands.flatMap((c) => c.operands.map((o) => o.name.toLowerCase())));
   const requireBlock = /\brequire[ \t]*\(/.test(text);
+  // F8, F9 (round 14): nothing of a command not read whole, or of a command of a manager this briefing does not read,
+  // is offered or looked up: every word of it is consumed, wherever the readers would find it.
+  for (const c of commands) if (!c.canonical) for (const w of c.text.toLowerCase().split(/[^\p{L}\p{N}@._/-]+/u)) if (w) wordWide.add(w.replace(/[.]+$/, ""));
+  for (const w of unreadCommands(text).words) wordWide.add(w);
   const allHere = (map: Map<string, number>, w: string) => (map.get(w) ?? 0) > 0 && (map.get(w) ?? 0) >= (inTask.get(w) ?? 0);
   const consumedHere = (word: string) => {
     const w = word.toLowerCase();
@@ -295,7 +301,7 @@ const MANAGER_NAME = new RegExp(`(?:^|[^\\p{L}\\p{N}_-])(?:${[...MANAGER_NAMES].
  * Round 13, U5 (#45): a command this briefing does not read, in two cases only, each at a COMMAND POSITION (the start
  * of a line, the start of a code span, right after a shell separator `;` `&&` `||` `|`, or after `$ ` / `xargs` and its
  * options): (a) `xargs` followed, options aside, by a name of MANAGER_NAMES; (b) a package manager the grammar does not
- * read, written as a bare word (no punctuation on it), and its own install verb as the very next word. "For the docs
+ * read, written as a bare word (no punctuation on it), and its own install verb next (switches between). "For the docs
  * bundle, add hono", "a hidden gem: install dayjs" and "Let it brew; install ky" are no command.
  */
 const UNREAD_VERBS: ReadonlyMap<string, readonly string[]> = new Map(Object.entries({
@@ -322,13 +328,20 @@ const programWord = (raw: string): string | null => {
   const w = raw.replace(/^`/, "").replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|ps1|bat)$/i, "");
   return /^[a-z0-9][a-z0-9_.-]*$/i.test(w) ? w.toLowerCase() : null;
 };
-export function unreadCommandLines(task: string): string[] {
-  const found: string[] = [];
+/**
+ * The commands of managers this briefing does not read (see above), per COMMAND SEGMENT (round 14, X4: a line is cut
+ * at `;` `&&` `||` `|`, so `gem install devise && npm install zod` holds both): their names, and every word of
+ * their segments, which no reader offers or looks up (F9).
+ */
+export function unreadCommands(task: string): { names: string[]; words: Set<string> } {
+  const names: string[] = [];
+  const words = new Set<string>();
+  const take = (segment: readonly string[]) => {
+    for (const t of segment) for (const w of t.toLowerCase().split(/[^\p{L}\p{N}@._/-]+/u)) if (w) words.add(w.replace(/[.]+$/, ""));
+  };
   for (const line of task.slice(0, 200_000).normalize("NFKC").split(/\r?\n/).slice(0, 20_000)) {
     if (!MANAGER_NAME.test(line)) continue;
     const raw = line.split(/[ \t]+/).filter(Boolean);
-    // Whether the grammar names a command on this line: read once per line, never per word (round 11, P4).
-    let named: boolean | undefined;
     let atCommand = true;
     for (let k = 0; k < raw.length; k++) {
       const token = raw[k];
@@ -336,6 +349,10 @@ export function unreadCommandLines(task: string): string[] {
       // "Run gem install x", "run: brew install jq": an imperative "run" introduces a command like a prompt does.
       atCommand = SEPARATOR_END.test(token) || token === "$" || /^run:?$/i.test(token);
       if (!here) continue;
+      // The segment: from here to the token that ends with a shell separator, that one included.
+      let e = k;
+      while (e < raw.length - 1 && !SEPARATOR_END.test(raw[e])) e++;
+      const segment = raw.slice(k, e + 1);
       const w = programWord(token);
       if (w === "xargs") {
         let j = k + 1;
@@ -343,7 +360,8 @@ export function unreadCommandLines(task: string): string[] {
         const m = raw[j] === undefined ? null : programWord(raw[j]);
         if (m !== null && (MANAGER_NAMES.includes(m) || /^pip[\d.]+$/.test(m))) {
           const name = `${m} (through xargs)`;
-          if (!found.includes(name)) found.push(name);
+          if (!names.includes(name)) names.push(name);
+          take(segment);
         }
         continue;
       }
@@ -353,13 +371,18 @@ export function unreadCommandLines(task: string): string[] {
       while (v < raw.length && v - k <= 8 && /^-[\w-]+$/.test(raw[v])) v++;
       if (verbs && verbs.includes((raw[v] ?? "").replace(/`$/, ""))) {
         // A manager the grammar names itself (K3: pipenv, pdm, rye, conda, mamba, micromamba, pixi) is said there.
-        named ??= canonicalCommands(line).length > 0;
-        if (named) continue;
-        if (!found.includes(w!)) found.push(w!);
+        if (canonicalCommands(segment.join(" ").replace(/(?:;|&&|\|\||\|)$/, "")).length > 0) continue;
+        if (!names.includes(w!)) names.push(w!);
+        take(segment);
       }
     }
   }
-  return found;
+  return { names, words };
+}
+
+/** The names of the commands a task holds that this briefing does not read (unreadCommands). */
+export function unreadCommandLines(task: string): string[] {
+  return unreadCommands(task).names;
 }
 
 /** A word's bare package name: `@spec`, PEP 440 operators and what follows, extras, quotes and a trailing mark off. */
@@ -467,7 +490,7 @@ export function manifestPairs(task: string): SnippetRead {
  * plain name, a dismissed word of a command written into a sentence). No remedy is offered: none reached a clean
  * answer (0 of 81 tries in the seventh check).
  */
-export const STAYS_REVIEW = "This stays review_needed for the command as the task writes it: it is not an error. Check what the command installs with dependency_check before running it.";
+export const STAYS_REVIEW = "This command, as the task writes it, keeps the answer from safe_to_delegate: it is not an error. Check what the command installs with dependency_check before running it.";
 
 /**
  * Round 8, D2: C3 is a courtesy check on an exact list, not a promise about sources in general. When the task holds

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * The packages a task ADDS, for the what_should_i_know briefing (audit 2026-11-11, M14).
  *
  * `{ task: "add the lodahs package" }` came back safe_to_delegate. The briefing asked only which
@@ -40,7 +42,7 @@
  * A name the task gives no ecosystem for (no manager, manifest or ecosystem word) is checked in every
  * ecosystem the project uses, and the worst answer stands: "add ctx" in an npm + Python project is
  * PyPI's malware `ctx`, not npm's clean one. When none of them has the name, the other ecosystems'
- * malware records are read too ("bring in rustdecimal" in an npm project is crates.io's malware).
+ * malware records are read too, for a name on the bundled malware lists.
  * A name the project already depends on is the task-scope module's, not this one's.
  */
 
@@ -702,7 +704,8 @@ export function readTaskItems(task: string, deps: readonly ResolvedDependency[])
     const manager = Object.hasOwn(MANAGERS, word) ? MANAGERS[word] : undefined;
     let j = i + 1;
     if (manager && word === "uv" && words[j] === "pip") j++;
-    if (manager && (manager.commands.has(words[j]) || (word === "uv" && words[j] === "install"))) {
+    // F7 (round 14): a command ends at its sentence's end: a manager word closing a sentence (`We use cargo. Add x`) starts none.
+    if (manager && !/[.!?;:,]$/.test(raw[i] ?? "") && (manager.commands.has(words[j]) || (word === "uv" && words[j] === "install"))) {
       const ecosystem = manager.ecosystem;
       if (ecosystem === null) {
         // A registry this server does not read: every argument to the clause's end is named NOT CHECKED,

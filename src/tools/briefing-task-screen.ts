@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * What in a briefing task is never read as a package name, before either reader sees it (pre-publish
  * audit 2026-11-25, E1, E2, F-M3).
  *
@@ -195,6 +197,11 @@ function operandName(spec: string): string | null {
 /** Known credential shapes (GitHub, AWS, Stripe, Slack, npm, GitLab, OpenAI, Anthropic, Google, Hugging Face, PyPI, SendGrid, Shopify, DigitalOcean, JWT, PEM). */
 const SECRET_SHAPES =
   /\b(?:gh[pousr]_[A-Za-z0-9]{10,}|github_pat_\w{10,}|(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{12,}|[rs]k_(?:live|test)_\w{6,}|pk_live_\w{6,}|whsec_\w{10,}|xox[abposre]-[\w-]{6,}|npm_[A-Za-z0-9]{10,}|glpat-[\w-]{10,}|sk-(?:proj|ant|svcacct|admin)-[\w-]{6,}|sk-[A-Za-z0-9]{20,}|AIza[\w-]{20,}|hf_[A-Za-z0-9]{10,}|pypi-[\w-]{20,}|SG\.[\w-]{10,}\.[\w-]{10,}|shp(?:at|ss|ca|pa)_[a-fA-F0-9]{16,}|dop_v1_[a-f0-9]{20,}|eyJ[\w-]{8,}\.[\w-]{8,}(?:\.[\w-]*)?)/g;
+/**
+ * The credential shapes this server knows (round 14, X1): known token prefixes and a JWT. The output screen
+ * (output-screen.ts) renders any substring of one of them by shape in every tool result and error.
+ */
+export const CREDENTIAL_SHAPES: RegExp = SECRET_SHAPES;
 /** The value of an assignment to a credential-named setting: `GITHUB_TOKEN=...`, `_authToken=...`, `"api_key": "..."`. */
 const SECRET_ASSIGNMENT = /(?:\b[A-Za-z][\w.-]{0,60}?(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|auth)\w{0,30}|\b_auth)(?:["'`]\s{0,4}:|\s{0,4}=)\s{0,4}["'`]?([^\s"'`]{4,})/gi;
 /** A value that is a version or a version constraint (`=3.2.0` after `oauthlib=`, `8.5.1`, `^4.10`, `>=2,<3`, `~=1.4`): an entry, not a secret. */
