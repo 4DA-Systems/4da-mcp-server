@@ -75,11 +75,17 @@ describe("what changes no version is not held, with the avoid on record", () => 
   });
 });
 
+describe("round 25 (W1): a Poetry source the file does not declare is held", () => {
+  it("another index, not declared", () => {
+    s.ledger([AVOID]);
+    expect(s.write(s.file("pyproject.toml", HEAD), `${HEAD}dependencies = { requests = { version = "2.19.0", source = "internal" } }\n`).decision).toBe("deny");
+  });
+});
+
 describe("what Poetry takes from elsewhere stays unread", () => {
   it.each([
     ["a path source", `${HEAD}dependencies = { requests = { path = "../requests", version = "2.19.0" } }\n`],
     ["a git source", `${HEAD}dependencies = { requests = { git = "https://example.com/r.git", version = "2.19.0" } }\n`],
-    ["another index", `${HEAD}dependencies = { requests = { version = "2.19.0", source = "internal" } }\n`],
     ["an inline table that holds no dependency", `${HEAD}urls = { changelog = "https://example.com/2.19.0" }\n`],
   ])("%s", (_label, text) => {
     s.ledger([AVOID]);

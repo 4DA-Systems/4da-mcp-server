@@ -24,6 +24,8 @@ const AVOID_LATEST = [
 let s: Sandbox;
 beforeEach(() => {
   s = sandbox();
+  // Round 25 (S2): a requirements or constraints file a command names is read at the call: these exist, empty.
+  for (const f of ["requirements.txt", "requirements-dev.txt", "constraints.txt", "c.txt", "o.txt", "req.txt"]) s.file(f, "");
   s.ledger(AVOID_LATEST);
 });
 afterEach(() => s.dispose());
@@ -199,6 +201,8 @@ describe("R8-2: misc", () => {
   });
 
   it("a line of 2 MB with hundreds of thousands of words is read, not ended by an error of the hook's own", () => {
+    // Round 25 (S2): the file a command names is read at the call: it must exist (read once, however often named).
+    s.file("req.txt", "");
     const command = `pip install ${"-r req.txt ".repeat(190_000)}`;
     const r = timedWithin(s.home, { hook_event_name: "PreToolUse", tool_name: "Bash", cwd: s.project, tool_input: { command } }, 3000);
     expect(r.decision, r.text).toBe("allow");

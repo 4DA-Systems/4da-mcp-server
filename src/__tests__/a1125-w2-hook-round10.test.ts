@@ -19,6 +19,8 @@ import { followRemedy, answerDenial } from "./helpers/a1125-hook-run.js";
 let s: Sandbox;
 beforeEach(() => {
   s = sandbox();
+  // Round 25 (S2): a requirements or constraints file a command names is read at the call: these exist, empty.
+  for (const f of ["requirements.txt", "requirements-dev.txt", "constraints.txt", "c.txt", "o.txt", "req.txt"]) s.file(f, "");
   s.ledger([]);
 });
 afterEach(() => s.dispose());
@@ -132,8 +134,9 @@ describe("L1: commands that let the manager choose versions go ahead (a stated l
 });
 
 describe("L2, L3, L5: the other limits as written", () => {
-  it("a requirements file written by the shell, then installed: goes ahead", () => {
-    expect(run("echo requests==2.5.0 > r.txt && pip install -r r.txt").decision).toBe("allow");
+  // Round 25 (S2): the file is read at the call; here it does not exist yet when the hook reads it: held.
+  it("a requirements file written by the shell, then installed in the same call: held (the file is read at the call)", () => {
+    expect(run("echo requests==2.5.0 > r.txt && pip install -r r.txt").decision).toBe("deny");
   });
   it("a private index serving public packages: not judged", () => {
     expect(run("npm i --registry https://npm.mirror.corp.example lodash@4.17.20").decision).toBe("allow");

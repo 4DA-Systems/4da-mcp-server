@@ -98,10 +98,10 @@ describe("manifest edits", () => {
     expect(reason).toContain('"minimist" "1.2.6" (npm)');
   });
 
-  it('Cargo `registry = "crates-io"` is the public registry: held; another registry goes ahead', () => {
+  it('Cargo `registry = "crates-io"` is the public registry: held; another registry whose index is not read is held too (round 25, W1)', () => {
     const before = '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\ntokio = "1.35.0"\n';
     expect(editDecision("Cargo.toml", before, 'tokio = "1.35.0"', 'tokio = { version = "1.18.0", registry = "crates-io" }')).toContain('"tokio" "1.18.0" (crates.io)');
-    expect(editDecision("Cargo.toml", before, 'tokio = "1.35.0"', 'tokio = { version = "1.18.0", registry = "corp" }')).toBeNull();
+    expect(editDecision("Cargo.toml", before, 'tokio = "1.35.0"', 'tokio = { version = "1.18.0", registry = "corp" }')).toContain("could not be read");
   });
 
   it('"latest" is held with a call for latest', () => {

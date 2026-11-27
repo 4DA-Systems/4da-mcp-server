@@ -36,7 +36,7 @@ const dotted = (n: number) => Array.from({ length: n }, () => "a").join(".");
 describe("G2: the inputs that ran past Claude Code's 10 s, and 200,000-character variants of each new shape, inside the CPU bound", () => {
   it.each([
     ["a root dotted key of 99,000 parts beside an avoided dependency", () => write("Cargo.toml", `${dotted(99_000)} = 1\n${PKG}\n[dependencies]\nsmallvec = "1.6.0"\n`), "answered avoid"],
-    ["a 40,000-part header with 8,000 keys", () => write("Cargo.toml", `${PKG}\n[dependencies]\nsmallvec = "1.6.0"\n\n[${dotted(40_000)}]\n${"x = 1\n".repeat(8_000)}`), "answered avoid"],
+    ["a 40,000-part header with 8,000 keys", () => write("Cargo.toml", `${PKG}\n[dependencies]\nsmallvec = "1.6.0"\n\n[${dotted(40_000)}]\n${Array.from({ length: 8_000 }, (_, i) => `x${i} = 1`).join("\n")}\n`), "answered avoid"],
     ["a 40,000-part dependency header with 8,000 keys", () => write("Cargo.toml", `${PKG}\n[${dotted(40_000)}.dependencies]\n${Array.from({ length: 8_000 }, (_, i) => `c${i} = "1"`).join("\n")}\nsmallvec = "1.6.0"\n`), "answered avoid"],
     ["root dotted dependencies, 200,000 characters", () => write("Cargo.toml", `${Array.from({ length: 9_000 }, (_, i) => `dependencies.crate-${i} = "1.0.${i}"`).join("\n")}\ndependencies.smallvec = "1.6.0"\n${PKG}`), "answered avoid"],
     ["a root inline dependency table, 200,000 characters", () => write("Cargo.toml", `dependencies = { ${Array.from({ length: 11_000 }, (_, i) => `c${i} = "1.0.${i}"`).join(", ")}, smallvec = "1.6.0" }\n${PKG}`), "answered avoid"],

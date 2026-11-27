@@ -20,6 +20,8 @@ import { record, timedWithin } from "./helpers/a1125-hook-run.js";
 let s: Sandbox;
 beforeEach(() => {
   s = sandbox();
+  // Round 25 (S2): a requirements or constraints file a command names is read at the call: these exist, empty.
+  for (const f of ["requirements.txt", "requirements-dev.txt", "constraints.txt", "c.txt", "o.txt", "req.txt"]) s.file(f, "");
 });
 afterEach(() => s.dispose());
 
@@ -178,7 +180,7 @@ const ORDINARY = [
   "npm i http://localhost:8080/a.tgz", "npm i a-1.0.0.tgz", "npm i --registry https://npm.internal.example x", "pnpm add shared@workspace:*", "npm pkg get name",
   "pip install -r requirements.txt", "pip install -r requirements-dev.txt -c constraints.txt", "pip install .", "pip install -e .", "pip install -e '.[dev]'",
   "pip install ./pkg", "pip install dist/x-1.0-py3-none-any.whl", "pip install x-1.0.tar.gz", "pip install git+https://github.com/a/b",
-  "pip install -i https://pypi.internal.example/simple x", "pip download requests", "pip list", "pip show requests", "pip uninstall -y requests", "uv sync", "uv lock",
+  "pip install -i https://pypi.internal.example/simple x", "pip list", "pip show requests", "pip uninstall -y requests", "uv sync", "uv lock",
   "uv pip sync requirements.txt", "uv run pytest", "poetry install", "poetry lock", "cargo build", "cargo add --path ../x", "cargo add x --git https://example.com/x",
   "cargo update", "go get ./...", "go mod tidy", "go mod download", "go build ./...", "go get -u ./...", "go get github.com/pkg/errors@none",
   "npx cowsay hi", "pnpm dlx create-vite", "bunx tsc", "uvx ruff", "pipx install black", "echo npm install lodash", "git commit -m 'npm install lodash'",

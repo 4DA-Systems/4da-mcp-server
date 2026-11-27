@@ -19,6 +19,8 @@ const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", 
 let s: Sandbox;
 beforeEach(() => {
   s = sandbox();
+  // Round 25 (S2): a requirements or constraints file a command names is read at the call: these exist, empty.
+  for (const f of ["requirements.txt", "requirements-dev.txt", "constraints.txt", "c.txt", "o.txt", "req.txt"]) s.file(f, "");
   s.ledger([{ ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "avoid", reason: "test avoid" }]);
 });
 afterEach(() => s.dispose());

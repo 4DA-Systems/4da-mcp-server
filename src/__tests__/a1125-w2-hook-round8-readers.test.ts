@@ -39,7 +39,8 @@ describe("manifest spellings now read", () => {
   });
 
   it("a [tool.uv.sources] entry naming a private index still goes ahead", () => {
-    const content = '[project]\nname = "p"\nversion = "0.1"\ndependencies = ["requests==2.0.0"]\n[tool.uv.sources]\nrequests = { index = "corp" }\n[[tool.uv.index]]\nname = "corp"\nurl = "https://pypi.corp.example/simple"\n';
+    const content = '[project]\nname = "p"\nversion = "0.1"\ndependencies = ["requests==2.0.0"]\n[tool.uv.sources]\nrequests = { index = "corp" }\n[[tool.uv.index]]\nname = "corp"\nurl = "https://pypi.corp.example/simple"\nexplicit = true\n';
+    // Round 25 (S3): an index that is not explicit can serve public names: only an explicit one goes ahead unread.
     expect(s.write(s.file("pyproject.toml", ""), content).decision).toBe("allow");
   });
 

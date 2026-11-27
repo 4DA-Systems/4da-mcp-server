@@ -59,10 +59,11 @@ describe("a comment after a section key, or a quoted key, no longer hides the se
     expect(s.edit(file, "# shared versions", "# all the versions").decision).toBe("allow");
   });
 
-  it("a value that is only a comment is no value", () => {
+  // Round 25 (W3): an entry with no value is held (pnpm refuses it).
+  it("a value that is only a comment is no value: held", () => {
     s.ledger([AVOID]);
     const file = s.file("pnpm-workspace.yaml", HEAD);
-    expect(s.write(file, `${HEAD}catalog:\n  lodash: # set below\n`).decision).toBe("allow");
+    expect(s.write(file, `${HEAD}catalog:\n  lodash: # set below\n`).decision).toBe("deny");
   });
 });
 

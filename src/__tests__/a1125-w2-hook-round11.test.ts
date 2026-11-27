@@ -14,6 +14,8 @@ import { followRemedy, answerDenial } from "./helpers/a1125-hook-run.js";
 let s: Sandbox;
 beforeEach(() => {
   s = sandbox();
+  // Round 25 (S2): a requirements or constraints file a command names is read at the call: these exist, empty.
+  for (const f of ["requirements.txt", "requirements-dev.txt", "constraints.txt", "c.txt", "o.txt", "req.txt"]) s.file(f, "");
   s.ledger([]);
 });
 afterEach(() => s.dispose());
@@ -174,11 +176,13 @@ describe("6: trailing dots and blanks in a path part, which PowerShell and Win32
 });
 
 describe("7, 8: the header's sentences on files and config, each as written", () => {
-  it("a requirements file is read when it is written, not when it is installed", () => {
+  it("a requirements file is read when it is written, and when a command names it (round 25, S2)", () => {
     const req = `${s.project.replace(/\\/g, "/")}/requirements.txt`;
     const w = s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: req, content: "requests==2.5.0\n" } });
     expect(w.decision).toBe("deny");
-    expect(run("pip install -r requirements.txt").decision).toBe("allow");
+    // Round 25 (S2): and when a command names it, it is read from disk at the call and judged.
+    s.file("requirements.txt", "requests==2.5.0\n");
+    expect(run("pip install -r requirements.txt").decision).toBe("deny");
   });
 
   it("files a later command reads are not read on a Write", () => {
@@ -188,11 +192,17 @@ describe("7, 8: the header's sentences on files and config, each as written", ()
     }
   });
 
+  // Round 25 (S6): a config write is now held (CONFIG_WRITE_VERBS); see the test after this one.
   it.each([
     "npm config set before 2020-01-01 && npm i lodash",
     "pnpm config set registry https://registry.npmjs.org/ && pnpm add lodash",
     "pip config set global.index-url https://pypi.corp.example/simple && pip install requests",
     "poetry source add corp https://pypi.corp.example/simple && poetry add requests",
+  ])("a config writer before the install is held (round 25, S6): %s", (command) => {
+    expect(run(command).decision).toBe("deny");
+    expect(run(command).text).toContain("changes how later installs resolve");
+  });
+  it.each([
     "HOME=/tmp/other npm i lodash",
     "CARGO_HOME=/tmp/other cargo add serde",
   ])("a config writer or a config-path variable before the install: %s is read as if it were not there", (command) => {
