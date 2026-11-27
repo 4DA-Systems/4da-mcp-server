@@ -6,6 +6,7 @@
  * Adding a new tool = add to this map + schema-registry + barrel export.
  */
 
+import { maskedNote, screenArguments } from "./argument-screen.js";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 
 import type { FourDADatabase } from "./db.js";
@@ -161,7 +162,15 @@ export async function dispatchTool(
   // an immediate error JSON. (db.queryWithRetry existed for this but had no
   // production caller — it is sync and the executors are async, so the retry
   // lives here.)
-  const toolArgs = (args || {}) as Record<string, unknown>;
+  // Round 14b: a credential-shaped argument is refused (a name, version, ecosystem or path) or masked (free text a
+  // tool stores or sends on purpose) before anything runs: never sent to a host and never stored.
+  const screenedArgs = screenArguments(name, (args || {}) as Record<string, unknown>);
+  if ("refused" in screenedArgs) {
+    const refusal = { error: screenedArgs.refused };
+    return { content: [{ type: "text", text: JSON.stringify(refusal) }], structuredContent: refusal, isError: true };
+  }
+  const toolArgs = screenedArgs.args;
+  const maskedArgs = screenedArgs.masked;
   const run = async (): Promise<unknown> => {
     try {
       return await executor(db as FourDADatabase, toolArgs);
@@ -208,6 +217,10 @@ export async function dispatchTool(
     db,
     cleanStrings(withRegistryQuotes(withUntrustedTextNote(name, db !== null && !db.isStandalone && SOURCE_FILTERED_TOOLS.has(name) ? attachSourcesNote(db, annotated) : annotated), quotes)),
   );
+  if (maskedArgs > 0 && payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+    const p = payload as Record<string, unknown>;
+    p._meta = { ...((p._meta as Record<string, unknown> | undefined) ?? {}), credential_masked: maskedNote(maskedArgs) };
+  }
   // An executor that returns `{ error: "<message>" }` failed: say so in the
   // protocol, not only in the body, so the host and model treat it as an error.
   const failed =

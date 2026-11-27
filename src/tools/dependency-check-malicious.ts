@@ -117,10 +117,11 @@ const POPULAR = new Set(POPULAR_NPM);
 const CLOSEST = new Map<string, string | null>();
 export function closestPopularNpm(name: string): string | null {
   const n = name.trim().toLowerCase();
+  // Past the call's cap of distinct words or its deadline the check is not made (the call is marked; call-budget.ts
+  // mayScanWord). Counted per call before the memo, so one call's bound does not depend on earlier calls.
+  if (n.length >= 4 && !POPULAR.has(n) && !mayScanWord(`npm\0${n}`)) return null;
   const known = CLOSEST.get(n);
   if (known !== undefined) return known;
-  // Past the call's word cap or deadline the scan is not run (the call is marked; call-budget.ts mayScanWord).
-  if (n.length >= 4 && !mayScanWord()) return null;
   const found = closestPopularNpmUncached(n);
   if (CLOSEST.size >= 20_000) CLOSEST.clear();
   CLOSEST.set(n, found);

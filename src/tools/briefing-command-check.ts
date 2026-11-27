@@ -322,7 +322,6 @@ const UNREAD_VERBS: ReadonlyMap<string, readonly string[]> = new Map(Object.entr
   apt: ["install"],
   "apt-get": ["install"],
 }));
-const SEPARATOR_END = /(?:;|&&|\|\||\|)$/;
 /** A raw word as a program name: a leading backtick, a directory and a launcher extension off; null with any other mark. */
 const programWord = (raw: string): string | null => {
   const w = raw.replace(/^`/, "").replace(/^.*[\\/]/, "").replace(/\.(?:cmd|exe|ps1|bat)$/i, "");
@@ -339,21 +338,32 @@ export function unreadCommands(task: string): { names: string[]; words: Set<stri
   const take = (segment: readonly string[]) => {
     for (const t of segment) for (const w of t.toLowerCase().split(/[^\p{L}\p{N}@._/-]+/u)) if (w) words.add(w.replace(/[.]+$/, ""));
   };
-  for (const line of task.slice(0, 200_000).normalize("NFKC").split(/\r?\n/).slice(0, 20_000)) {
-    if (!MANAGER_NAME.test(line)) continue;
+  for (const raw0 of task.slice(0, 200_000).normalize("NFKC").split(/\r?\n/).slice(0, 20_000)) {
+    if (!MANAGER_NAME.test(raw0)) continue;
+    // Round 15, A4: a command position is the start of a line after list, quote and prompt markers, the start of a code
+    // span or fence line, and right after `;` `&&` `||` `|` `(` `$(` with or without blanks; then the prefixes of
+    // PREFIX_WORDS and NAME=value assignments; the manager word may be quoted.
+    const line = raw0
+      .replace(/^[ \t]*(?:(?:[-*+]|\d{1,3}[.)]|>|PS>|PS [^>\n]{0,80}>|\$|%)[ \t]+)+/, "")
+      .replace(/\$\(|&&|\|\||[;|()`]/g, (sep) => ` ${sep} `);
     const raw = line.split(/[ \t]+/).filter(Boolean);
     let atCommand = true;
     for (let k = 0; k < raw.length; k++) {
       const token = raw[k];
-      const here = atCommand || token.startsWith("`");
+      if (SEPARATOR_TOKENS.has(token)) {
+        atCommand = true;
+        continue;
+      }
+      const here: boolean = atCommand;
       // "Run gem install x", "run: brew install jq": an imperative "run" introduces a command like a prompt does.
-      atCommand = SEPARATOR_END.test(token) || token === "$" || /^run:?$/i.test(token);
+      // A prefix (sudo, env, time ...) or an assignment keeps the position for the word after it.
+      atCommand = /^run:?$/i.test(token) || (here && (PREFIX_WORDS.has(token.toLowerCase()) || /^[A-Za-z_][A-Za-z0-9_]*=\S*$/.test(token) || (here && /^-/.test(token) && PREFIX_WORDS.has((raw[k - 1] ?? "").toLowerCase()))));
       if (!here) continue;
-      // The segment: from here to the token that ends with a shell separator, that one included.
+      // The segment: from here to the next separator token.
       let e = k;
-      while (e < raw.length - 1 && !SEPARATOR_END.test(raw[e])) e++;
+      while (e < raw.length - 1 && !SEPARATOR_TOKENS.has(raw[e + 1])) e++;
       const segment = raw.slice(k, e + 1);
-      const w = programWord(token);
+      const w = programWord(token.replace(/^(["'])(.*)\1$/, "$2"));
       if (w === "xargs") {
         let j = k + 1;
         while (j < raw.length && j - k <= 8 && raw[j].startsWith("-")) j++;
@@ -369,9 +379,9 @@ export function unreadCommands(task: string): { names: string[]; words: Set<stri
       // Its own verb next, switches (`-y`) aside; no punctuation on the manager word or between.
       let v = k + 1;
       while (v < raw.length && v - k <= 8 && /^-[\w-]+$/.test(raw[v])) v++;
-      if (verbs && verbs.includes((raw[v] ?? "").replace(/`$/, ""))) {
+      if (verbs && verbs.includes(raw[v] ?? "")) {
         // A manager the grammar names itself (K3: pipenv, pdm, rye, conda, mamba, micromamba, pixi) is said there.
-        if (canonicalCommands(segment.join(" ").replace(/(?:;|&&|\|\||\|)$/, "")).length > 0) continue;
+        if (canonicalCommands(segment.join(" ")).length > 0) continue;
         if (!names.includes(w!)) names.push(w!);
         take(segment);
       }
@@ -379,6 +389,11 @@ export function unreadCommands(task: string): { names: string[]; words: Set<stri
   }
   return { names, words };
 }
+
+/** Separators a command position follows (round 15, A4), each a token of its own once a line is split. */
+const SEPARATOR_TOKENS: ReadonlySet<string> = new Set([";", "&&", "||", "|", "(", "$(", ")", "`"]);
+/** Words a command may be prefixed with: the word after them is still at the command position. */
+const PREFIX_WORDS: ReadonlySet<string> = new Set(["sudo", "env", "time", "nice", "command", "exec", "nohup", "doas"]);
 
 /** The names of the commands a task holds that this briefing does not read (unreadCommands). */
 export function unreadCommandLines(task: string): string[] {

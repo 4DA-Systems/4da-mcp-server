@@ -49,6 +49,7 @@
  * popular name (weekly downloads).
  */
 
+import { hasCredentialShape } from "../output-screen.js";
 import type { FourDADatabase } from "../db.js";
 import { goModuleContaining } from "../live/go-path.js";
 import type { LiveIntelligence } from "../live/index.js";
@@ -520,7 +521,8 @@ function validateItems(raw: unknown): Array<Requested | Refused> {
       const o = (r ?? {}) as Record<string, unknown>;
       const field = (v: unknown) => (typeof v === "string" ? quoteThirdParty(v, 214) : "");
       if (error instanceof SecretVersionError) {
-        return { refused: error.message, secret: true, shown: { ecosystem: field(o.ecosystem), package: field(o.package), from: null, to: "(withheld: shaped like a credential)" } };
+        const held = (v: unknown) => (typeof v === "string" && hasCredentialShape(v) ? "(withheld: shaped like a credential)" : field(v));
+        return { refused: error.message, secret: true, shown: { ecosystem: held(o.ecosystem), package: held(o.package), from: null, to: "(withheld: shaped like a credential)" } };
       }
       return { refused: error instanceof Error ? error.message : String(error), shown: { ecosystem: field(o.ecosystem), package: field(o.package), from: typeof o.from === "string" && o.from ? field(o.from) : null, to: field(o.to) } };
     }
@@ -544,6 +546,11 @@ export function validateItem(r: unknown, i: number): Requested {
       throw new Error(`${where}: an unknown field (${Object.keys(o).filter((k) => !ITEM_FIELDS.has(k)).length} unknown)${fieldNote(unknown)}: this tool reads only the public registry and defines only ecosystem, package, to and from; nothing was sent`);
     }
   }
+  // Round 14b: a value of a credential's shape (CREDENTIAL_SHAPES, as the output screen) in any field is refused
+  // before anything reads it: not sent, not recorded (a refused item writes no ledger line), never repeated.
+  for (const [field, label] of [["package", "package name"], ["ecosystem", "ecosystem"]] as const) {
+    if (typeof o[field] === "string" && hasCredentialShape(o[field] as string)) throw new SecretVersionError(`${where}: refused: a value of a credential's shape is not a ${label}; nothing was sent or recorded`);
+  }
   // Bounded before anything parses it (tool-args.ts lengthProblem; audit 2026-11-11, M15).
   for (const field of ["package", "to", "from"]) {
     const long = typeof o[field] === "string" ? lengthProblem(`${where}.${field}`, field, o[field] as string) : null;
@@ -562,6 +569,10 @@ export function validateItem(r: unknown, i: number): Requested {
   // recorded, never repeated (the briefing's declarations apply the same screen).
   if (versionLooksSecret(givenTo) || (typeof o.from === "string" && versionLooksSecret(o.from))) {
     throw new SecretVersionError(`${where}.${versionLooksSecret(givenTo) ? "to" : "from"} looks like a credential (a secret in a version label): it was not sent or recorded; write the version without it`);
+  }
+  // Round 14b: and any CREDENTIAL_SHAPES substring the label test above lets through.
+  if (hasCredentialShape(givenTo) || (typeof o.from === "string" && hasCredentialShape(o.from))) {
+    throw new SecretVersionError(`${where}.${hasCredentialShape(givenTo) ? "to" : "from"} looks like a credential (a secret in a version label): it was not sent or recorded; write the version without it`);
   }
   // A PyPI exact pin with a local label (`==1.0.0+corp.5`) is that one build: read as the version it names, so the
   // label is set aside the same way whichever way the pin is written (round 8, reviewer 6's ledger-cmp #74).
