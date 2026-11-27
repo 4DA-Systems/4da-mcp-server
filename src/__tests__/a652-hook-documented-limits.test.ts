@@ -88,11 +88,12 @@ describe("a requirement continued with a backslash is read whole", () => {
 
 describe("a pip requirement with more than eight version clauses", () => {
   // Round 8 (R8-2): a command whose operand is not read is held as not read; the array is still a limit.
-  it("is held as not read in a command, and goes ahead unread in a pyproject array", () => {
+  // Round 24 (Y1 b, default deny): the pyproject array is no longer a limit.
+  it("is held as not read in a command and in a pyproject array", () => {
     expect(bash(`pip install 'requests${NINE}'`).decision).toBe("not read");
     expect(bash(`uv add 'requests${NINE}'`).decision).toBe("not read");
     expect(bash(`poetry add 'requests${NINE}'`).decision).toBe("not read");
-    expect(write("pyproject.toml", pyproject(`["requests${NINE}"]`)).decision).toBe("allow");
+    expect(write("pyproject.toml", pyproject(`["requests${NINE}"]`)).decision).toBe("not read");
   });
 
   it("is judged on its first eight clauses in a requirements file", () => {
@@ -104,10 +105,10 @@ describe("a pip requirement with more than eight version clauses", () => {
 });
 
 describe("extras over 200 characters", () => {
-  it("the requirement is held as not read in a command (round 8), and read as naming no version in a file", () => {
+  it("the requirement is held as not read in a command (round 8) and in a file (round 24, Y1 b)", () => {
     expect(bash("pip install 'requests[socks]==2.31.0'").decision).toBe("no verdict");
     expect(bash(`pip install 'requests[${EXTRAS}]==2.31.0'`).decision).toBe("not read");
-    expect(write("requirements.txt", `requests[${EXTRAS}]==2.31.0\n`).decision).toBe("allow");
+    expect(write("requirements.txt", `requests[${EXTRAS}]==2.31.0\n`).decision).toBe("not read");
   });
 });
 

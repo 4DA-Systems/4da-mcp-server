@@ -234,3 +234,28 @@ describe("V1 forms: every range form through every .cmd manager is denied as not
     }
   });
 });
+
+/** Round 24 (Y1): the Yarn 2+ forms that wrap a registry release, in every package.json section and the catalogs. */
+const YARN_FORMS = ["npm:4.17.20", "patch:lodash@npm%3A4.17.20#./patches/lodash.patch", "patch:lodash@npm:4.17.20#./patches/lodash.patch", "patch:lodash@patch%3Alodash%40npm%253A4.17.20%23.%2Fa.patch#./b.patch"];
+const YARN_PLACES: Array<[string, (v: string) => Record<string, unknown>]> = [
+  ["dependencies", (v) => ({ dependencies: { lodash: v } })],
+  ["devDependencies", (v) => ({ devDependencies: { lodash: v } })],
+  ["optionalDependencies", (v) => ({ optionalDependencies: { lodash: v } })],
+  ["peerDependencies", (v) => ({ peerDependencies: { lodash: v } })],
+  ["resolutions", (v) => ({ resolutions: { lodash: v } })],
+  ["overrides", (v) => ({ overrides: { lodash: v } })],
+  ["pnpm.overrides", (v) => ({ pnpm: { overrides: { lodash: v } } })],
+  ["workspaces.catalog", (v) => ({ workspaces: { packages: [], catalog: { lodash: v } } })],
+];
+describe("Y1 forms: a Yarn alias or patch of an avoid release is denied in every section", () => {
+  it.each(YARN_PLACES.flatMap(([place, make]) => YARN_FORMS.map((v) => [place, v, make] as const)))("%s: %s", (_place, v, make) => {
+    const r = s.write(`${s.project}/package.json`, JSON.stringify({ name: "a", ...make(v) }));
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.text, r.text).toContain("answered avoid");
+  });
+  it.each(YARN_FORMS)("pnpm-workspace.yaml catalog: %s", (v) => {
+    const r = s.write(`${s.project}/pnpm-workspace.yaml`, `packages:\n  - 'a'\ncatalog:\n  lodash: '${v}'\n`);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.text, r.text).toContain("answered avoid");
+  });
+});

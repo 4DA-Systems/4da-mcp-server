@@ -160,7 +160,7 @@ describe("rule 2 in detail", () => {
     s.ledger([AVOID]);
     const file = s.file("pnpm-workspace.yaml", `${HEAD}overrides:\n  debug: '}'\n  lodash: ^4.17.21\n`);
     const run = s.edit(file, "lodash: ^4.17.21", "lodash: 4.17.20");
-    expect(run.text).toContain("a specifier this hook does not read");
+    expect(run.text).toContain("a version form this hook does not read");
   });
 
   it("following the remedy literally passes: the same versions rewritten as block lines, the verdicts the denial then names recorded", () => {
