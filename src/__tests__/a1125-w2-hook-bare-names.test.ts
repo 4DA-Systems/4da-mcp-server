@@ -28,7 +28,7 @@ const run = (command: string, tool = "Bash", env: Record<string, string> = {}) =
 
 /** Ledger lines exactly as the server writes them for these dependency_check answers. */
 function answer(items: Array<Record<string, string>>, privateRule: ((eco: string, name: string) => boolean) | null = null): void {
-  const lines = ledgerEntries(items as never, new Date(Date.now() - 60_000), privateRule, privateRule ? () => ({ rule: "listed", root: null }) : null).map((e) => ({ ...e }) as Record<string, string>);
+  const lines = ledgerEntries(items as never, new Date(Date.now() - 60_000), privateRule, privateRule ? () => ({ rule: "listed" as const, dir: null, host: null }) : null).map((e) => ({ ...e }) as Record<string, string>);
   record(s, lines.map(({ t: _t, ...rest }) => rest));
 }
 
