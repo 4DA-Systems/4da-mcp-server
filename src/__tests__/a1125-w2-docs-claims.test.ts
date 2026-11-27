@@ -17,7 +17,7 @@ import { WORD_SCAN_CAP } from "../call-budget.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands, MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
-import { BEST_EFFORT_READING, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { BEST_EFFORT_READING, OUTSIDE_COVERAGE, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -146,10 +146,15 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
   });
 
   // Round 14: the docs lane writes the ROUND 14 sentences; until then this one fails on purpose.
-  it("round 14: the CHANGELOG carries the contract's 16 sentences in order, and the source and masking rules as the code has them", () => {
+  it("round 14: the CHANGELOG carries the contract's 18 sentences in order (round 15), and the source and masking rules as the code has them", () => {
     const contract = next.slice(next.indexOf("- What `what_should_i_know` promises, and nothing more"), next.indexOf("- The one promise:"));
     const numbers = [...contract.matchAll(/^ {2}(\d+)\. /gm)].map((m) => Number(m[1]));
-    expect(numbers).toEqual(Array.from({ length: 16 }, (_, i) => i + 1));
+    expect(numbers).toEqual(Array.from({ length: 18 }, (_, i) => i + 1));
+    expect(contract).toContain(`"${OUTSIDE_COVERAGE}"`);
+    expect(contract).toContain(`\`task_note\` says "${TASK_FOLDED}"`);
+    expect(contract).toContain("6.5.1 sent such a name to the npm registry and OSV.dev and wrote it to the check ledger.");
+    expect(contract).toContain("it does not promise to notice each such command");
+    expect(readme).toContain("for npm, PyPI, crates.io and Go packages (what a task installs through any other manager or tool is outside its answer");
     expect(contract).toContain("a public entry without `version` never leaves the answer at `safe_to_delegate`");
     expect(contract).toContain("a task that only mentions such a spelling can be safe");
     expect(next).not.toContain("the level is at most `review_needed`, and nothing is written to the check ledger");
