@@ -146,6 +146,18 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
   });
 
   // Round 14: the docs lane writes the ROUND 14 sentences; until then this one fails on purpose.
+  it("round 14: the CHANGELOG carries the contract's 16 sentences in order, and the source and masking rules as the code has them", () => {
+    const contract = next.slice(next.indexOf("- What `what_should_i_know` promises, and nothing more"), next.indexOf("- The one promise:"));
+    const numbers = [...contract.matchAll(/^ {2}(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(numbers).toEqual(Array.from({ length: 16 }, (_, i) => i + 1));
+    expect(contract).toContain("a public entry without `version` never leaves the answer at `safe_to_delegate`");
+    expect(contract).toContain("a task that only mentions such a spelling can be safe");
+    expect(next).not.toContain("the level is at most `review_needed`, and nothing is written to the check ledger");
+    expect(next).toContain("Only known shapes are masked: a long random-looking folder name, a sha512 integrity string or a 64-hex digest is shown as it is");
+    expect(text("src/tool-args.ts") + text("src/tools/dependency-check.ts")).toContain("an unknown parameter (");
+    expect(readme).not.toContain("this stays `review_needed` for the command");
+  });
+
   it("docs lane, round 14: the CHANGELOG quotes the reworded STAYS_REVIEW", () => {
     expect(next).toContain(`the reason adds "${STAYS_REVIEW}" No remedy is offered.`);
   });
