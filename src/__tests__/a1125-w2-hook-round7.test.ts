@@ -42,7 +42,8 @@ describe("G2: the inputs that ran past Claude Code's 10 s, and 200,000-character
     ["a root inline dependency table, 200,000 characters", () => write("Cargo.toml", `dependencies = { ${Array.from({ length: 11_000 }, (_, i) => `c${i} = "1.0.${i}"`).join(", ")}, smallvec = "1.6.0" }\n${PKG}`), "answered avoid"],
     ["a Poetry inline table, 200,000 characters", () => write("pyproject.toml", `[tool.poetry]\ndependencies = { ${Array.from({ length: 11_000 }, (_, i) => `p${i} = "1.0.${i}"`).join(", ")}, requests = "2.19.0" }\n`), "answered avoid"],
     ["a PEP 621 inline table, 200,000 characters", () => write("pyproject.toml", `project = { name = "a", dependencies = [${Array.from({ length: 9_000 }, (_, i) => `"p${i}==1.0.${i}"`).join(", ")}, "requests==2.19.0"] }\n`), "answered avoid"],
-    ["escaped strings, 200,000 characters", () => write("pyproject.toml", `[tool.ruff]\nexclude = [${Array.from({ length: 12_000 }, (_, i) => `"a\\\\${i}"`).join(", ")}]\n`), NOT_READ],
+    // Round 29: escapes are decoded, so the strings are read; an avoided requirement after them still denies.
+    ["escaped strings, 200,000 characters", () => write("pyproject.toml", `[project]\ndependencies = ["requests==2.19.0"]\n[tool.ruff]\nexclude = [${Array.from({ length: 12_000 }, (_, i) => `"a\\\\${i}"`).join(", ")}]\n`), "answered avoid"],
     ["a glob of 28 stars before an install", () => bash(`ls ${"*".repeat(28)}z; npm i lodash@4.17.20`), "answered avoid"],
     ["?* thirty times before an install", () => bash(`ls ${"?*".repeat(15)}z; npm i lodash@4.17.20`), "answered avoid"],
     ["a 60 KB PowerShell line of commas before an install", () => bash(`${"echo a,b;".repeat(6_000)}npm i lodash@4.17.20`, "PowerShell"), "answered avoid"],
@@ -72,7 +73,8 @@ describe("G3a: inside a Cargo dependency table every key is a dependency", () =>
   });
 });
 
-describe("G3b: a changed line with a TOML escape is held as not read, with a remedy that releases it", () => {
+// Round 29: TOML escapes are decoded (tomlString): an escaped line is read as the text it decodes to.
+describe("G3b: a changed line with a TOML escape is read as what it decodes to", () => {
   it.each([
     ["an escaped name", "Cargo.toml", `${PKG}\n[dependencies]\n"smallve\\u0063" = "1.6.0"\n`, `${PKG}\n[dependencies]\nsmallvec = "1.6.0"\n`],
     ["an escaped table name", "Cargo.toml", `${PKG}\n["dependencie\\u0073"]\nsmallvec = "1.6.0"\n`, `${PKG}\n[dependencies]\nsmallvec = "1.6.0"\n`],
@@ -83,11 +85,7 @@ describe("G3b: a changed line with a TOML escape is held as not read, with a rem
     ["a PEP 621 escaped requirement", "pyproject.toml", `[project]\ndependencies = ["requests==2.19.\\u0030"]\n`, `[project]\ndependencies = ["requests==2.19.0"]\n`],
   ])("%s", (_label, file, escaped, plain) => {
     const path = s.file(file, "");
-    const held = s.write(path, escaped);
-    expect(held.decision).toBe("deny");
-    expect(held.text).toContain(NOT_READ);
-    expect(held.text).toContain("without escapes");
-    // The remedy literally: the same without escapes is read, and judged by its versions.
+    expect(s.write(path, escaped).text).toContain("answered avoid");
     expect(s.write(path, plain).text).toContain("answered avoid");
   });
 
@@ -105,7 +103,7 @@ describe("G3b: a changed line with a TOML escape is held as not read, with a rem
 
   it("CRLF and a BOM", () => {
     const file = s.file("Cargo.toml", "");
-    expect(s.write(file, `\uFEFF${PKG}\r\n[dependencies]\r\n"smallve\\u0063" = "1.6.0"\r\n`).text).toContain(NOT_READ);
+    expect(s.write(file, `\uFEFF${PKG}\r\n[dependencies]\r\n"smallve\\u0063" = "1.6.0"\r\n`).text).toContain("answered avoid");
   });
 });
 

@@ -483,7 +483,9 @@ describe("install commands", () => {
     expect(simpleCommands("a b > out.txt; c 2>/dev/null && d >> log || e &", "bash")).toEqual([["a", "b"], ["c"], ["d"], ["e"]]);
     expect(simpleCommands("a 'b c' \"d e\"", "bash")).toEqual([["a", "b c", "d e"]]);
     expect(simpleCommands("a \\\n  b", "bash")).toEqual([["a", "b"]]);
-    for (const line of ["a $X", "a \"$X\"", "a `b`", "a $(b)", "a 'open", "a <<EOF", "a \\x"]) expect(simpleCommands(line, "bash"), line).toBeNull();
+    for (const line of ["a $X", "a \"$(b)\"", "a `b`", "a $(b)", "a 'open", "a <<EOF", "a \\x"]) expect(simpleCommands(line, "bash"), line).toBeNull();
+    // Round 29: a plain variable inside double quotes is an opaque NUL in its word, no reader's verb or package.
+    expect(simpleCommands('a "$X"', "bash")).toEqual([["a", "\u0000"]]);
     expect(simpleCommands("C:\\tools\\npm.cmd install x@1.0.0", "powershell")).toEqual([["C:\\tools\\npm.cmd", "install", "x@1.0.0"]]);
     for (const line of ["npm i `", "npm i $v", "npm i a,b", "npm --% i x"]) expect(simpleCommands(line, "powershell"), line).toBeNull();
   });

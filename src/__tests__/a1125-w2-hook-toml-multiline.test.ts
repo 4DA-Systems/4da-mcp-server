@@ -21,7 +21,8 @@ afterEach(() => s.dispose());
 const CARGO = '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\n';
 const PY = '[project]\nname = "app"\nversion = "0.1.0"\n';
 
-describe("held as not read", () => {
+// Round 29: the reader decodes multi-line strings (tomlString), so these are read as the strings they hold.
+describe("read as the strings they hold (round 29; held as not read before)", () => {
   it.each([
     ["Cargo: a renamed dependency's package key", "Cargo.toml", CARGO, `${CARGO}x = { package = """\nserde""", version = "1.0.200" }\n`],
     ["Cargo: a version in ''' in [dependencies]", "Cargo.toml", CARGO, `${CARGO}serde = '''\n1.0.200'''\n`],
@@ -34,8 +35,7 @@ describe("held as not read", () => {
   ])("%s", (_label, name, before, after) => {
     const path = s.file(name, before);
     const r = s.write(path, after);
-    expect(r.decision, r.text).toBe("deny");
-    expect(r.text).toContain(NOT_READ);
+    expect(r.text).not.toContain(NOT_READ);
   });
 });
 
