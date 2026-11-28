@@ -7,6 +7,8 @@
 import { STAYS_REVIEW } from "../../tools/briefing-command-check.js";
 import { BEST_EFFORT_READING, DECLARE_REASON, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../../tools/briefing-confirm.js";
 
+import { SENTENCES, sentencePattern, type SentenceRule } from "./a1140-sentence-table.js";
+
 type Answer = Record<string, any>;
 type Args = Record<string, any>;
 export interface TextRule {
@@ -51,7 +53,54 @@ export const TEXT_RULES: readonly TextRule[] = [
   { constant: "split the task (call-budget cut texts)", found: (r) => /split the task and ask for each part/.test(reason(r)), holds: (r) => level(r) !== "safe_to_delegate", when: "any level but safe_to_delegate" },
   { constant: "DECLARE_REASON", found: (r) => reason(r).startsWith(DECLARE_REASON), holds: (r, a) => level(r) === "confirmation_needed" && a.packages === undefined, when: "confirmation_needed, in a call without packages" },
   { constant: "SCAN_STILL_READS", found: (r) => reason(r).includes(SCAN_STILL_READS.replace(/\.$/, "")), holds: (r) => level(r) !== "safe_to_delegate", when: "any level but safe_to_delegate" },
+  ...sentenceRules(),
 ];
+
+/** The answer's JSON as its sentences are searched (the echoed task left out: it is the caller's own text). */
+const said = (r: Answer) => JSON.stringify({ ...r, task: undefined });
+const fold = (n: string) => n.toLowerCase().replace(/[-_.]+/g, "-");
+/** Names the call declared, the briefing read (to_confirm, checked) or names in the reason as touched. */
+const callNames = (r: Answer, a: Args) =>
+  new Set(
+    [
+      ...(Array.isArray(a.packages) ? a.packages.map((p: Answer) => String(p?.name ?? "")) : []),
+      ...((r?.task_packages?.to_confirm ?? []) as Answer[]).map((w) => String(w.name)),
+      ...((r?.task_packages?.checked ?? []) as Answer[]).map((w) => String(w.name)),
+    ].map(fold),
+  );
+/** Round 17, C3: the level rules of the sentence table (helpers/a1140-sentence-table.ts), applied to every answer. */
+function sentenceRules(): TextRule[] {
+  const HOLDS: Partial<Record<SentenceRule, [(r: Answer, a: Args) => boolean, string]>> = {
+    safe: [(r) => level(r) === "safe_to_delegate", "safe_to_delegate only"],
+    "not-safe": [(r) => level(r) !== "safe_to_delegate", "any level but safe_to_delegate"],
+    human: [(r) => level(r) === "human_only", "human_only only"],
+    confirmation: [(r) => level(r) === "confirmation_needed", "confirmation_needed only"],
+    "safe-nothing-confirmed": [(r) => level(r) === "safe_to_delegate" && !(r?.advisories ?? []).some((x: Answer) => x.scope === "project" && x.version_confirmed === true && !String(x.title).includes("the installed")), "safe_to_delegate with no project-wide finding listed"],
+    "safe-project-listed": [(r) => level(r) === "safe_to_delegate" && (r?.advisories ?? []).some((x: Answer) => x.scope === "project" && x.version_confirmed === true), "safe_to_delegate with a project-wide row listed"],
+    "no-decision-conflict": [(r) => Array.isArray(r?.decision_conflicts) && r.decision_conflicts.length === 0, "decision_conflicts empty"],
+    "not-about-task": [
+      (r, a) => {
+        const names = callNames(r, a);
+        return ((r?.advisories ?? []) as Answer[]).filter((x) => /^Not about this task/.test(String(x.action))).every((x) => [...String(x.action).matchAll(/((?:@[\w.-]+\/)?[\w.-]+)@[^\s,)]+/g)].every((m) => !names.has(fold(m[1]))));
+      },
+      "none of the packages it names is declared, waiting in to_confirm or checked",
+    ],
+    "drift-not-malware": [
+      (r) => {
+        const malware = new Set([...String(r?.delegation_assessment?.reason ?? "").matchAll(/([^\s,]+@[^\s,]+) \(in node_modules/g)].map((m) => m[1]));
+        const drift = ((r?.advisories ?? []) as Answer[]).map((x) => /^(.+?): the installed (\S+) in node_modules/.exec(String(x.title))).filter((m): m is RegExpExecArray => m !== null).map((m) => `${m[1]}@${m[2]}`);
+        return drift.some((d) => !malware.has(d));
+      },
+      "some copy on disk is a vulnerable copy that is not malware",
+    ],
+  };
+  return SENTENCES.flatMap(([text, rule]) => {
+    const h = HOLDS[rule];
+    if (!h) return [];
+    const re = sentencePattern(text);
+    return [{ constant: `sentence: ${text.slice(0, 60)}`, found: (r: Answer) => re.test(said(r)), holds: h[0], when: h[1] }];
+  });
+}
 
 /** The rules a given answer breaks (empty: every text it says is true at its level). */
 export function brokenTextRules(r: Answer, args: Args): string[] {

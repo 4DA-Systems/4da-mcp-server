@@ -46,7 +46,7 @@ import { extractAuthClaims, getAuthSecret, type TeamClaims } from "./auth.js";
 import { nodeServerProblem } from "./http-transport-floor.js";
 import { runWithAuthContext } from "./auth-context.js";
 import { envFlag } from "./env-flags.js";
-import { batchCancellation, batchRefusedMessage } from "./stdio-gate.js";
+import { batchCancellation, batchRefusedMessage, credentialIdRefusal } from "./stdio-gate.js";
 import { abortBackgroundWork } from "./shutdown.js";
 
 const DEFAULT_PORT = 4840;
@@ -288,6 +288,9 @@ async function batchRefusal(req: IncomingMessage): Promise<{ refusal: Record<str
   } catch {
     return { refusal: null, body: replay };
   }
+  // Round 17, C5(a): a request whose id has a credential's shape is not run (one answer, id null, for a batch too).
+  const credentialId = (Array.isArray(parsed) ? parsed : [parsed]).map(credentialIdRefusal).find((x) => x !== null);
+  if (credentialId) return { refusal: credentialId, body: replay };
   if (!Array.isArray(parsed)) return { refusal: null, body: replay };
   const revision = requestRevision(req.headers["mcp-protocol-version"], parsed);
   if (revision >= FIRST_REVISION_WITHOUT_BATCHES) {
@@ -381,6 +384,10 @@ export function screenResponse(res: ServerResponse): void {
   const headerValue = (v: unknown): unknown => (typeof v === "string" ? screenText(v) : Array.isArray(v) ? v.map(headerValue) : v);
   const isLength = (k: unknown) => typeof k === "string" && k.toLowerCase() === "content-length";
   res.setHeader = ((name: string, value: unknown) => (isLength(name) ? res : setHeader(name, headerValue(value)))) as ServerResponse["setHeader"];
+  // Round 17, C5(c): trailers are headers too.
+  const addTrailers = res.addTrailers.bind(res) as (headers: unknown) => void;
+  res.addTrailers = ((headers: unknown) =>
+    addTrailers(Array.isArray(headers) ? headers.map((pair) => (Array.isArray(pair) ? pair.map(headerValue) : pair)) : headers && typeof headers === "object" ? Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, headerValue(v)])) : headers)) as ServerResponse["addTrailers"];
   if (res.hasHeader("content-length")) res.removeHeader("content-length");
   res.writeHead = ((...args: unknown[]) => {
     const out = args.map((a, i) => {

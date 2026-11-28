@@ -1,0 +1,5946 @@
+{
+ "holes": {},
+ "source": "review-confirm15 (fifteenth independent check)",
+ "cases": [
+  {
+   "set": "s8",
+   "id": "mal-direct",
+   "group": "g0",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-direct-touch",
+   "group": "g1",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add a zod schema for orders.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.23.8",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-dev",
+   "group": "g2",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-nested",
+   "group": "g3",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/zod/node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-sub",
+   "group": "g4",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}",
+    "packages/web/package.json": "{\n  \"name\": \"web\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "packages/web/package-lock.json": "{\n  \"name\": \"web\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"web\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-partial-pinned",
+   "group": "g5",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"uaparserjs\": \"0.7.28\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"uaparserjs\": \"0.7.28\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/uaparserjs\": {\n      \"version\": \"0.7.28\",\n      \"resolved\": \"https://registry.npmjs.org/uaparserjs/-/uaparserjs-0.7.28.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-drift-nodemodules",
+   "group": "g6",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"uaparserjs\": \"0.7.29\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"uaparserjs\": \"0.7.29\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/uaparserjs\": {\n      \"version\": \"0.7.29\",\n      \"resolved\": \"https://registry.npmjs.org/uaparserjs/-/uaparserjs-0.7.29.tgz\"\n    }\n  }\n}",
+    "node_modules/uaparserjs/package.json": "{\"name\":\"uaparserjs\",\"version\":\"0.7.28\"}",
+    "node_modules/zod/package.json": "{\"name\":\"zod\",\"version\":\"3.23.8\"}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-pypi",
+   "group": "g7",
+   "template": "none",
+   "setup": {
+    "requirements.txt": "flask==3.0.3\nrequestss==2.32.4\n",
+    "app.py": "import flask\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-crates",
+   "group": "g8",
+   "template": "none",
+   "setup": {
+    "Cargo.toml": "[package]\nname = \"ingest\"\nversion = \"0.3.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.210\"\nrustdecimall = \"1.23.1\"\n",
+    "Cargo.lock": "version = 3\n\n[[package]]\nname = \"ingest\"\nversion = \"0.3.0\"\ndependencies = [\n \"rustdecimall\",\n \"serde\",\n]\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.210\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n\n[[package]]\nname = \"rustdecimall\"\nversion = \"1.23.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-go",
+   "group": "g9",
+   "template": "none",
+   "setup": {
+    "go.mod": "module example.com/svc\n\ngo 1.22\n\nrequire (\n\tgithub.com/pkg/errors v0.9.1\n\tgithub.com/evilq/modd v1.0.0\n)\n",
+    "go.sum": "github.com/pkg/errors v0.9.1 h1:x=\ngithub.com/pkg/errors v0.9.1/go.mod h1:y=\ngithub.com/evilq/modd v1.0.0 h1:z=\ngithub.com/evilq/modd v1.0.0/go.mod h1:w=\n",
+    "main.go": "package main\nfunc main() {}\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-direct-nodecl",
+   "group": "g10",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README."
+   }
+  },
+  {
+   "set": "s8",
+   "id": "mal-direct-dismiss",
+   "group": "g11",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Remove crossenv from the project.",
+    "packages": [],
+    "not_packages": [
+     "crossenv"
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "ph-direct",
+   "group": "g13",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"flatmapstreamm\": \"0.0.1-security\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"flatmapstreamm\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "ph-dev",
+   "group": "g14",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"flatmapstreamm\": \"0.0.1-security\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"flatmapstreamm\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "ph-nested",
+   "group": "g15",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/zod/node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "ph-sub",
+   "group": "g16",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}",
+    "packages/web/package.json": "{\n  \"name\": \"web\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"flatmapstreamm\": \"0.0.1-security\"\n  }\n}",
+    "packages/web/package-lock.json": "{\n  \"name\": \"web\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"web\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"flatmapstreamm\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "ph-two",
+   "group": "g17",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"flatmapstreamm\": \"0.0.1-security\",\n    \"loadyaml\": \"0.0.1-security\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"flatmapstreamm\": \"0.0.1-security\",\n        \"loadyaml\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    },\n    \"node_modules/loadyaml\": {\n      \"version\": \"0.0.1-security\",\n      \"resolved\": \"https://registry.npmjs.org/loadyaml/-/loadyaml-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "ph-plus-mal",
+   "group": "g18",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"flatmapstreamm\": \"0.0.1-security\",\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"flatmapstreamm\": \"0.0.1-security\",\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "ph-touch",
+   "group": "g19",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"flatmapstreamm\": \"0.0.1-security\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"flatmapstreamm\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Remove flatmapstreamm and its import.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "flatmapstreamm",
+      "version": "0.0.1-security",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "ph-nodecl",
+   "group": "g20",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"flatmapstreamm\": \"0.0.1-security\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"flatmapstreamm\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README."
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-untouched",
+   "group": "g21",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-untouched-decl",
+   "group": "g22",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add a zod schema for orders.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.23.8",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-touched-name",
+   "group": "g23",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the lodash template helper in utils.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-declared-clean-installed-vuln",
+   "group": "g24",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"undici\": \"5.8.0\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"undici\": \"5.8.0\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/undici\": {\n      \"version\": \"5.8.0\",\n      \"resolved\": \"https://registry.npmjs.org/undici/-/undici-5.8.0.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump the HTTP client to the patched release.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "undici",
+      "version": "6.21.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-declared-named-installed-vuln",
+   "group": "g25",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"undici\": \"5.8.0\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"undici\": \"5.8.0\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/undici\": {\n      \"version\": \"5.8.0\",\n      \"resolved\": \"https://registry.npmjs.org/undici/-/undici-5.8.0.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump undici to 6.21.0.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "undici",
+      "version": "6.21.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-declared-vuln-version",
+   "group": "g26",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add the HTTP client.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "undici",
+      "version": "5.8.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-dev",
+   "group": "g27",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-nested",
+   "group": "g28",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/zod/node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-nested-touched",
+   "group": "g29",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/zod/node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the lodash template helper in utils.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-two",
+   "group": "g30",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"lodash\": \"4.17.20\",\n    \"node-forge\": \"0.10.0\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"lodash\": \"4.17.20\",\n        \"node-forge\": \"0.10.0\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    },\n    \"node_modules/node-forge\": {\n      \"version\": \"0.10.0\",\n      \"resolved\": \"https://registry.npmjs.org/node-forge/-/node-forge-0.10.0.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-other-eco",
+   "group": "g31",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}",
+    "requirements.txt": "flask==3.0.3\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Update flask to 3.1.0.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "flask",
+      "version": "3.1.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-transitive-declared",
+   "group": "g32",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/zod/node_modules/undici\": {\n      \"version\": \"5.8.0\",\n      \"resolved\": \"https://registry.npmjs.org/undici/-/undici-5.8.0.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add undici 6.21.0 as a direct dependency.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "undici",
+      "version": "6.21.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-sub",
+   "group": "g33",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}",
+    "packages/web/package.json": "{\n  \"name\": \"web\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "packages/web/package-lock.json": "{\n  \"name\": \"web\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"web\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-crates",
+   "group": "g34",
+   "template": "none",
+   "setup": {
+    "Cargo.toml": "[package]\nname = \"ingest\"\nversion = \"0.3.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.210\"\nsmallvec = \"1.6.0\"\n",
+    "Cargo.lock": "version = 3\n\n[[package]]\nname = \"ingest\"\nversion = \"0.3.0\"\ndependencies = [\n \"serde\",\n \"smallvec\",\n]\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.210\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n\n[[package]]\nname = \"smallvec\"\nversion = \"1.6.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "pf-crates-touch",
+   "group": "g35",
+   "template": "none",
+   "setup": {
+    "Cargo.toml": "[package]\nname = \"ingest\"\nversion = \"0.3.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.210\"\nsmallvec = \"1.6.0\"\n",
+    "Cargo.lock": "version = 3\n\n[[package]]\nname = \"ingest\"\nversion = \"0.3.0\"\ndependencies = [\n \"serde\",\n \"smallvec\",\n]\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.210\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n\n[[package]]\nname = \"smallvec\"\nversion = \"1.6.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Replace smallvec with a Vec in the parser.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8",
+   "id": "dc-declared",
+   "group": "g36",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add the HTTP client for outbound calls.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "axios",
+        "version": "1.7.9",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-declared-private",
+   "group": "g37",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add the HTTP client for outbound calls.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "axios",
+        "version": "1.7.9",
+        "public": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-read-cmd",
+   "group": "g38",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "npm install axios@1.7.9",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-read-cmd-nodecl",
+   "group": "g39",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "npm install axios@1.7.9"
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-read-prose",
+   "group": "g40",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add axios for the outbound HTTP calls.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-installed-touch",
+   "group": "g41",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"axios\": \"1.7.9\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"axios\": \"1.7.9\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/axios\": {\n      \"version\": \"1.7.9\",\n      \"resolved\": \"https://registry.npmjs.org/axios/-/axios-1.7.9.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Refactor the axios interceptors in the API layer.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-installed-untouched",
+   "group": "g42",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"axios\": \"1.7.9\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"axios\": \"1.7.9\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/axios\": {\n      \"version\": \"1.7.9\",\n      \"resolved\": \"https://registry.npmjs.org/axios/-/axios-1.7.9.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Fix the typo in the README.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-none",
+   "group": "g43",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Fix the typo in the README.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-upper",
+   "group": "g44",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add the HTTP client.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "Axios",
+        "version": "1.7.9",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-dismissed",
+   "group": "g45",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Use axios as the word for the axis helper.",
+      "packages": [],
+      "not_packages": [
+       "axios"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-pypi",
+   "group": "g46",
+   "template": "none",
+   "setup": {
+    "requirements.txt": "flask==3.0.3\n"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "requests"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "requests"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "pip install requests==2.32.3",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "requests",
+        "version": "2.32.3",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-scoped",
+   "group": "g47",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "@acmeq/widgets"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "@acmeq/widgets"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add the widgets package.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "@acmeq/widgets",
+        "version": "2.0.0",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-go",
+   "group": "g48",
+   "template": "none",
+   "setup": {
+    "go.mod": "module example.com/svc\n\ngo 1.22\n\nrequire github.com/pkg/errors v0.9.1\n",
+    "go.sum": ""
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "github.com/rs/zerolog"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "github.com/rs/zerolog"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "go get github.com/rs/zerolog@v1.33.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/rs/zerolog",
+        "version": "v1.33.0",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-go-short",
+   "group": "g49",
+   "template": "none",
+   "setup": {
+    "go.mod": "module example.com/svc\n\ngo 1.22\n\nrequire github.com/pkg/errors v0.9.1\n",
+    "go.sum": ""
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "zerolog"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "zerolog"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "go get github.com/rs/zerolog@v1.33.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/rs/zerolog",
+        "version": "v1.33.0",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-other-name",
+   "group": "g50",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add dayjs for dates.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "dayjs",
+        "version": "1.11.13",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-file-entry",
+   "group": "g51",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"axios\": \"1.7.9\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"axios\": \"1.7.9\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/axios\": {\n      \"version\": \"1.7.9\",\n      \"resolved\": \"https://registry.npmjs.org/axios/-/axios-1.7.9.tgz\"\n    }\n  }\n}",
+    "src/http.js": "import axios from 'axios';\n"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Tidy up this file.",
+      "files": [
+       "src/http.js"
+      ],
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-snippet",
+   "group": "g52",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add this to package.json:\n```json\n{ \"dependencies\": { \"axios\": \"1.7.9\" } }\n```",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-typo-near",
+   "group": "g53",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Add axois for outbound calls.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8",
+   "id": "dc-version-only",
+   "group": "g54",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "decision_memory",
+     "args": {
+      "action": "record",
+      "decision_type": "tech_choice",
+      "subject": "http client",
+      "decision": "ky",
+      "rationale": "smaller",
+      "alternatives_rejected": [
+       "axios"
+      ],
+      "confidence": 0.9
+     }
+    },
+    {
+     "tool": "check_decision_alignment",
+     "args": {
+      "technology": "axios"
+     }
+    },
+    {
+     "tool": "what_should_i_know",
+     "args": {
+      "task": "Pin axios to 1.7.9.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8b",
+   "id": "R1-mal-dev",
+   "group": "g0",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R1-mal-dev-declzod",
+   "group": "g1",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add a zod schema for orders.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.23.8",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R1-ph-dev",
+   "group": "g2",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"flatmapstreamm\": \"0.0.1-security\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"flatmapstreamm\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R1-mal-drift",
+   "group": "g3",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"uaparserjs\": \"0.7.29\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"uaparserjs\": \"0.7.29\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/uaparserjs\": {\n      \"version\": \"0.7.29\",\n      \"resolved\": \"https://registry.npmjs.org/uaparserjs/-/uaparserjs-0.7.29.tgz\"\n    }\n  }\n}",
+    "node_modules/uaparserjs/package.json": "{\"name\":\"uaparserjs\",\"version\":\"0.7.28\"}",
+    "node_modules/zod/package.json": "{\"name\":\"zod\",\"version\":\"3.23.8\"}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R1-pf-decl-clean",
+   "group": "g4",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"undici\": \"5.8.0\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"undici\": \"5.8.0\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/undici\": {\n      \"version\": \"5.8.0\",\n      \"resolved\": \"https://registry.npmjs.org/undici/-/undici-5.8.0.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump the HTTP client to the patched release.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "undici",
+      "version": "6.21.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R1-pf-dev",
+   "group": "g5",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R2-mal-dev",
+   "group": "g6",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R2-mal-dev-declzod",
+   "group": "g7",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add a zod schema for orders.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.23.8",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R2-ph-dev",
+   "group": "g8",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"flatmapstreamm\": \"0.0.1-security\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"flatmapstreamm\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R2-mal-drift",
+   "group": "g9",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"uaparserjs\": \"0.7.29\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"uaparserjs\": \"0.7.29\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/uaparserjs\": {\n      \"version\": \"0.7.29\",\n      \"resolved\": \"https://registry.npmjs.org/uaparserjs/-/uaparserjs-0.7.29.tgz\"\n    }\n  }\n}",
+    "node_modules/uaparserjs/package.json": "{\"name\":\"uaparserjs\",\"version\":\"0.7.28\"}",
+    "node_modules/zod/package.json": "{\"name\":\"zod\",\"version\":\"3.23.8\"}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R2-pf-decl-clean",
+   "group": "g10",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"undici\": \"5.8.0\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"undici\": \"5.8.0\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/undici\": {\n      \"version\": \"5.8.0\",\n      \"resolved\": \"https://registry.npmjs.org/undici/-/undici-5.8.0.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump the HTTP client to the patched release.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "undici",
+      "version": "6.21.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "R2-pf-dev",
+   "group": "g11",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "scan-mal-dev",
+   "group": "g12",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "vulnerability_scan",
+     "args": {}
+    },
+    {
+     "tool": "vulnerability_scan",
+     "args": {
+      "include_dev": true
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8b",
+   "id": "scan-ph-dev",
+   "group": "g13",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"flatmapstreamm\": \"0.0.1-security\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"flatmapstreamm\": \"0.0.1-security\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/flatmapstreamm\": {\n      \"version\": \"0.0.1-security\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/flatmapstreamm/-/flatmapstreamm-0.0.1-security.tgz\"\n    }\n  }\n}"
+   },
+   "seq": [
+    {
+     "tool": "vulnerability_scan",
+     "args": {}
+    },
+    {
+     "tool": "vulnerability_scan",
+     "args": {
+      "include_dev": true
+     }
+    }
+   ]
+  },
+  {
+   "set": "s8b",
+   "id": "mal-dev-touchdev",
+   "group": "g14",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"crossenv\": \"1.0.1\",\n    \"vitest\": \"2.1.8\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\",\n        \"vitest\": \"2.1.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    },\n    \"node_modules/vitest\": {\n      \"version\": \"2.1.8\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/vitest/-/vitest-2.1.8.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Write a vitest unit test for the price calculation.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "mal-dev-only-touch",
+   "group": "g15",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Remove crossenv from the dev tools.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "mal-devflag-lock-only",
+   "group": "g16",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"shop-api\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{\"zod\":\"3.23.8\",\"crossenv\":\"1.0.1\"}}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"crossenv\": \"1.0.1\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/crossenv\": {\n      \"version\": \"1.0.1\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "mal-optional",
+   "group": "g17",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\"name\":\"shop-api\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"shop-api\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"3.23.8\",\"crossenv\":\"1.0.1\"}},\"node_modules/zod\":{\"version\":\"3.23.8\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"},\"node_modules/crossenv\":{\"version\":\"1.0.1\",\"resolved\":\"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\",\"optional\":true}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "mal-devoptional",
+   "group": "g18",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"crossenv\": \"1.0.1\"\n  }\n}",
+    "package-lock.json": "{\"name\":\"shop-api\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"shop-api\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"3.23.8\",\"crossenv\":\"1.0.1\"}},\"node_modules/zod\":{\"version\":\"3.23.8\",\"resolved\":\"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"},\"node_modules/crossenv\":{\"version\":\"1.0.1\",\"resolved\":\"https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz\",\"devOptional\":true}}}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "mal-pypi-devreq",
+   "group": "g19",
+   "template": "none",
+   "setup": {
+    "requirements.txt": "flask==3.0.3\n",
+    "requirements-dev.txt": "requestss==2.32.4\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "mal-crates-dev",
+   "group": "g20",
+   "template": "none",
+   "setup": {
+    "Cargo.toml": "[package]\nname = \"ingest\"\nversion = \"0.3.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.210\"\n\n[dev-dependencies]\nrustdecimall = \"1.23.1\"\n",
+    "Cargo.lock": "version = 3\n\n[[package]]\nname = \"ingest\"\nversion = \"0.3.0\"\ndependencies = [\n \"rustdecimall\",\n \"serde\",\n]\n\n[[package]]\nname = \"rustdecimall\"\nversion = \"1.23.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.210\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "mal-pnpm",
+   "group": "g21",
+   "template": "none",
+   "setup": {
+    "package.json": "{\"name\":\"x\",\"version\":\"1.0.0\",\"dependencies\":{\"zod\":\"3.23.8\",\"crossenv\":\"1.0.1\"}}",
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      crossenv:\n        specifier: 1.0.1\n        version: 1.0.1\n      zod:\n        specifier: 3.23.8\n        version: 3.23.8\n\npackages:\n\n  crossenv@1.0.1:\n    resolution: {integrity: sha512-AAAA}\n\n  zod@3.23.8:\n    resolution: {integrity: sha512-AAAA}\n\nsnapshots:\n\n  crossenv@1.0.1: {}\n\n  zod@3.23.8: {}\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s8b",
+   "id": "pf-dev-touch",
+   "group": "g22",
+   "template": "none",
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\"\n  },\n  \"devDependencies\": {\n    \"lodash\": \"4.17.20\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\"\n      },\n      \"devDependencies\": {\n        \"lodash\": \"4.17.20\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/lodash\": {\n      \"version\": \"4.17.20\",\n      \"dev\": true,\n      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz\"\n    }\n  }\n}"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the lodash template helper in the test utils.",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R1-mal-pypi-devreq",
+   "group": "r1mal-pypi-devreq",
+   "template": "none",
+   "setup": {
+    "requirements.txt": "flask==3.0.3\n",
+    "requirements-dev.txt": "requestss==2.32.4\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R1-mal-crates-dev",
+   "group": "r1mal-crates-dev",
+   "template": "none",
+   "setup": {
+    "Cargo.toml": "[package]\nname = \"ingest\"\nversion = \"0.3.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.210\"\n\n[dev-dependencies]\nrustdecimall = \"1.23.1\"\n",
+    "Cargo.lock": "version = 3\n\n[[package]]\nname = \"ingest\"\nversion = \"0.3.0\"\ndependencies = [\n \"rustdecimall\",\n \"serde\",\n]\n\n[[package]]\nname = \"rustdecimall\"\nversion = \"1.23.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.210\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R2-mal-pypi-devreq",
+   "group": "r2mal-pypi-devreq",
+   "template": "none",
+   "setup": {
+    "requirements.txt": "flask==3.0.3\n",
+    "requirements-dev.txt": "requestss==2.32.4\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R2-mal-crates-dev",
+   "group": "r2mal-crates-dev",
+   "template": "none",
+   "setup": {
+    "Cargo.toml": "[package]\nname = \"ingest\"\nversion = \"0.3.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.210\"\n\n[dev-dependencies]\nrustdecimall = \"1.23.1\"\n",
+    "Cargo.lock": "version = 3\n\n[[package]]\nname = \"ingest\"\nversion = \"0.3.0\"\ndependencies = [\n \"rustdecimall\",\n \"serde\",\n]\n\n[[package]]\nname = \"rustdecimall\"\nversion = \"1.23.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.210\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"
+   },
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix the typo in the README.",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R1-dash-2e3a",
+   "group": "rc1",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install date⸺fns@3.6.0",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R1-slash-29f8",
+   "group": "rc1",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install @acme⧸ui@1.0.0",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R1-dunder",
+   "group": "rc1",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix __init__.py and run npm install zod@3.24.1",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R2-dash-2e3a",
+   "group": "rc2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install date⸺fns@3.6.0",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R2-slash-29f8",
+   "group": "rc2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install @acme⧸ui@1.0.0",
+    "packages": []
+   }
+  },
+  {
+   "set": "repro",
+   "id": "R2-dunder",
+   "group": "rc2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Fix __init__.py and run npm install zod@3.24.1",
+    "packages": []
+   }
+  },
+  {
+   "set": "s2b",
+   "id": "form-nodismiss",
+   "group": "a",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin fastify@5.2.0 in the API layer.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s2b",
+   "id": "form-dismiss",
+   "group": "a",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin fastify@5.2.0 in the API layer.",
+    "packages": [],
+    "not_packages": [
+     "fastify"
+    ]
+   }
+  },
+  {
+   "set": "s2b",
+   "id": "form-dismiss-2",
+   "group": "b",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin fastify@5.2.0 in the API layer.",
+    "packages": [],
+    "not_packages": [
+     "fastify"
+    ]
+   }
+  },
+  {
+   "set": "s2b",
+   "id": "form-dismiss-elliptic",
+   "group": "b",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin elliptic@6.5.4 in the API layer.",
+    "packages": [],
+    "not_packages": [
+     "elliptic"
+    ]
+   }
+  },
+  {
+   "set": "s2b",
+   "id": "form-nodismiss-elliptic",
+   "group": "b",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin elliptic@6.5.4 in the API layer.",
+    "packages": []
+   }
+  },
+  {
+   "set": "s2b",
+   "id": "form-dismiss-fastifyy",
+   "group": "b",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin fastifyy@1.0.1 in the API layer.",
+    "packages": [],
+    "not_packages": [
+     "fastifyy"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-npm-fold#0",
+   "group": "g0",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq0x",
+   "args": {
+    "task": "npm install zq0x-ui@1.2.0 ZQ0X_UI zq0x--ui zq0x.ui and add ＺＱ0X-ui",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zq0x-ui",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-npm-pct#2",
+   "group": "g2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq2x",
+   "args": {
+    "task": "npm install %7aq2x-ui@1.2.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zq2x-ui",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-npm-snippet#4",
+   "group": "g4",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq4x",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{ \"dependencies\": { \"zq4x-ui\": \"1.2.0\" } }\n```",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zq4x-ui",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-npm-scope#6",
+   "group": "g6",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq6x",
+   "args": {
+    "task": "npm install @zq6x/ui@1.0.0 @zq6x/core @ZQ6X/Theme",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@zq6x",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-npm-same-public#8",
+   "group": "g8",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq8x",
+   "args": {
+    "task": "npm install zq8x-ui@1.2.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zq8x-ui",
+      "version": "1.0.0",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "ZQ8X_UI",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-npm-declared-version-in-name#10",
+   "group": "g10",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq10x",
+   "args": {
+    "task": "npm install zq10x-ui@1.2.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zq10x-ui@1.2.0",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-pypi-extras#12",
+   "group": "g12",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zq12x",
+   "args": {
+    "task": "pip install \"zq12x-tools[cli]>=1.0\"",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zq12x-tools",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-crates-fold#14",
+   "group": "g14",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zq14x",
+   "args": {
+    "task": "cargo add zq14x-core@1.0.0 zq14x_core",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zq14x_core",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-go-subpath#16",
+   "group": "g16",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq16x",
+   "args": {
+    "task": "go get github.com/zq16xco/secret-lib/sub/pkg@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zq16xco/secret-lib",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-go-major#18",
+   "group": "g18",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq18x",
+   "args": {
+    "task": "go get github.com/zq18xco/secret-lib/v2@v2.0.0 github.com/zq18xco/secret-lib/v3/sub@v3.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zq18xco/secret-lib",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "private-go-public-under#20",
+   "group": "g20",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq20x",
+   "args": {
+    "task": "go get github.com/zq20xco/secret-lib/sub@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zq20xco/secret-lib",
+      "version": "1.0.0",
+      "public": false
+     },
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zq20xco/secret-lib/sub",
+      "version": "v1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-npm-fold#22",
+   "group": "g22",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq22x",
+   "args": {
+    "task": "npm install zq22x-ui@1.2.0 ZQ22X_UI zq22x--ui zq22x.ui and add ＺＱ22X-ui",
+    "packages": [],
+    "not_packages": [
+     "zq22x-ui"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-npm-pct#24",
+   "group": "g24",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq24x",
+   "args": {
+    "task": "npm install %7aq24x-ui@1.2.0",
+    "packages": [],
+    "not_packages": [
+     "zq24x-ui"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-npm-snippet#26",
+   "group": "g26",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq26x",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{ \"dependencies\": { \"zq26x-ui\": \"1.2.0\" } }\n```",
+    "packages": [],
+    "not_packages": [
+     "zq26x-ui"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-npm-scope#28",
+   "group": "g28",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq28x",
+   "args": {
+    "task": "npm install @zq28x/ui@1.0.0 @zq28x/core @ZQ28X/Theme",
+    "packages": [],
+    "not_packages": [
+     "@zq28x"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-npm-same-public#30",
+   "group": "g30",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq30x",
+   "args": {
+    "task": "npm install zq30x-ui@1.2.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ZQ30X_UI",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zq30x-ui"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-npm-declared-version-in-name#32",
+   "group": "g32",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq32x",
+   "args": {
+    "task": "npm install zq32x-ui@1.2.0",
+    "packages": [],
+    "not_packages": [
+     "zq32x-ui@1.2.0"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-pypi-extras#34",
+   "group": "g34",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zq34x",
+   "args": {
+    "task": "pip install \"zq34x-tools[cli]>=1.0\"",
+    "packages": [],
+    "not_packages": [
+     "zq34x-tools"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-crates-fold#36",
+   "group": "g36",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zq36x",
+   "args": {
+    "task": "cargo add zq36x-core@1.0.0 zq36x_core",
+    "packages": [],
+    "not_packages": [
+     "zq36x_core"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-go-subpath#38",
+   "group": "g38",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq38x",
+   "args": {
+    "task": "go get github.com/zq38xco/secret-lib/sub/pkg@v1.2.0",
+    "packages": [],
+    "not_packages": [
+     "github.com/zq38xco/secret-lib"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-go-major#40",
+   "group": "g40",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq40x",
+   "args": {
+    "task": "go get github.com/zq40xco/secret-lib/v2@v2.0.0 github.com/zq40xco/secret-lib/v3/sub@v3.0.0",
+    "packages": [],
+    "not_packages": [
+     "github.com/zq40xco/secret-lib"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "dismissed-go-public-under#42",
+   "group": "g42",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq42x",
+   "args": {
+    "task": "go get github.com/zq42xco/secret-lib/sub@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zq42xco/secret-lib/sub",
+      "version": "v1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zq42xco/secret-lib"
+    ]
+   }
+  },
+  {
+   "set": "s3",
+   "id": "parent-declared-public#44",
+   "group": "g44",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq44x",
+   "parent": "example.com/pp44",
+   "args": {
+    "task": "go get example.com/pp44/zq44x@v1.0.0 and go get example.com/pp44@v1.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/pp44/zq44x",
+      "version": "v1.0.0",
+      "public": false
+     },
+     {
+      "ecosystem": "Go",
+      "name": "example.com/pp44",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "parent-npm-scope-public#46",
+   "group": "g46",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq46x",
+   "args": {
+    "task": "npm install @pp46/zq46x@1.0.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@pp46/zq46x",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "parent-not-declared#48",
+   "group": "g48",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq48x",
+   "parent": "example.com/pp48",
+   "args": {
+    "task": "go get example.com/pp48/zq48x@v1.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/pp48/zq48x",
+      "version": "v1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "parent-declared-public#50",
+   "group": "g50",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zq50x",
+   "parent": "example.com/pp50",
+   "args": {
+    "task": "go get example.com/pp50/zq50x@v1.0.0 and go get example.com/pp50@v1.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "example.com/pp50/zq50x",
+      "version": "v1.0.0",
+      "public": false
+     },
+     {
+      "ecosystem": "Go",
+      "name": "example.com/pp50",
+      "version": "v1.0.0",
+      "public": true
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "parent-npm-scope-public#52",
+   "group": "g52",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zq52x",
+   "args": {
+    "task": "npm install @pp52/zq52x@1.0.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@pp52/zq52x",
+      "version": "1.0.0",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3",
+   "id": "installed-private-zod",
+   "group": "inst",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": null,
+   "watch": "zod",
+   "args": {
+    "task": "Upgrade zod to 3.24.1 and check its changelog.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "version": "3.24.1",
+      "public": false
+     }
+    ],
+    "not_packages": []
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#0.Go.private",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr0x",
+   "args": {
+    "task": "go get Github.com/zr0xco/lib-zr0x/sub/pkg@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "GITHUB.COM/ZR0XCO/LIB-ZR0X",
+      "version": "1.2.0",
+      "public": false
+     },
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zr0xco/lib-zr0x/sub",
+      "version": "1.2.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#10.crates.io.private",
+   "group": "crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zr10x",
+   "args": {
+    "task": "Add to Cargo.toml:\n[dependencies]\nZR10X-CORE = \"1.0\"\n",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zr10x-core",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#20.crates.io.dismissed",
+   "group": "crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zr20x",
+   "args": {
+    "task": "cargo add zr2­0x-core --features x",
+    "packages": [],
+    "not_packages": [
+     "zr20x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#30.Go.private",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr30x",
+   "args": {
+    "task": "go get github.com/zr30xco/lib-zr30x/v2@v2.0.0 and also go get github.com/zr30xco/lib--zr30x/sub/pkg@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "GITHUB.COM/ZR30XCO/LIB-ZR30X",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#40.PyPI.dismissed",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr40x",
+   "args": {
+    "task": "pip install zr40x--core==1.0.0",
+    "packages": [],
+    "not_packages": [
+     "zr40x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#50.Go.dismissed",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr50x",
+   "args": {
+    "task": "go get github.com/zr50xco/lib-zr50x@v1.2.0",
+    "packages": [],
+    "not_packages": [
+     "github.com/zr50xco/lib-zr50x"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#60.Go.private",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr60x",
+   "args": {
+    "task": "go get github.com/zr60xco/lib-zr60x/sub/pkg@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "GITHUB.COM/ZR60XCO/LIB-ZR60X",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#70.npm.dismissed",
+   "group": "npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zr70x",
+   "args": {
+    "task": "bun add zr70x-core@1.2.0",
+    "packages": [],
+    "not_packages": [
+     "zr70x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#80.npm.private",
+   "group": "npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zr80x",
+   "args": {
+    "task": "bun add @z​r80x/ui@1.2.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@zr80x/ui",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#90.PyPI.dismissed",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr90x",
+   "args": {
+    "task": "uv add zr9­0x-core and also uv add zr90x_core",
+    "packages": [],
+    "not_packages": [
+     "zr90x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#100.Go.private",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr100x",
+   "args": {
+    "task": "Add to go.mod:\nrequire github.com/zr100xco/lib-zr100x v1.2.0\n and also go get github.com/zr100xco/lib.zr100x@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zr100xco/lib-zr100x",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#110.crates.io.dismissed",
+   "group": "crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zr110x",
+   "args": {
+    "task": "cargo add %7ar110x-core@1.0.0 and also cargo add zr​110x-core --features x",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zr110x-oe",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zr110x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#120.crates.io.dismissed",
+   "group": "crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zr120x",
+   "args": {
+    "task": "cargo add zr​120x-core --features x",
+    "packages": [],
+    "not_packages": [
+     "zr120x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#130.Go.private",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr130x",
+   "args": {
+    "task": "go get Github.com/zr130xco/lib-zr130x@v1.2.0 and also go get GITHUB.COM/ZR130XCO/LIB-ZR130X@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zr130xco/lib-zr130x",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#140.PyPI.dismissed",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr140x",
+   "args": {
+    "task": "uv add %7ar140x-core and also pip install zr140x--core==1.0.0",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zr140x-core",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "ZR140X-CORE"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#150.crates.io.dismissed",
+   "group": "crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zr150x",
+   "args": {
+    "task": "Add to Cargo.toml:\n[dependencies]\nzr150x.core = \"1.0\"\n",
+    "packages": [],
+    "not_packages": [
+     "zr150x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#160.PyPI.private",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr160x",
+   "args": {
+    "task": "pip install zr160x--core==1.0.0",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zr160x-core",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#170.Go.private",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr170x",
+   "args": {
+    "task": "go get Github.com/zr170xco/lib-zr170x/v2@v2.0.0 and also go get github.com/zr170xco/lib--zr170x@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "GITHUB.COM/ZR170XCO/LIB-ZR170X",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#180.Go.dismissed",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr180x",
+   "args": {
+    "task": "go get github.com/zr180xco/lib-zr180x/v2@v2.0.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zr180xco/lib-zr180x/sub",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "git­hub.com/zr180xco/lib-zr180x"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#190.Go.private",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr190x",
+   "args": {
+    "task": "go get Github.com/zr190xco/lib-zr190x/v2@v2.0.0 and also go get gi​thub.com/zr190xco/lib-zr190x/sub/pkg@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "GITHUB.COM/ZR190XCO/LIB-ZR190X",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#200.crates.io.dismissed",
+   "group": "crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zr200x",
+   "args": {
+    "task": "Add to Cargo.toml:\n[dependencies]\nzr200x-core = \"1.0\"\n",
+    "packages": [],
+    "not_packages": [
+     "zr200x--core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#210.PyPI.private",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr210x",
+   "args": {
+    "task": "poetry add zr210x--core@1.0.0",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "ZR210X-CORE",
+      "version": "1.2.0",
+      "public": false
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "zr210x-ore",
+      "version": "1.2.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#220.crates.io.dismissed",
+   "group": "crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zr220x",
+   "args": {
+    "task": "cargo add %7ar220x-core --features x",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "zr220x-core",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zr220x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#230.Go.dismissed",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr230x",
+   "args": {
+    "task": "go get github.com/zr230xco/lib-zr230x/v2@v2.0.0 and also go get github.com/zr230xco/lib--zr230x@v1.2.0",
+    "packages": [],
+    "not_packages": [
+     "github.com/zr230xco/lib-zr230x"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#240.Go.dismissed",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr240x",
+   "args": {
+    "task": "go get Github.com/zr240xco/lib-zr240x/sub/pkg@v1.2.0",
+    "packages": [],
+    "not_packages": [
+     "github.com/zr240xco/lib-zr240x"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#250.crates.io.dismissed",
+   "group": "crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "marker": "zr250x",
+   "args": {
+    "task": "cargo add zr250x--core@1.0.0",
+    "packages": [],
+    "not_packages": [
+     "zr250x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#260.npm.dismissed",
+   "group": "npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zr260x",
+   "args": {
+    "task": "npm i alias@npm:%7ar260x-core@1.2.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zr260x-core",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zr260x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#270.PyPI.dismissed",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr270x",
+   "args": {
+    "task": "poetry add zｒ270x-core@1.0.0",
+    "packages": [],
+    "not_packages": [
+     "zr270x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#280.PyPI.dismissed",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr280x",
+   "args": {
+    "task": "uv add %7ar280x-core",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zr280x.core",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zr280x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#290.npm.private",
+   "group": "npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zr290x",
+   "args": {
+    "task": "pnpm add @zr290x/ui and also pnpm add @zr290x/ui",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@zr290x/ui",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#300.Go.dismissed",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr300x",
+   "args": {
+    "task": "go get Github.com/zr300xco/lib-zr300x/sub/pkg@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zr300xco/lib-zr300x/sub",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zr300xco/lib_zr300x"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#310.npm.dismissed",
+   "group": "npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zr310x",
+   "args": {
+    "task": "Add to package.json:\n```json\n{ \"dependencies\": { \"%7ar310x-core\": \"1.2.0\" } }\n```",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zr310x--core",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "zr310x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#320.PyPI.private",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr320x",
+   "args": {
+    "task": "pip install \"zr320x-core[extra]>=1.0\"",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "zr320x-core",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#330.npm.dismissed",
+   "group": "npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zr330x",
+   "args": {
+    "task": "Add the %40zr330x/ui package, version 1.2.0.",
+    "packages": [],
+    "not_packages": [
+     "@zr330x/ui"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#340.Go.dismissed",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr340x",
+   "args": {
+    "task": "go get github.com/zr340xco/lib-zr340x/sub/pkg@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zr340xco/lib-zr340x/sub",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zr340xco/lib-zr340x"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#350.npm.private",
+   "group": "npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zr350x",
+   "args": {
+    "task": "pnpm add @zr­350x/ui",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "@zr350x/ui",
+      "version": "1.2.0",
+      "public": false
+     },
+     {
+      "ecosystem": "npm",
+      "name": "@zr350x/ui",
+      "version": "1.2.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#360.Go.dismissed",
+   "group": "Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "marker": "zr360x",
+   "args": {
+    "task": "go get Github.com/zr360xco/lib-zr360x/sub/pkg@v1.2.0 and also go get github.com/zr360xco/lib_zr360x@v1.2.0",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/zr360xco/lib-zr360x/sub",
+      "version": "1.2.0",
+      "public": true
+     }
+    ],
+    "not_packages": [
+     "github.com/zr360xco/lib.zr360x"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#370.PyPI.dismissed",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr370x",
+   "args": {
+    "task": "Add to requirements.txt:\nzr​370x-core==1.0.0\n and also pip install \"ｚｒ370x-ｃoｒe[extra]>=1.0\"",
+    "packages": [],
+    "not_packages": [
+     "zr370x-core"
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#380.PyPI.private",
+   "group": "PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "marker": "zr380x",
+   "args": {
+    "task": "pip install zr380x--core==1.0.0 and also pip install zr380x‐core==1.0.0",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "ZR380X-CORE",
+      "version": "1.2.0",
+      "public": false
+     },
+     {
+      "ecosystem": "PyPI",
+      "name": "ZR380X-CORE",
+      "version": "1.2.0",
+      "public": true
+     }
+    ]
+   }
+  },
+  {
+   "set": "s3b",
+   "id": "gen#390.npm.private",
+   "group": "npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "marker": "zr390x",
+   "args": {
+    "task": "pnpm add zr​390x-core",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zr390x-core",
+      "version": "1.2.0",
+      "public": false
+     }
+    ]
+   }
+  },
+  {
+   "set": "s5",
+   "id": "ctl-0",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install\u0000 zod@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "\u0000"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-206d",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z⁭od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "⁭",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0033",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠀳od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠀳",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e006f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠁯od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠁯",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e00ab",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠂫od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠂫",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e00e7",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠃧od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠃧",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0123",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠄣od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠄣",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e015f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠅟od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠅟",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e019b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠆛od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠆛",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e01d7",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠇗od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠇗",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0213",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠈓od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠈓",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e024f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠉏od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠉏",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e028b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠊋od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠊋",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e02c7",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠋇od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠋇",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0303",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠌃od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠌃",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e033f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠌿od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠌿",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e037b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠍻od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠍻",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e03b7",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠎷od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠎷",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e03f3",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠏳od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠏳",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e042f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠐯od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠐯",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e046b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠑫od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠑫",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e04a7",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠒧od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠒧",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e04e3",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠓣od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠓣",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e051f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠔟od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠔟",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e055b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠕛od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠕛",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0597",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠖗od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠖗",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e05d3",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠗓od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠗓",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e060f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠘏od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠘏",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e064b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠙋od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠙋",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0687",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠚇od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠚇",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e06c3",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠛃od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠛃",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e06ff",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠛿od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠛿",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e073b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠜻od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠜻",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0777",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠝷od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠝷",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e07b3",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠞳od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠞳",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e07ef",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠟯od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠟯",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e082b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠠫od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠠫",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0867",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠡧od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠡧",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e08a3",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠢣od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠢣",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e08df",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠣟od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠣟",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e091b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠤛od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠤛",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0957",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠥗od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠥗",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0993",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠦓od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠦓",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e09cf",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠧏od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠧏",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0a0b",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠨋od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠨋",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0a47",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠩇od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠩇",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0a83",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠪃od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠪃",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0abf",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠪿od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠪿",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0afb",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠫻od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠫻",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0b37",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠬷od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠬷",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0b73",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠭳od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠭳",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0baf",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠮯od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠮯",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0beb",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠯫od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠯫",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0c27",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠰧od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠰧",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0c63",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠱣od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠱣",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0c9f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠲟od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠲟",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0cdb",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠳛od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠳛",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0d17",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠴗od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠴗",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0d53",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠵓od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠵓",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0d8f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠶏od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠶏",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0dcb",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠷋od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠷋",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0e07",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠸇od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠸇",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0e43",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠹃od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠹃",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0e7f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠹿od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠹿",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0ebb",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠺻od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠺻",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0ef7",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠻷od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠻷",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0f33",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠼳od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠼳",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0f6f",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠽯od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠽯",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0fab",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠾫od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠾫",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "di-e0fe7",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install z󠿧od@3.24.1",
+    "packages": []
+   },
+   "expect": {
+    "absent": "󠿧",
+    "has": "zod@3.24.1"
+   }
+  },
+  {
+   "set": "s5",
+   "id": "nfkc-fullwidth",
+   "group": "g",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "ｎｐｍ ｉｎｓｔａｌｌ ｚｏｄ＠３．２４．１",
+    "packages": []
+   },
+   "expect": {
+    "has": "npm install zod@3.24.1"
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.zod.0",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add zod for the HTTP layer.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.zod.3",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the handlers.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.ky.1",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use ky in the worker.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.ky.4",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Replace the helper with ky.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.hono.2",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump hono.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "hono",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.helmet.0",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add helmet for the HTTP layer.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "helmet",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.helmet.3",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the handlers.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "helmet",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.fastify.1",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use fastify in the worker.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "fastify",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.fastify.4",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Replace the helper with fastify.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "fastify",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.valibot.2",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump valibot.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "valibot",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.msw.0",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add msw for the HTTP layer.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "msw",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.msw.3",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the handlers.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "msw",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.dayjs.1",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use dayjs in the worker.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "dayjs",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.dayjs.4",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Replace the helper with dayjs.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "dayjs",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.pino.2",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump pino.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "pino",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.axios.0",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add axios for the HTTP layer.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "axios",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.npm.axios.3",
+   "clause": "s1",
+   "group": "s1-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the handlers.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "axios",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.PyPI.flask.1",
+   "clause": "s1",
+   "group": "s1-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use flask in the worker.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "flask",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.PyPI.flask.4",
+   "clause": "s1",
+   "group": "s1-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Replace the helper with flask.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "flask",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.PyPI.httpx.2",
+   "clause": "s1",
+   "group": "s1-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump httpx.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "httpx",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.PyPI.pydantic.0",
+   "clause": "s1",
+   "group": "s1-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add pydantic for the HTTP layer.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "pydantic",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.PyPI.pydantic.3",
+   "clause": "s1",
+   "group": "s1-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the handlers.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "pydantic",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.PyPI.requests.1",
+   "clause": "s1",
+   "group": "s1-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use requests in the worker.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "requests",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.PyPI.requests.4",
+   "clause": "s1",
+   "group": "s1-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Replace the helper with requests.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "requests",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.crates.io.serde.2",
+   "clause": "s1",
+   "group": "s1-crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump serde.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "serde",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.crates.io.tokio.0",
+   "clause": "s1",
+   "group": "s1-crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add tokio for the HTTP layer.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "tokio",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.crates.io.tokio.3",
+   "clause": "s1",
+   "group": "s1-crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the handlers.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "tokio",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.crates.io.anyhow.1",
+   "clause": "s1",
+   "group": "s1-crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Use anyhow in the worker.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "anyhow",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.crates.io.anyhow.4",
+   "clause": "s1",
+   "group": "s1-crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Replace the helper with anyhow.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "anyhow",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.Go.github.com/rs/zerolog.2",
+   "clause": "s1",
+   "group": "s1-Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Bump github.com/rs/zerolog.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/rs/zerolog",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.Go.github.com/go-chi/chi/v5.0",
+   "clause": "s1",
+   "group": "s1-Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add github.com/go-chi/chi/v5 for the HTTP layer.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/go-chi/chi/v5",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.nover.Go.github.com/go-chi/chi/v5.3",
+   "clause": "s1",
+   "group": "s1-Go",
+   "template": "go",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Refactor the handlers.",
+    "packages": [
+     {
+      "ecosystem": "Go",
+      "name": "github.com/go-chi/chi/v5",
+      "public": true
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.npm.lodash.4.17.20.2",
+   "clause": "s1",
+   "group": "s1b-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add lodash.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "lodash",
+      "public": true,
+      "version": "4.17.20"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.npm.undici.5.8.0.2",
+   "clause": "s1",
+   "group": "s1b-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add undici.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "undici",
+      "public": true,
+      "version": "5.8.0"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.npm.fastifyy.1.0.1.2",
+   "clause": "s1",
+   "group": "s1b-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add fastifyy.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "fastifyy",
+      "public": true,
+      "version": "1.0.1"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.PyPI.ormar.0.12.2.2",
+   "clause": "s1",
+   "group": "s1b-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add ormar.",
+    "packages": [
+     {
+      "ecosystem": "PyPI",
+      "name": "ormar",
+      "public": true,
+      "version": "0.12.2"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.crates.io.smallvec.1.6.0.2",
+   "clause": "s1",
+   "group": "s1b-crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add smallvec.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "smallvec",
+      "public": true,
+      "version": "1.6.0"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.npm.node-forge.<1.0.0.2",
+   "clause": "s1",
+   "group": "s1b-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add node-forge.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "node-forge",
+      "public": true,
+      "version": "<1.0.0"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.npm.undici.5.8.x.2",
+   "clause": "s1",
+   "group": "s1b-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add undici.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "undici",
+      "public": true,
+      "version": "5.8.x"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.crates.io.smallvec.=1.6.0.2",
+   "clause": "s1",
+   "group": "s1b-crates.io",
+   "template": "rs",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add smallvec.",
+    "packages": [
+     {
+      "ecosystem": "crates.io",
+      "name": "smallvec",
+      "public": true,
+      "version": "=1.6.0"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s1.bad.npm.papaprse.latest.2",
+   "clause": "s1",
+   "group": "s1b-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add papaprse.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "papaprse",
+      "public": true,
+      "version": "latest"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.command.fastify",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install fastifyx@5.2.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "fastify",
+      "public": true,
+      "version": "5.2.0"
+     }
+    ],
+    "not_packages": [
+     "fastifyx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.manifest.fastify",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{ \"dependencies\": { \"fastifyx\": \"5.2.0\" } }\n```",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "fastify",
+      "public": true,
+      "version": "5.2.0"
+     }
+    ],
+    "not_packages": [
+     "fastifyx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.file.fastify",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "In package.json set \"fastifyx\": \"5.2.0\".",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "fastify",
+      "public": true,
+      "version": "5.2.0"
+     }
+    ],
+    "not_packages": [
+     "fastifyx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.command2.hono",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Run pnpm add honox@4.6.14 and wire it up.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "hono",
+      "public": true,
+      "version": "4.6.14"
+     }
+    ],
+    "not_packages": [
+     "honox"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.form.hono",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin honox@4.6.14 in the API layer.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "hono",
+      "public": true,
+      "version": "4.6.14"
+     }
+    ],
+    "not_packages": [
+     "honox"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.command.helmet",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install helmetx@8.0.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "helmet",
+      "public": true,
+      "version": "8.0.0"
+     }
+    ],
+    "not_packages": [
+     "helmetx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.manifest.helmet",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{ \"dependencies\": { \"helmetx\": \"8.0.0\" } }\n```",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "helmet",
+      "public": true,
+      "version": "8.0.0"
+     }
+    ],
+    "not_packages": [
+     "helmetx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.file.helmet",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "In package.json set \"helmetx\": \"8.0.0\".",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "helmet",
+      "public": true,
+      "version": "8.0.0"
+     }
+    ],
+    "not_packages": [
+     "helmetx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.command2.valibot",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Run pnpm add valibotx@1.0.0 and wire it up.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "valibot",
+      "public": true,
+      "version": "1.0.0"
+     }
+    ],
+    "not_packages": [
+     "valibotx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.form.valibot",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin valibotx@1.0.0 in the API layer.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "valibot",
+      "public": true,
+      "version": "1.0.0"
+     }
+    ],
+    "not_packages": [
+     "valibotx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.command.msw",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install mswx@2.7.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "msw",
+      "public": true,
+      "version": "2.7.0"
+     }
+    ],
+    "not_packages": [
+     "mswx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.manifest.msw",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{ \"dependencies\": { \"mswx\": \"2.7.0\" } }\n```",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "msw",
+      "public": true,
+      "version": "2.7.0"
+     }
+    ],
+    "not_packages": [
+     "mswx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.file.msw",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "In package.json set \"mswx\": \"2.7.0\".",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "msw",
+      "public": true,
+      "version": "2.7.0"
+     }
+    ],
+    "not_packages": [
+     "mswx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.command2.ky",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Run pnpm add kyx@1.7.4 and wire it up.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "public": true,
+      "version": "1.7.4"
+     }
+    ],
+    "not_packages": [
+     "kyx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.form.ky",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin kyx@1.7.4 in the API layer.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "ky",
+      "public": true,
+      "version": "1.7.4"
+     }
+    ],
+    "not_packages": [
+     "kyx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.command.zod",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install zodx@3.24.1",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true,
+      "version": "3.24.1"
+     }
+    ],
+    "not_packages": [
+     "zodx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.manifest.zod",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add this to package.json:\n```json\n{ \"dependencies\": { \"zodx\": \"3.24.1\" } }\n```",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true,
+      "version": "3.24.1"
+     }
+    ],
+    "not_packages": [
+     "zodx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.file.zod",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "In package.json set \"zodx\": \"3.24.1\".",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true,
+      "version": "3.24.1"
+     }
+    ],
+    "not_packages": [
+     "zodx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.command2.dayjs",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Run pnpm add dayjsx@1.11.13 and wire it up.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "dayjs",
+      "public": true,
+      "version": "1.11.13"
+     }
+    ],
+    "not_packages": [
+     "dayjsx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s2.instead.form.dayjs",
+   "clause": "s2",
+   "group": "s2",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Pin dayjsx@1.11.13 in the API layer.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "dayjs",
+      "public": true,
+      "version": "1.11.13"
+     }
+    ],
+    "not_packages": [
+     "dayjsx"
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s7.cmd.node-forge",
+   "clause": "s7",
+   "group": "s7-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install node-forge@0.10.0",
+    "packages": []
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s7.cmd.fastifyy",
+   "clause": "s7",
+   "group": "s7-npm",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install fastifyy@1.0.1",
+    "packages": []
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s7.cmd.litestarr",
+   "clause": "s7",
+   "group": "s7-PyPI",
+   "template": "py",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install litestarr==2.13.1",
+    "packages": []
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s9.u0",
+   "clause": "s9",
+   "group": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install \"zod@3.24.1",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true,
+      "version": "3.24.1"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s9.u3",
+   "clause": "s9",
+   "group": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "pip install --index-url https://pypi.example.test/simple flask==3.1.0",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true,
+      "version": "3.24.1"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s9.u6",
+   "clause": "s9",
+   "group": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true,
+      "version": "3.24.1"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s9.u9",
+   "clause": "s9",
+   "group": "s9",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Add to package.json:\n```json\n{ \"dependencies\": { \"zod\": \"3.24.1\", \n```",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "zod",
+      "public": true,
+      "version": "3.24.1"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s10.f4",
+   "clause": "s10",
+   "group": "s10",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "conda install numpyq",
+    "packages": []
+   },
+   "expect": {
+    "notSafe": true,
+    "notSent": "numpyq"
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s10.f10",
+   "clause": "s10",
+   "group": "s10",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Then run: gem install sinatraq",
+    "packages": []
+   },
+   "expect": {
+    "notSafe": true,
+    "notSent": "sinatraq"
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s11.held2",
+   "clause": "s11",
+   "group": "s11",
+   "template": "npm",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "npm install valibot@1.0.0 GOPROXY=https://goproxy.example.test",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "valibot",
+      "public": true,
+      "version": "1.0.0"
+     }
+    ]
+   },
+   "expect": {
+    "notSafe": true
+   }
+  },
+  {
+   "set": "misc",
+   "id": "s16.decl-private-installed",
+   "clause": "s16",
+   "group": "s16f",
+   "template": "none",
+   "tool": "what_should_i_know",
+   "args": {
+    "task": "Upgrade pino in the logger.",
+    "packages": [
+     {
+      "ecosystem": "npm",
+      "name": "pino",
+      "version": "9.6.0",
+      "public": false
+     }
+    ]
+   },
+   "setup": {
+    "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"zod\": \"3.23.8\",\n    \"@acmeq/widgets\": \"2.0.0\",\n    \"pino\": \"9.6.0\"\n  }\n}",
+    "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.0.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.0.0\",\n      \"dependencies\": {\n        \"zod\": \"3.23.8\",\n        \"@acmeq/widgets\": \"2.0.0\",\n        \"pino\": \"9.6.0\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    },\n    \"node_modules/@acmeq/widgets\": {\n      \"version\": \"2.0.0\",\n      \"resolved\": \"https://registry.npmjs.org/@acmeq/widgets/-/widgets-2.0.0.tgz\"\n    },\n    \"node_modules/pino\": {\n      \"version\": \"9.6.0\",\n      \"resolved\": \"https://registry.npmjs.org/pino/-/pino-9.6.0.tgz\"\n    }\n  }\n}"
+   },
+   "expect": {
+    "sentInstalled": "pino"
+   }
+  }
+ ]
+}

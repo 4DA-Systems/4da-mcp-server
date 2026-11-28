@@ -287,10 +287,16 @@ export function readableText(text: string): string {
   return foldName(decoded.replace(INVISIBLE, ""));
 }
 
-/** Dashes and hyphens other than `-` (U+2010-U+2015, minus, small and fullwidth hyphen-minus, hyphen bullet). */
-const DASHES = /[‐-―⁃−﹘﹣－]/g;
-/** Slashes other than `/` that NFKC leaves alone (division and fraction slash). */
-const SLASHES = /[⁄∕]/g;
+/**
+ * Round 17, C4: the dash look-alikes folded to "-": every Dash_Punctuation character (\p{Pd}: U+2010-2015, U+2E3A,
+ * U+2E3B, U+058A, U+05BE, U+1806, U+2E17, U+301C, U+30A0, U+1400, the small and fullwidth hyphen-minus among them) and
+ * DASH_EXTRAS, the dash-shaped characters of other categories.
+ */
+export const DASH_EXTRAS: readonly string[] = ["\u2212", "\u2043", "\u02D7", "\u2796"];
+const DASHES = new RegExp(`[\\p{Pd}${DASH_EXTRAS.join("")}]`, "gu");
+/** Round 17, C4: the slash look-alikes NFKC leaves alone, folded to "/". */
+export const SLASH_LOOKALIKES: readonly string[] = ["\u2044", "\u2215", "\u29F8", "\u2571", "\u1735", "\u3033", "\u27CB", "\u29F6", "\u2AFB", "\u2AFD"];
+const SLASHES = new RegExp(`[${SLASH_LOOKALIKES.join("")}]`, "gu");
 
 /**
  * A name as a registry would read it once look-alike characters are folded: NFKC (fullwidth
