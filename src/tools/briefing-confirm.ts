@@ -127,22 +127,37 @@ export const BRIEFING_FAILED = "what_should_i_know failed before it finished, so
 /** Round 18, N7: a "ready" scan that did not read every lockfile the walk found says how many it did not read. */
 export const NOT_SCANNED_LOCKFILES = (by: number | { ignored: number; depth: number; projectLimit: number; outside: number; unreadable: number }) => {
   const u = typeof by === "number" ? { ignored: by, depth: 0, projectLimit: 0, outside: 0, unreadable: 0 } : by;
-  const n = u.ignored + u.depth + u.projectLimit + u.outside + u.unreadable;
+  // Round 20: a folder the walk could not list is no lockfile found: it is counted and said apart.
+  const n = u.ignored + u.depth + u.projectLimit + u.outside;
+  const folders = u.unreadable > 0 ? UNLISTED_FOLDERS(u.unreadable) : "";
+  if (n === 0) return folders;
   // Ignored, excluded or fixture folders alone: the round 18 sentence, unchanged.
-  if (n === u.ignored) return `${n} lockfile${n === 1 ? "" : "s"} under ignored, excluded or test-fixture folders ${n === 1 ? "was" : "were"} not read, so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`;
-  const parts = [
-    u.ignored > 0 ? `${u.ignored} under ignored, excluded or test-fixture folders` : "",
-    u.depth > 0 ? `${u.depth} deeper than the scan goes` : "",
-    u.projectLimit > 0 ? `${u.projectLimit} past the project limit` : "",
-    u.outside > 0 ? `${u.outside} behind a link outside the project` : "",
-    u.unreadable > 0 ? `${u.unreadable} in a folder that could not be listed` : "",
-  ].filter(Boolean);
-  return `${n} lockfile${n === 1 ? " was" : "s were"} found and not read (${parts.join(", ")}), so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`;
+  const lockfiles =
+    n === u.ignored
+      ? `${n} lockfile${n === 1 ? "" : "s"} under ignored, excluded or test-fixture folders ${n === 1 ? "was" : "were"} not read, so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`
+      : `${n} lockfile${n === 1 ? " was" : "s were"} found and not read (${[
+          u.ignored > 0 ? `${u.ignored} under ignored, excluded or test-fixture folders` : "",
+          u.depth > 0 ? `${u.depth} deeper than the scan goes` : "",
+          u.projectLimit > 0 ? `${u.projectLimit} past the project limit` : "",
+          u.outside > 0 ? `${u.outside} behind a link outside the project` : "",
+        ]
+          .filter(Boolean)
+          .join(", ")}), so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`;
+  return folders ? `${lockfiles} ${folders}` : lockfiles;
 };
+/** Round 20: folders the walk could not list (whatever they hold: nothing is known of them). */
+export const UNLISTED_FOLDERS = (n: number) => `${n} folder${n === 1 ? "" : "s"} could not be listed, so any lockfile in ${n === 1 ? "it" : "them"} was not read (folders_not_listed).`;
 /** Round 19, M5: said in a safe reason whenever the scan withheld installed names the project's configuration makes private. */
 export const PRIVATE_INSTALLED = (n: number) => `${n} installed dependenc${n === 1 ? "y is" : "ies are"} private by the project's configuration and ${n === 1 ? "was" : "were"} not checked (vulnerability_scan lists ${n === 1 ? "it" : "them"}).`;
 /** Round 19, Q2: a lockfile the scan did not read for a bound or a link (not an ignored or fixture folder): the scan is incomplete. */
-export const SCAN_INCOMPLETE = "The scan is incomplete: it found lockfiles it did not read (deeper than it goes, past its project limit, behind a link outside the project, or in a folder it could not list), so it cannot vouch for the project. Pass project_path for the part you need.";
+export const SCAN_INCOMPLETE = "The scan is incomplete: it could not read part of the project (lockfiles deeper than it goes, past its project limit or behind a link outside the project, or folders it could not list), so it cannot vouch for the project. Pass project_path for the part you need.";
+/**
+ * Round 20: why a scan that ran has nothing to answer with, named by its cause (the level stays unknown): every installed
+ * dependency private by configuration, an unreadable .npmrc, an unreadable lockfile.
+ */
+export const SCAN_ALL_PRIVATE = (n: number) => `every installed dependency is private by the project's configuration, so none was checked: ${n} private`;
+export const SCAN_NPMRC_UNREADABLE = (n: number) => `the project's .npmrc could not be read, so the scan could not tell private names from public ones and checked none of the ${n} installed dependenc${n === 1 ? "y" : "ies"}`;
+export const SCAN_LOCKFILE_UNREADABLE = (files: string[]) => `the lockfile${files.length === 1 ? "" : "s"} ${files.join(", ")} could not be read`;
 /** Round 16, C3: said only when decisionConflictsFor found no conflict over the declared, the read and the installed names. */
 export const NO_DECISION_CONFLICT = "no recorded-decision conflict for this task";
 export const OUTSIDE_COVERAGE ="This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.";

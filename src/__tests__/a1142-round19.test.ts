@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow, readingCopy } from "../tools/what-should-i-know.js";
-import { NOT_SCANNED_LOCKFILES, PRIVATE_INSTALLED, SCAN_INCOMPLETE } from "../tools/briefing-confirm.js";
+import { NOT_SCANNED_LOCKFILES, PRIVATE_INSTALLED, SCAN_INCOMPLETE, UNLISTED_FOLDERS } from "../tools/briefing-confirm.js";
 import { adv, createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
 import { brokenTextRules } from "./helpers/a1137-text-rules.js";
 
@@ -71,9 +71,15 @@ describe("Q2: lockfiles found and not read, by reason, every one counted (genera
     const patched = Object.assign(Object.create(live), { getDiscovery: () => discovery });
     const args = { task: "Fix the typo in the README.", packages: [] };
     const r = await brief(args, patched);
-    expect(r.lockfiles_not_scanned).toBe(n);
+    // Round 20: a folder that could not be listed is no lockfile found: counted apart (folders_not_listed).
+    if (reason === "unreadable") {
+      expect(r.lockfiles_not_scanned).toBeUndefined();
+      expect(r.folders_not_listed).toBe(n);
+      expect(r.delegation_assessment.reason).toContain(UNLISTED_FOLDERS(n));
+    } else expect(r.lockfiles_not_scanned).toBe(n);
     // Ignored, excluded or fixture folders alone keep round 18's sentence; any other reason is said by count and reason.
-    if (incomplete) expect(r.delegation_assessment.reason).toContain(`${n} ${words}`);
+    if (reason === "unreadable") expect(words.length).toBeGreaterThan(0);
+    else if (incomplete) expect(r.delegation_assessment.reason).toContain(`${n} ${words}`);
     else expect(r.delegation_assessment.reason).toContain(NOT_SCANNED_LOCKFILES(n));
     if (incomplete) {
       expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");

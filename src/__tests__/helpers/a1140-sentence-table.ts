@@ -15,6 +15,7 @@
  * - "not-human": not said with human_only. "no-malware-copy": not said of a copy INSTALLED_MALWARE names.
  * - "human-real-vuln": human_only, with a high or critical task vulnerability without a fix that is no malicious-package record.
  * - "not-scanned": said where lockfiles_not_scanned is above 0.
+ * - "unlisted-folders": said where folders_not_listed is above 0. "scan-private": not safe_to_delegate, with private_installed above 0.
  * - "private-installed": said where private_installed is above 0 (the scan withheld installed names).
  * - "withheld-said": said whenever a word of the task was withheld (task_packages.not_read); with safe_to_delegate only
  *   when no withheld word stands where a package stands (one that does holds the level: its own sentence is not-safe).
@@ -27,7 +28,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 
-export type SentenceRule = "safe" | "not-safe" | "human" | "confirmation" | "safe-nothing-confirmed" | "safe-project-listed" | "no-decision-conflict" | "not-about-task" | "drift-not-malware" | "not-human" | "no-malware-copy" | "human-real-vuln" | "not-scanned" | "withheld-said" | "private-installed" | "any" | "internal";
+export type SentenceRule = "safe" | "not-safe" | "human" | "confirmation" | "safe-nothing-confirmed" | "safe-project-listed" | "no-decision-conflict" | "not-about-task" | "drift-not-malware" | "not-human" | "no-malware-copy" | "human-real-vuln" | "not-scanned" | "withheld-said" | "private-installed" | "unlisted-folders" | "scan-private" | "any" | "internal";
 
 export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["it is a package manager this briefing does not read", "any"],
@@ -59,13 +60,16 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["Vulnerability scan ready; nothing version-confirmed for the packages this task touches; ${} project-wide finding${} listed below (advisories, scope \"project\"), no major-version jump and no recorded-decision conflict for this task.", "safe-project-listed"],
   ["what_should_i_know failed before it finished, so nothing about this task was checked: this is no assessment, and the task is not safe to delegate on it.", "any"],
   ["${} lockfile${} under ignored, excluded or test-fixture folders ${} not read, so what ${} was not checked (lockfiles_not_scanned).", "not-scanned"],
+  ["${} lockfile${} found and not read (${}), so what ${} was not checked (lockfiles_not_scanned).", "not-scanned"],
   ["${} under ignored, excluded or test-fixture folders", "any"],
   ["${} deeper than the scan goes", "any"],
   ["${} behind a link outside the project", "any"],
-  ["${} in a folder that could not be listed", "any"],
-  ["${} lockfile${} found and not read (${}), so what ${} was not checked (lockfiles_not_scanned).", "not-scanned"],
+  ["${} folder${} could not be listed, so any lockfile in ${} was not read (folders_not_listed).", "unlisted-folders"],
   ["${} installed dependenc${} private by the project's configuration and ${} not checked (vulnerability_scan lists ${}).", "private-installed"],
-  ["The scan is incomplete: it found lockfiles it did not read (deeper than it goes, past its project limit, behind a link outside the project, or in a folder it could not list), so it cannot vouch for the project. Pass project_path for the part you need.", "not-safe"],
+  ["The scan is incomplete: it could not read part of the project (lockfiles deeper than it goes, past its project limit or behind a link outside the project, or folders it could not list), so it cannot vouch for the project. Pass project_path for the part you need.", "any"],
+  ["every installed dependency is private by the project's configuration, so none was checked: ${} private", "scan-private"],
+  ["the project's .npmrc could not be read, so the scan could not tell private names from public ones and checked none of the ${} installed dependenc${}", "scan-private"],
+  ["the lockfile${} ${} could not be read", "any"],
   ["no recorded-decision conflict for this task", "no-decision-conflict"],
   ["This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.", "safe"],
   ["the task held characters this briefing folded or removed (full-width or look-alike letters, invisible characters, markup): the echoed task is the reading copy", "any"],
