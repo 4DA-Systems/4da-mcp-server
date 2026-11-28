@@ -194,9 +194,35 @@ function operandName(spec: string): string | null {
   return name && name.length <= MAX_TASK_WORD ? name : null;
 }
 
-/** Known credential shapes (GitHub, AWS, Stripe, Slack, npm, GitLab, OpenAI, Anthropic, Google, Hugging Face, PyPI, SendGrid, Shopify, DigitalOcean, JWT, PEM). */
-const SECRET_SHAPES =
-  /\b(?:gh[pousr]_[A-Za-z0-9]{10,}|github_pat_\w{10,}|(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{12,}|[rs]k_(?:live|test)_\w{6,}|pk_live_\w{6,}|whsec_\w{10,}|xox[abposre]-[\w-]{6,}|npm_[A-Za-z0-9]{10,}|glpat-[\w-]{10,}|sk-(?:proj|ant|svcacct|admin)-[\w-]{6,}|sk-[A-Za-z0-9]{20,}|AIza[\w-]{20,}|hf_[A-Za-z0-9]{10,}|pypi-[\w-]{20,}|SG\.[\w-]{10,}\.[\w-]{10,}|shp(?:at|ss|ca|pa)_[a-fA-F0-9]{16,}|dop_v1_[a-f0-9]{20,}|eyJ[\w-]{8,}\.[\w-]{8,}(?:\.[\w-]*)?)/g;
+/**
+ * Known credential shapes (GitHub, AWS, Stripe, Slack, npm, GitLab, OpenAI, Anthropic, Google, Hugging Face, PyPI,
+ * SendGrid, Shopify, DigitalOcean, JWT). Round 16b: the word boundary is a property of each shape, decided by
+ * measurement (a1139-round16b: the bundled popular npm and PyPI names, the bench world's names and 50,000 words joined
+ * in pairs). A shape whose prefix is distinctive matches anywhere, glued to the text before it or not; a shape whose
+ * prefix is ordinary text keeps a leading boundary (BOUNDARY_SHAPES: "sk-" sits inside "risk-", "task-", "desk-";
+ * "sk_test_" inside "task_test_"). Bodies were tightened where glued words matched: GitHub and npm tokens take 20
+ * characters (real ones 36), Hugging Face 30 (real 34+), Slack a digit first (real ones xoxb-<digits>-...).
+ */
+const ANYWHERE_SHAPES: readonly string[] = [
+  "gh[pousr]_[A-Za-z0-9]{20,}",
+  "github_pat_\\w{10,}",
+  "(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{12,}",
+  "pk_live_\\w{6,}",
+  "whsec_\\w{10,}",
+  "xox[abposre]-[0-9][\\w-]{6,}",
+  "npm_[A-Za-z0-9]{20,}",
+  "glpat-[\\w-]{10,}",
+  "AIza[\\w-]{20,}",
+  "hf_[A-Za-z0-9]{30,}",
+  "pypi-[\\w-]{20,}",
+  "SG\\.[\\w-]{10,}\\.[\\w-]{10,}",
+  "shp(?:at|ss|ca|pa)_[a-fA-F0-9]{16,}",
+  "dop_v1_[a-f0-9]{20,}",
+  "eyJ[\\w-]{8,}\\.[\\w-]{8,}(?:\\.[\\w-]*)?",
+];
+/** Round 16b: the shapes whose prefix is ordinary text: matched only at a word boundary (\b before the prefix). */
+export const BOUNDARY_SHAPES: readonly string[] = ["[rs]k_(?:live|test)_\\w{6,}", "sk-(?:proj|ant|svcacct|admin)-[\\w-]{6,}", "sk-[A-Za-z0-9]{20,}"];
+const SECRET_SHAPES = new RegExp(`(?:${[...ANYWHERE_SHAPES, ...BOUNDARY_SHAPES.map((x) => `\\b${x}`)].join("|")})`, "g");
 /**
  * The credential shapes this server knows (round 14, X1): known token prefixes and a JWT. The output screen
  * (output-screen.ts) renders any substring of one of them by shape in every tool result and error.

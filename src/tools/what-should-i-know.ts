@@ -14,11 +14,11 @@
  * 1. The level rests on the caller's declaration: each package declared public is checked at the `version` it states, and a public entry without `version` never leaves the answer at safe_to_delegate. [tests: a1137-confirm-review12 (generated), a1132-round9]
  * 2. A name the briefing read and reported (a seen kind marked "read" in `SEEN_KINDS`) that the caller dismissed holds the answer from safe_to_delegate, with its `DISMISSED_READ` text, or `DISMISSED_INSTEAD` where the call declared a name one edit from it instead. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
  * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), and a path under such a name at a `/` (a Go module's sub-path, a scope's package), is never in a request the call makes: `refusePrivateRequest`, the choke point every registry, proxy, OSV.dev and GitHub request passes, refuses it under the call's `withRequestVeto`, and a public entry in or under that set is refused; a public parent of a private path is a name of its own, sent when the caller declares it public. [tests: a1138-round15 (generated), a1137-round14 (property)]
- * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`), whole, is never in any response the server returns (`screenJsonRpc`, at the transport's send: each stdio message, and over HTTP each body chunk of any type and each header value, by whole lines, so a token split across chunks is screened whole; `credentialSpans`, the one matcher both screens use, matches what `CREDENTIAL_SHAPES` matches), outside the `task` field of a what_should_i_know answer. [tests: a1139-round16 (generated), a1138-round15 (generated), a1137-round14 (generated)]
+ * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`), whole, is never in any response the server returns (`screenJsonRpc`, at the transport's send: each stdio message, and over HTTP each body chunk of any type and each header value, by whole lines, so a token split across chunks is screened whole; `credentialSpans`, the one matcher both screens use, matches what `CREDENTIAL_SHAPES` matches: a shape of `BOUNDARY_SHAPES` at a word boundary, each other shape glued to the text before it or not), outside the `task` field of a what_should_i_know answer. [tests: a1139-round16b (generated), a1139-round16 (generated), a1138-round15 (generated), a1137-round14 (generated)]
  * 5. That `task` field is the reading copy of the caller's task, as `readingCopy` makes it: control characters removed, percent-escapes decoded, default-ignorable characters (`DEFAULT_IGNORABLE`, the Unicode property) removed, NFKC-folded with each dash and slash look-alike as - and /, markup dropped, line continuations joined, each run of blanks one space, and a line over `MAX_READ_LINE` characters left out; where it differs from the caller's task in more than blanks (space separators, tabs, line breaks) the answer carries `TASK_FOLDED`. [tests: a1139-round16 (generated), a1138-round15, a1136-round13]
  * 6. A declared item's check ledger line is the line dependency_check writes for the same item: its engine and `recordVerdicts` for a looked-up item, `checkAndRecord` for one the project's configuration makes private. [tests: a1136-round13]
  * 7. The briefing also checks versions it happens to read in the task, for example on a command's operand, in a snippet or beside a name; that reading is best effort, and a version written in a spelling it does not read is not checked. [tests: a1134-round11, a1135-round12]
- * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of a package the task touches (one it declares or adds, or an installed dependency `detectTaskPackages` finds named in the task), installed malware anywhere in the project (`INSTALLED_MALWARE`: human_only, whatever the task), running install drift, a decision conflict (`decisionConflictsFor`, over the declared names, the names the briefing read in the task and the installed ones it touches), a name waiting in to_confirm, or something the briefing noticed it could not read; another version-confirmed finding of the project is listed in `advisories` with scope "project" and leaves the level as it is, and a safe reason then says so (`PROJECT_FINDINGS_LISTED`). [tests: a1139-round16, a1139-confirm-review14, a1135-confirm-review10, a1137-confirm-review12]
+ * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of a package the task touches (one it declares or adds, or an installed dependency `detectTaskPackages` finds named in the task), installed malware anywhere in the project (`INSTALLED_MALWARE`) or an installed npm security placeholder (`INSTALLED_PLACEHOLDER`, found by the scan's own detector), each human_only whatever the task, running install drift, a decision conflict (`decisionConflictsFor`, over the declared names, the names the briefing read in the task and the installed ones it touches), a name waiting in to_confirm, or something the briefing noticed it could not read; another version-confirmed finding of the project is listed in `advisories` with scope "project" and leaves the level as it is, and a safe reason then says so (`PROJECT_FINDINGS_LISTED`). [tests: a1139-round16, a1139-round16b, a1139-confirm-review14, a1135-confirm-review10, a1137-confirm-review12]
  * 9. When the briefing notices it cannot read a command or a snippet whole, for example a quote problem, a source option, or a line over `MAX_READ_LINE` characters, it says so with `unreadableReason` and the answer is not safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
  * 10. When the briefing notices a command of a manager it does not read, for example gem, brew or composer at a command position with its own verb, it says so, its words are not offered or looked up, and the answer is not safe_to_delegate; it does not promise to notice each such command. [tests: a1138-round15, a1137-round14]
  * 11. With a package-source spelling of `SOURCE_SPELLINGS` in the task, the names the task adds are not looked up (`SOURCE_HELD`); the answer is held from safe_to_delegate when that held a name, and a task that holds such a spelling but no name to hold can be safe. [tests: a1137-confirm-review12 (generated), a1127-confirm-promises]
@@ -27,7 +27,7 @@
  * 14. A text constant is said only where its rule in `TEXT_RULES` holds, for example `RESTS_ON_DECLARATION` ends a safe reason, `BEST_EFFORT_READING` precedes it in a call that declared a package, `STAYS_REVIEW` is not said with safe_to_delegate, and `NO_DECISION_CONFLICT` is said where `decisionConflictsFor` found no conflict. [tests: a1137-confirm-review12 (generated), a1139-confirm-review14]
  * 15. `to_confirm` lists names the briefing noticed: a prompt for the caller, not a complete reading. [tests: a1134-round11]
  * 16. The project's own scan reads the installed dependencies and sends their names unless the project's configuration marks them private; a declaration does not change that, and no task text goes to an embedding provider. [tests: a1127-confirm-promises, a1136-round13]
- * 17. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) in an argument of any tool is not sent to any host and not stored: `screenArguments` refuses a name, version, ecosystem or path holding one (`CREDENTIAL_REFUSAL`), and for what_should_i_know each string argument but `task` and `not_packages` (the task words a call dismisses, compared and not sent; its `packages` refused entry by entry), and masks it in the free text a tool stores or sends on purpose. [tests: a1139-round16, a1137-round14b (generated)]
+ * 17. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) in an argument of any tool (a shape of `BOUNDARY_SHAPES` at a word boundary, the others glued or not) is not sent to any host and not stored: `screenArguments` refuses a name, version, ecosystem or path holding one (`CREDENTIAL_REFUSAL`), and for what_should_i_know each string argument but `task` and `not_packages` (the task words a call dismisses, compared and not sent; its `packages` refused entry by entry), and masks it in the free text a tool stores or sends on purpose. [tests: a1139-round16, a1139-round16b (generated), a1137-round14b (generated)]
  * 18. The briefing checks npm, PyPI, crates.io and Go packages: what a task installs through any other manager or tool is outside what its answer covers, whatever the level, and a safe reason says so (`OUTSIDE_COVERAGE`). [tests: a1138-round15, a1137-confirm-review12 (generated)]
  * END OF THE CONTRACT.
  *
@@ -53,6 +53,7 @@ import {
   RESTS_ON_DECLARATION,
   OUTSIDE_COVERAGE,
   INSTALLED_MALWARE,
+  INSTALLED_PLACEHOLDER,
   PROJECT_FINDINGS_LISTED,
   NO_DECISION_CONFLICT,
   TASK_FOLDED,
@@ -1193,6 +1194,13 @@ async function executeBriefing(
       assessed.reason = assessed.level === "safe_to_delegate" ? INSTALLED_MALWARE(malwareInstalled) : `${INSTALLED_MALWARE(malwareInstalled)} ${assessed.reason}`;
       assessed.level = "human_only";
     }
+    // Round 16b: an installed npm security placeholder (the scan's own detector, osv-scanner.ts securityPlaceholdersOf,
+    // read from scan.securityPlaceholders) holds every briefing at human_only too.
+    const placeholders = installedPlaceholders(scan);
+    if (placeholders.length > 0) {
+      assessed.reason = assessed.level === "safe_to_delegate" ? INSTALLED_PLACEHOLDER(placeholders) : `${INSTALLED_PLACEHOLDER(placeholders)} ${assessed.reason}`;
+      assessed.level = "human_only";
+    }
     if (maliciousWithheld.length > 0) {
       assessed.level = "human_only";
       assessed.reason = `${maliciousWithheld.map((w) => w.name).join(", ")} ${maliciousWithheld.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list): ${maliciousWithheld.length === 1 ? "it was" : "they were"} not looked up for the task because you marked ${maliciousWithheld.length === 1 ? "it" : "them"} private or not a package, and ${maliciousWithheld.length === 1 ? "it stands" : "they stand"} in the task: a human decides. ${assessed.reason}`;
@@ -1513,6 +1521,11 @@ function projectFindings(scan: VulnerabilityScanResult, taskKeys: Set<string>) {
 export function installedMalware(scan: VulnerabilityScanResult | null | undefined): string[] {
   const rows = (scan?.vulnerabilities ?? []).filter((v) => !v.installDriftOf && ((v as { malware?: boolean }).malware === true || /^MAL-/i.test(String(v.vulnId ?? ""))));
   return [...new Set(rows.map((v) => `${v.package}@${v.currentVersion}`))].sort();
+}
+
+/** Round 16b: installed copies at npm's security-placeholder version, as the scan's detector lists them (name@version). */
+export function installedPlaceholders(scan: VulnerabilityScanResult | null | undefined): string[] {
+  return [...new Set((scan?.securityPlaceholders ?? []).map((p) => `${p.package}@${p.version}`))].sort();
 }
 
 function projectAdvisories(scan: VulnerabilityScanResult, taskKeys: Set<string>): Advisory[] {

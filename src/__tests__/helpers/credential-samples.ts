@@ -81,7 +81,7 @@ export function topAlternatives(src: string): string[] {
 }
 /** One sample per alternative of CREDENTIAL_SHAPES, each lengthened so it is a realistic token. */
 export const SHAPES: string[] = (() => {
-  const body = CREDENTIAL_SHAPES.source.replace(/^\\b\(\?:/, "").replace(/\)$/, "");
+  const body = CREDENTIAL_SHAPES.source.replace(/^(?:\\b)?\(\?:/, "").replace(/\)$/, "");
   return topAlternatives(body).map((alt) => {
     let s = sample(alt);
     if (!/[.]/.test(s) || !s.startsWith("eyJ")) s = `${s}Q9wE7rT5yU3iO1pA`;
