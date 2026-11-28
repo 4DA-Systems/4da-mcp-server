@@ -32,6 +32,8 @@
 - Writing a package manager's own configuration (`npm`/`pnpm`/`yarn`/`bun config set`, `npm set`, `pip config set`, `poetry config` and `poetry source add`, `go env -w`) is held unless the setting is one that cannot change which release resolves, such as `fund` or `loglevel`.
 - `npm pack`, `npm cache add`, `pip download`, `pip wheel` and `go mod download` of a named release need a `dependency_check` verdict, as an install does.
 - A manager command whose first operand is a variable, array or splat expansion (`npm $v x`, `npm "${a[@]}"`, `npm @a`) is held as not read.
+- The guard hook now reads an edit of a package manager's own configuration file (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `bunfig.toml`, `.cargo/config.toml`, `pip.conf`, `pip.ini`, `uv.toml`, `poetry.toml`, `.pnpmfile.cjs`) key by key: a setting that can change which release resolves (a registry, a scope, an index, a source, a proxy or a TLS setting) is held, while credentials and settings such as `fund`, `loglevel` or `save-exact` go ahead. Setting up a private registry or scope is yours to do: make that edit yourself, or name your own packages in `FOURDA_PRIVATE_PACKAGES`, or a mirror of the public registry in `FOURDA_PUBLIC_MIRRORS`.
+- `pip-sync` is read like `pip install -r`: each file it names is read and judged when it runs.
 
 ### What is scanned
 
@@ -81,6 +83,7 @@
 - A `go.mod` or `go.work` `replace` and `require` of the same module are judged separately, so turning a `replace` into a `require` is checked.
 - A dependency that names an index or registry (uv sources, Poetry sources, Cargo `registry` and `registry-index`) is treated as the project's own only when the hook read where that name points and the place is private by its shape; at a public registry it is now judged, and a name that cannot be resolved is held. Before, the name alone decided it, so a public index under another name let a release through unchecked. test.pypi.org is no longer treated as the public index.
 - The guard on the data folder also matches Windows spellings of its name (a trailing dot or blank, the 8.3 short name) and data folders with one- or two-letter names.
+- A `Cargo.toml` or `pyproject.toml` whose line ends are a carriage return alone is held as not read.
 - On Windows, an install whose version holds `^` or another character cmd.exe rewrites is held when it runs through a `.cmd` launcher, `corepack` included (in PowerShell the bare name `corepack` is `corepack.cmd`): the hook looks the program name up on its own PATH as the shell would, and holds the command when the name is a `.cmd` or `.bat` file or is not found.
 - An edit of a drive-relative path such as `C:package.json` is read as the manifest it opens, and an edit whose text uses typographic quotes is matched as Claude Code may match it, so neither goes ahead unread.
 - The guard on the data folder and the check ledger now matches the folder name, its setting and the ledger file wherever no letter, digit, underscore, dot or hyphen touches them, so `rm -rf "${FOURDA_MCP_HOME:?}"` and a PowerShell comma list are held. A data folder named with an ordinary word holds commands that use that word.
