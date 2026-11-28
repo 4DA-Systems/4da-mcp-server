@@ -135,8 +135,8 @@ describe("S4: Cargo dependency entry keys, read on a known list", () => {
     expect(s.write(join(s.project, "Cargo.toml"), CARGO('regex = { version = "=1.5.4", registry-index = "sparse+https://index.crates.io/" }')).text).toContain("answered avoid");
     s.file(".cargo/config.toml", '[registries.pub]\nindex = "sparse+https://index.crates.io/"\n[registries.corp]\nindex = "sparse+https://cargo.corp.internal/index/"\n');
     expect(s.write(join(s.project, "Cargo.toml"), CARGO('regex = { version = "=1.5.4", registry = "pub" }')).text).toContain("answered avoid");
-    expect(s.write(join(s.project, "Cargo.toml"), CARGO('regex = { version = "=1.5.4", registry = "corp" }')).decision).toBe("allow");
-    expect(s.write(join(s.project, "Cargo.toml"), CARGO('regex = { version = "=1.5.4", registry = "nowhere" }')).text).toContain("could not be read");
+    expect(s.write(join(s.project, "Cargo.toml"), CARGO('regex = { version = "=1.5.4", registry = "corp" }')).text).toContain("answered avoid");
+    expect(s.write(join(s.project, "Cargo.toml"), CARGO('regex = { version = "=1.5.4", registry = "nowhere" }')).text).toContain("answered avoid");
   });
 });
 
@@ -237,16 +237,16 @@ describe("W1: a dependency's source is judged from where it points", () => {
   it.each(Object.entries(forms).flatMap(([form, make]) => Object.entries(where).map(([kind, url]) => [form, kind, make(url)] as const)))("%s, %s: public judged, private own", (_form, kind, table) => {
     const file = s.file("pyproject.toml", `${P.replace('"requests==2.19.0"', "")}\n${table}`);
     const r = s.write(file, `${P}\n${table}`);
-    if (kind === "public") expect(r.text).toContain("answered avoid");
-    else expect(r.decision).toBe("allow");
+    // Round 26b (D1): a source named by name is not resolved: public or private, the dependency is judged.
+    expect(r.text, kind).toContain("answered avoid");
   });
-  it("Poetry: a source named and declared at pypi.org is judged; undeclared, missing or duplicate is held", () => {
+  // Round 26b (D1): a source named by name is not resolved: the dependency is judged whether the source is declared or not.
+  it("Poetry: a source named by name is judged, declared or not", () => {
     const head = '[tool.poetry]\nname = "a"\n\n[tool.poetry.dependencies]\nrequests = { version = "2.19.0", source = "pub" }\n';
     const decl = (name: string, url: string) => `\n[[tool.poetry.source]]\nname = "${name}"\nurl = "${url}"\npriority = "explicit"\n`;
     const none = head.replace('requests = { version = "2.19.0", source = "pub" }\n', "");
     expect(s.write(s.file("pyproject.toml", none + decl("pub", "https://pypi.org/simple")), head + decl("pub", "https://pypi.org/simple")).text).toContain("answered avoid");
-    expect(s.write(s.file("pyproject.toml", head), head + "\n").text).toContain("could not be read");
-    expect(s.write(s.file("pyproject.toml", head + decl("pub", "https://a.example/x") + decl("pub", "https://b.example/x")), head + decl("pub", "https://a.example/x") + decl("pub", "https://b.example/x") + "\n").text).toContain("could not be read");
+    expect(s.write(s.file("pyproject.toml", none), head).text).toContain("answered avoid");
   });
   it("[[tool.uv.index]] tables are paired per table: a first table with no name names nothing", () => {
     const t = '[[tool.uv.index]]\nurl = "https://pypi.corp.internal/simple"\nexplicit = true\n\n[[tool.uv.index]]\nname = "x"\nurl = "https://pypi.org/simple"\nexplicit = true\n\n[tool.uv.sources]\nrequests = { index = "x" }\n';

@@ -38,10 +38,11 @@ describe("manifest spellings now read", () => {
     expect(r.text).toContain("avoid");
   });
 
-  it("a [tool.uv.sources] entry naming a private index still goes ahead", () => {
+  // Round 26b (D1): an index named by name is not resolved: the requirement is judged (here: no verdict).
+  it("a [tool.uv.sources] entry naming an index is judged", () => {
     const content = '[project]\nname = "p"\nversion = "0.1"\ndependencies = ["requests==2.0.0"]\n[tool.uv.sources]\nrequests = { index = "corp" }\n[[tool.uv.index]]\nname = "corp"\nurl = "https://pypi.corp.example/simple"\nexplicit = true\n';
     // Round 25 (S3): an index that is not explicit can serve public names: only an explicit one goes ahead unread.
-    expect(s.write(s.file("pyproject.toml", ""), content).decision).toBe("allow");
+    expect(s.write(s.file("pyproject.toml", ""), content).decision).toBe("deny");
   });
 
   it("a pixi dependency from git goes ahead (no version)", () => {

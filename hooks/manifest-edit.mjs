@@ -17,7 +17,8 @@
  * and it exits with status 0 whatever it answers [test: a1125-w2-hook-contract,
  * a651-hook-pathological-inputs]. FOURDA_GUARD is read trimmed and without regard to letter case:
  * set to off it answers nothing; set to advise it denies nothing and advises after an Edit or
- * MultiEdit of a manifest instead (a Write is not advised: the file before it is gone); with any other value, or none, it is in the blocking mode that the promises describe
+ * MultiEdit of a manifest that changes a dependency entry instead (a Write is not advised: the
+ * file before it is gone); with any other value, or none, it is in the blocking mode that the promises describe
  * (guardMode) [test: a1123-guard-hook, a1125-w2-hook-contract, a1125-w2-hook-round23]. Apart from the ledger guard (P5), it denies nothing until the server has
  * started a ledger in its data folder, and until then it advises after an Edit or MultiEdit of a
  * manifest [test:
@@ -101,22 +102,22 @@
  * a1125-w2-hook-account]. P3: a release the call takes from a source the hook reads as the
  * project's own, for example a local path, git, or a host private by its shape, is not judged
  * (sourceVerdict, urlDependency) [test: a1125-w2-hook-round18, a1125-w2-hook-round19,
- * a1123-hookfix-local-sources]. P3: a dependency that names an index or a registry by name is the
- * project's own only when the hook read where that name points, in the same manifest or (for
- * Cargo) in the environment or a Cargo configuration file at or above the manifest's folder, and that
- * place is a host private by its shape; at a public registry it is judged as a registry release,
- * on another host it is judged by the URL rule, and a name the hook cannot resolve to one place is
- * denied as not read (indexSource, cargoRegistryUrl) [test: a1125-w2-hook-round25,
- * a1123-hookfix-local-sources]. P3: in a manifest, a dependency value is judged when it is a
+ * a1123-hookfix-local-sources]. P3: a dependency entry that names an index, a registry or a source
+ * by name is not resolved: it is judged as a public registry release of its name and version, and a
+ * private name goes ahead only by its private record; each alternative of an entry is read on its
+ * own, and only an alternative that is a literal path or git source is the project's own (it
+ * exempts only itself) [test: a1125-w2-hook-round26b, a1123-hookfix-local-sources]. P3: in a manifest, a dependency value is judged when it is a
  * registry spec in its ecosystem's grammar or a form that wraps one (for example a Yarn alias or
  * patch of a registry release), is the project's own when it is one of the forms on the
  * OWN_SOURCE_FORMS list or the like forms of the other manifest kinds, and is otherwise denied as
  * not read, a value that is not a string in a dependency position included [test:
  * a1125-w2-hook-round24, a1125-w2-hook-round25, a1125-w2-hook-forms]. P3: in a manifest the hook
  * reads, each setting a resolver reads that is no dependency value (for example the option lines of
- * a requirements file, the uv tables of pyproject.toml, the pnpm key and patchedDependencies
- * of package.json, and the keys of a Cargo dependency entry) is either on INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS
- * or CARGO_ENTRY_KEYS, or, when an edit adds or changes it, denied as not read; and a key given twice
+ * a requirements file, every key under the poetry, uv, pdm, hatch, flit and setuptools tables of
+ * pyproject.toml, the pnpm key and patchedDependencies of package.json, and the keys of a Cargo
+ * dependency entry), compared on the parsed tree leaf by leaf however it is written, is either on
+ * INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS or CARGO_ENTRY_KEYS, or, when an edit adds or
+ * changes it, denied as not read; and a key given twice
  * in one JSON object, TOML table or YAML catalog section is not read (resolverSettings,
  * jsonDuplicateKey) [test: a1125-w2-hook-round25]. P3: a requirements or constraints file that a
  * command names, and one that a requirements file names on an include or constraint line, is read from disk at the
@@ -167,7 +168,8 @@
  * underscore, dot or hyphen directly before it and, after it, the end of the text or a character
  * that is not an ASCII letter, digit, underscore or hyphen, a run of dots and blanks counting as
  * nothing where it ends the text, holds a blank or is followed by such a character, or the 8.3
- * short form of the base name (its first six name characters, a tilde and a digit)
+ * short form of the base name (its first six ASCII letters, digits, underscores and hyphens, a
+ * tilde and a digit; a hashed short form is not covered)
  * (namesDataSegment), is denied unless it is one plain read command (ledgerCall),
  * whether or not a ledger has been started [test: a1125-w2-hook-ledger-writes,
  * a1125-w2-hook-ledger-spellings, a1125-w2-hook-round23]. P5
@@ -208,8 +210,10 @@
  * command that installs from the manifests and lockfiles as they are (for example a build, a sync, a
  * fetch or a clean install) installs what they say, so a manifest or lockfile changed outside an
  * examined edit, for example by a version-control checkout or a shell command the hook does not
- * read, is installed unjudged; a lockfile edited directly, a configuration file of a name not on
- * the CONFIG_FILES list (a global one at another path, an environment variable), and a file a
+ * read, is installed unjudged; an edit of a file whose name is on none of the MANIFESTS,
+ * MANIFEST_NAME_RULES, UNREAD_MANIFESTS and CONFIG_FILES lists (for example setup.py, setup.cfg,
+ * Pipfile, Pipfile.lock, requirements.in, constraints.txt, environment.yml, deno.json, and each
+ * lockfile), a configuration file at another path or set by an environment variable, and a file a
  * shell command writes without a detector hit are not examined [test: a1125-w2-hook-round25b,
  * a1125-w2-hook-round10]. L1: a command that lets the manager choose the versions without naming a
  * package (for example an audit fix, an update with no name, a tidy) installs what the manager
@@ -221,9 +225,12 @@
  * by a file a shell command changes, or inside a container, and an artifact
  * already on disk, or fetched by a tool the hook does not read (for example curl or a browser),
  * installs from its local path as the project's own [test: a1125-w2-hook-contract,
- * a1125-w2-hook-round10]. L2: a manager word whose first operand is a variable, array or splat
- * expansion is denied as not read (MANAGER_THEN_EXPANSION); a verb or package held in an
- * expansion anywhere else is not seen [test: a1125-w2-hook-round25]. L2: a runner given a bare name
+ * a1125-w2-hook-round10]. L2: a command whose first word, after assignments and the prefixes a
+ * command may stand behind, is a manager or a runner, and one of whose words is a variable, array,
+ * command-substitution or splat expansion, is denied as not read unless a literal verb that is no
+ * install, fetch or configuration verb stands before that expansion (managerExpansion); an
+ * expansion in any other place, for example in a program the hook does not read, is not seen
+ * [test: a1125-w2-hook-round25, a1125-w2-hook-round26b]. L2: a runner given a bare name
  * and no fetch option runs the project's installed tool when there is one, and otherwise fetches
  * the newest release unjudged, and a manager on the MANAGERS list that a runner fetches to run is
  * not judged as a fetch, while the command it runs is read as any other [test:
@@ -251,8 +258,8 @@
  * a1125-w2-hook-round23]. L5: the ledger is taken as the server wrote it, so the verdicts, and
  * why a record is private and where the rule behind it is set, are the server's
  * (src/check-ledger.ts), a releasing answer counts only from a server version the hook knows to
- * share its rules (P3), and a ledger line the hook cannot read is no verdict and makes the verdicts
- * it may stand beside unknown (readLedger) [test: a1125-w2-hook-ledger-unknown,
+ * share its rules (P3), and a ledger line the hook cannot read, or one that parses but is no verdict
+ * object, is no verdict and makes the verdicts it may stand beside unknown (readLedger) [test: a1125-w2-hook-ledger-unknown,
  * a1125-w2-hook-round20, a1125-w2-hook-round23].
  *
  * NOTES ON HOW IT READS
@@ -302,7 +309,7 @@
  * write may set are the npm init defaults, fund, loglevel, progress, color, cache and prefix folders,
  * update-notifier, editor, the npm version-tag settings, save-exact and save-prefix, pip's cache-dir,
  * no-color, progress-bar and disable-pip-version-check, Poetry's virtualenvs.* and cache-dir, Yarn's
- * enableTelemetry and nodeLinker, and Go's GOBIN, GOCACHE, GOMODCACHE, GOPATH and GOTOOLCHAIN. A
+ * enableTelemetry and nodeLinker, and Go's GOBIN, GOCACHE, GOMODCACHE and GOPATH. A
  * registry, index, release-age, resolution, tag or proxy setting is on none of them. pip-sync and
  * uv add -r: pip-sync is not read for its files yet (it is not a manager word); uv add -r reads its
  * files as pip install -r does (an unreadable file is held, as for pip).
@@ -568,33 +575,20 @@ const VERSION_SHAPED = /^[~^<>=]*\s*v?\d/;
  * [workspace.dependencies], with the old spellings cargo still reads before the 2024 edition.
  */
 const CARGO_DEPENDENCY_TABLES = new Set(["dependencies", "dev-dependencies", "build-dependencies", "dev_dependencies", "build_dependencies"]);
+/** Round 26b (F10): the type of each Cargo dependency field: s (string), b (true / false), a (list of strings). */
+const CARGO_FIELD_TYPES = Object.freeze({ version: "s", path: "s", git: "s", branch: "s", tag: "s", rev: "s", registry: "s", "registry-index": "s", package: "s", features: "a", "default-features": "b", default_features: "b", optional: "b", workspace: "b", public: "b", artifact: "sa", lib: "b", target: "s" });
+/** F10: the first Cargo dependency field of the wrong type, described, or null. */
+function cargoFieldTypeError(fields) {
+  for (const [k, v] of Object.entries(fields)) {
+    const t = CARGO_FIELD_TYPES[k];
+    if (!t) continue;
+    const ok = (t.includes("s") && typeof v.s === "string") || (t.includes("b") && v.bare && (v.raw === "true" || v.raw === "false")) || (t.includes("a") && Array.isArray(v.a) && v.a.every((x) => typeof x.s === "string"));
+    if (!ok) return `the field ${callData(k)} of a type Cargo does not take there`;
+  }
+  return null;
+}
 /** Round 25 (S4): the keys a Cargo dependency entry may carry (cargo's manifest format); any other is held. */
 const CARGO_ENTRY_KEYS = new Set(["version", "path", "git", "branch", "tag", "rev", "registry", "registry-index", "package", "features", "default-features", "default_features", "optional", "workspace", "public", "artifact", "lib", "target"]);
-/**
- * W1: the index url of a Cargo registry name, from CARGO_REGISTRIES_<NAME>_INDEX or the
- * [registries.<name>] index of a .cargo/config.toml (or config) in the manifest's folder or above
- * it (PROJECT_DEPTH levels); "" when not found.
- */
-function cargoRegistryUrl(name) {
-  const env = process.env[`CARGO_REGISTRIES_${name.toUpperCase().replace(/-/g, "_")}_INDEX`];
-  if (typeof env === "string" && env) return env;
-  let dir = manifestFolder;
-  for (let level = 0; dir && level <= PROJECT_DEPTH; level++) {
-    for (const file of ["config.toml", "config"]) {
-      const text = readManifest(join(dir, ".cargo", file));
-      if (text === null) continue;
-      for (const { table, keys, value } of tomlAssignments(text, []) ?? []) {
-        const path = [...(table ?? []), ...(keys ?? [])];
-        if (path.length === 3 && path[0] === "registries" && path[1] === name && path[2] === "index" && typeof value.s === "string") return value.s;
-        if (path.length === 2 && path[0] === "registries" && path[1] === name && typeof value.t?.index?.s === "string") return value.t.index.s;
-      }
-    }
-    const up = dirname(dir);
-    if (up === dir) break;
-    dir = up;
-  }
-  return "";
-}
 /** Poetry dependency keys that take the package from somewhere other than PyPI. */
 const POETRY_OTHER_SOURCE = ["path", "git", "url", "file", "develop"];
 /** TOML keys that are never a dependency, wherever they stand (Poetry lists the interpreter as `python`). */
@@ -1057,24 +1051,17 @@ function cargoDependencies(entries, more = null) {
       refuse(`${callData(d.name)}: the key ${callData(unknown)} in a Cargo dependency entry, which this hook does not read`);
       continue;
     }
-    if ("path" in fields || "git" in fields) continue;
-    // W1: a registry is judged from where it really points: registry-index read here, or
-    // registry = <name> resolved from the .cargo/config.toml beside or above the manifest.
-    let url = null;
-    if ("registry-index" in fields) url = typeof fields["registry-index"].s === "string" ? fields["registry-index"].s : "";
-    else if ("registry" in fields && fields.registry?.s !== "crates-io") url = typeof fields.registry?.s === "string" ? cargoRegistryUrl(fields.registry.s) : "";
-    if (url !== null) {
-      const kind = sourceKind(url);
-      if (kind === "private") continue;
-      if (kind !== "public") {
-        if (!url || kind === "unknown") {
-          refuse(`${callData(d.name)}: a Cargo registry whose index this hook could not read (${callData(fields.registry?.s ?? fields["registry-index"]?.s ?? "")})`, "No dependency_check verdict releases this: name the registry in .cargo/config.toml beside or above the manifest with its index url, or write registry-index with the url (a crates.io index is then judged, one private by its shape is the project's own).");
-          continue;
-        }
-        out.push({ name: fields.package?.s ?? d.name, section: d.section, spec: url.replace(/^(?:sparse|registry)\+/i, "") });
-        continue;
-      }
+    // Round 26b (F10): each field has its type; one of another type is held.
+    const typed = cargoFieldTypeError(fields);
+    if (typed) {
+      refuse(`${callData(d.name)}: ${typed}, which this hook does not read`);
+      continue;
     }
+    // A literal path or git source is the project's own.
+    if ("path" in fields || "git" in fields) continue;
+    // Round 26b (D1): a registry named by name or index (registry, registry-index) is not resolved:
+    // the dependency is judged as a crates.io release of that name and version (a private name is
+    // released by its private record, FOURDA_PRIVATE_PACKAGES).
     // W3: a version that is no string (a number, boolean, list or table) is held.
     if (fields.version !== undefined && typeof fields.version.s !== "string") {
       refuse(`${callData(d.name)}: a Cargo version that is not a string, which this hook does not read`);
@@ -1154,7 +1141,10 @@ function cargoEntries(entries, found) {
     const part = (i) => (i < T ? table[i] : keys[i - T]);
     const length = T + keys.length;
     let at = -1;
-    if (T >= 1 && CARGO_DEPENDENCY_TABLES.has(table[T - 1])) at = T - 1;
+    // Round 26b (D2): [patch.<source>] entries and [replace] entries are read as dependency entries.
+    if (part(0) === "patch" && length >= 3) at = 1;
+    else if (part(0) === "replace" && length >= 2) at = 0;
+    else if (T >= 1 && CARGO_DEPENDENCY_TABLES.has(table[T - 1])) at = T - 1;
     else if (T >= 2 && CARGO_DEPENDENCY_TABLES.has(table[T - 2])) at = T - 2;
     else {
       for (let i = T; i < Math.min(length, 3) && at < 0; i++) {
@@ -1162,7 +1152,7 @@ function cargoEntries(entries, found) {
       }
     }
     if (at >= 0 && length > at + 1) {
-      const name = part(at + 1);
+      const name = part(0) === "replace" ? String(part(at + 1)).replace(/:.*$/, "") : part(at + 1);
       const fieldStart = at + 2;
       const field = fieldStart >= length ? null : (fieldStart >= T ? keys.slice(fieldStart - T) : [...table.slice(fieldStart), ...keys]).join(".");
       // Inside a dependency table every key is a dependency, `version` and `name` included
@@ -1244,7 +1234,7 @@ function pyMayHoldRequirements(table) {
 function poetryDependencyAt(path) {
   if (path[0] !== "tool" || path[1] !== "poetry") return null;
   let at;
-  if (path[2] === "dependencies" || path[2] === "dev-dependencies") at = 3;
+  if (path[2] === "dependencies" || path[2] === "dev-dependencies" || path[2] === "requires-plugins") at = 3;
   else if (path[2] === "group" && path[4] === "dependencies") at = 5;
   else return null;
   if (path.length <= at) return null;
@@ -1260,11 +1250,18 @@ function poetryDependencyAt(path) {
  */
 function pyprojectDependencies(entries, local = new Set()) {
   const poetry = poetryDependencies(entries);
-  const heldSources = [];
-  const others = new Set([...local, ...pyOtherSourceNames(entries, poetry, heldSources)]);
+  const others = new Set([...local, ...pyOtherSourceNames(entries)]);
   const out = [];
   for (const d of poetry.values()) {
     for (const f of d.alternatives) {
+      // Round 26b (D1, F10): each alternative on its own: one of the wrong type is held; a path or git
+      // alternative is the project's own and exempts only itself.
+      const typed = pyFieldTypeError(f);
+      if (typed) {
+        refuse(`${callData(d.name)}: ${typed}, which this hook does not read`);
+        continue;
+      }
+      if (POETRY_OTHER_SOURCE.some((k) => k in f)) continue;
       // W3: a Poetry version that is no string (`requests = 2`) is held.
       if (f.version !== undefined && typeof f.version.s !== "string") refuse(`${callData(d.name)}: a Poetry version that is not a string, which this hook does not read`);
       const version = f.version?.s;
@@ -1335,8 +1332,6 @@ function pyprojectDependencies(entries, local = new Set()) {
     if (path.length === 5 && path[4] === "url" && typeof value.s === "string") urls.push({ name: path[3], section: "tool.uv.sources", url: value.s });
   }
   const fromUrls = [];
-  // W1: a dependency whose index is on a host neither public nor private by its shape: the URL rule.
-  for (const h of heldSources) urls.push({ name: h.name, section: "tool.uv.sources", url: h.url });
   for (const u of urls) {
     const d = urlDependency(u.name, u.url, "PyPI");
     if (d) fromUrls.push({ name: d.name, section: u.section, spec: d.spec });
@@ -1380,7 +1375,11 @@ function poetryDependencies(entries) {
     const d = poetry.get(key) ?? { section: at.section, name: at.name, fields: Object.create(null), list: null };
     if (at.field) d.fields[at.field] = value;
     else if (value.t) Object.assign(d.fields, value.t);
-    else if (value.a) d.list = value.a.map((v) => v.t ?? Object.create(null));
+    else if (value.a) {
+      // Round 26b (F10): each item of a Poetry list of constraints is a table; any other is not read.
+      if (value.a.some((v) => !v.t)) refuse(`${callData(at.name)}: a Poetry list item that is not a table, which this hook does not read`);
+      d.list = value.a.map((v) => v.t ?? Object.create(null));
+    }
     else d.fields.version = value;
     poetry.set(key, d);
   };
@@ -1399,82 +1398,44 @@ function poetryDependencies(entries) {
 }
 
 /** The names (PEP 503) a pyproject takes from a path, git, URL or another index: [tool.uv.sources] entries and such Poetry dependencies. */
-/**
- * Round 25 (W1): the indexes a pyproject names, by name, read from where each is declared: each
- * [[tool.uv.index]] table (its own name and url), the inline `[tool.uv] index = [{ name, url }]`, and
- * each [[tool.poetry.source]] table (Poetry's `pypi` is pypi.org). A name declared twice is null.
- */
-function pyIndexes(entries) {
-  const uv = new Map();
-  const poetry = new Map([["pypi", "https://pypi.org/simple"]]);
-  const add = (map, name, url) => {
-    if (typeof name !== "string" || !name) return;
-    const key = name.toLowerCase();
-    map.set(key, map.has(key) && key !== "pypi" ? null : typeof url === "string" ? url : null);
-  };
-  const tables = new Map();
-  for (const { table, keys, value } of entries) {
-    if (!keys || !table) continue;
-    const t = table.join(".");
-    if ((t === "tool.uv.index" || t === "tool.poetry.source") && keys.length === 1) {
-      const rec = tables.get(table) ?? { kind: t, name: undefined, url: undefined };
-      if (keys[0] === "name") rec.name = value.s;
-      if (keys[0] === "url") rec.url = value.s;
-      tables.set(table, rec);
-    }
-    const path = [...table, ...keys].join(".");
-    if (path === "tool.uv.index" && value.a) for (const v of value.a) if (v.t) add(uv, v.t.name?.s, v.t.url?.s);
-    if (path === "tool.poetry.source" && value.a) for (const v of value.a) if (v.t) add(poetry, v.t.name?.s, v.t.url?.s);
+/** Round 26b (F10): the type a uv source or Poetry dependency field must have: s (string), b (true / false), t (table). */
+const PY_SOURCE_FIELD_TYPES = Object.freeze({ path: "s", git: "s", url: "s", index: "s", source: "s", branch: "s", tag: "s", rev: "s", subdirectory: "s", marker: "s", markers: "s", python: "s", platform: "s", version: "s", workspace: "b", editable: "b", develop: "b", optional: "b", package: "b", extras: "a", extra: "s", group: "s", "allow-prereleases": "b" });
+/** F10: the first field of the wrong type in a uv source or Poetry alternative, described, or null. */
+function pyFieldTypeError(fields) {
+  for (const [k, v] of Object.entries(fields)) {
+    const t = PY_SOURCE_FIELD_TYPES[k];
+    if (!t) continue;
+    const ok = (t === "s" && typeof v.s === "string") || (t === "b" && v.bare && (v.raw === "true" || v.raw === "false")) || (t === "a" && Array.isArray(v.a) && v.a.every((x) => typeof x.s === "string"));
+    if (!ok) return `the field ${callData(k)} of a type the manager does not take there`;
   }
-  for (const rec of tables.values()) add(rec.kind === "tool.uv.index" ? uv : poetry, rec.name, rec.url);
-  return { uv, poetry };
+  return null;
 }
 
 /**
- * Round 25 (W1): where a dependency that names an index comes from: "public" when the index's url,
- * read in this manifest, is a public registry (judged as a registry release); "own" when it is a host
- * private by its shape; { url } for any other host (held as a source the hook cannot judge, unless the
- * name is recorded private); "unresolved" when the name is not declared, declared twice, or has no url.
+ * Round 26b (D1): the names a pyproject takes from the project's own source, left out of judging: a
+ * [tool.uv.sources] entry whose every alternative is a literal path, git, a workspace member or a
+ * URL (a URL then follows the URL rule). A source named BY NAME (an index, a Poetry source) is not
+ * resolved: such a dependency is judged as a public release, and a private name is released by its
+ * private record. A Poetry alternative that is a path or git exempts only itself (pyprojectDependencies).
  */
-function indexSource(map, name) {
-  if (typeof name !== "string") return "unresolved";
-  const url = map.get(name.toLowerCase());
-  if (typeof url !== "string") return "unresolved";
-  const kind = sourceKind(url);
-  return kind === "public" ? "public" : kind === "private" ? "own" : { url };
-}
-
-/**
- * The names a pyproject takes from the project's own source (a path, git, a workspace member, an
- * index private by its shape), left out of judging; `held` collects the names whose source is an
- * index on another host (judged by the URL rule), and an index name it cannot resolve is not read.
- */
-function pyOtherSourceNames(entries, poetry, held = null) {
+function pyOtherSourceNames(entries) {
   const names = new Set();
-  const { uv, poetry: poetrySources } = pyIndexes(entries);
-  const decide = (name, source, label) => {
-    if (source === "public") return;
-    if (source === "own") names.add(nameKey("PyPI", name));
-    else if (source === "unresolved") refuse(`${callData(name)}: ${label}, an index this manifest does not declare once with its url`, "No dependency_check verdict releases this: declare the index once, with its url, in the same file (a public index is then judged, one private by its shape is the project's own).");
-    else {
-      names.add(nameKey("PyPI", name));
-      held?.push({ name, url: source.url });
-    }
-  };
+  const own = (f) => "path" in f || "git" in f || "workspace" in f || "url" in f;
   for (const { table, keys, value } of entries) {
     if (!keys || !table) continue;
     const path = [...table, ...keys];
     if (path[0] !== "tool" || path[1] !== "uv" || path[2] !== "sources" || path.length < 4) continue;
-    const fields = path.length === 4 ? (value.t ?? {}) : { [path.slice(4).join(".")]: value };
-    if ("path" in fields || "git" in fields || "workspace" in fields || "url" in fields) names.add(nameKey("PyPI", path[3]));
-    else if ("index" in fields) decide(path[3], indexSource(uv, fields.index?.s), `[tool.uv.sources] index ${callData(fields.index?.s ?? "")}`);
-    else if (path.length === 4 && value.a) refuse(`${callData(path[3])}: a [tool.uv.sources] list of sources, which this hook does not read`);
-  }
-  for (const d of poetry.values()) {
-    for (const f of d.alternatives) {
-      if (POETRY_OTHER_SOURCE.some((k) => k in f)) names.add(nameKey("PyPI", d.name));
-      else if (typeof f.source?.s === "string") decide(d.name, indexSource(poetrySources, f.source.s), `Poetry source ${callData(f.source.s)}`);
+    const alternatives = path.length === 4 ? (value.a ? value.a.map((x) => x.t ?? null) : [value.t ?? null]) : [{ [path.slice(4).join(".")]: value }];
+    if (alternatives.some((f) => f === null)) {
+      refuse(`${callData(path[3])}: a [tool.uv.sources] entry that is not a table, which this hook does not read`);
+      continue;
     }
+    const typed = alternatives.map(pyFieldTypeError).find(Boolean);
+    if (typed) {
+      refuse(`${callData(path[3])}: ${typed}, which this hook does not read`);
+      continue;
+    }
+    if (alternatives.every(own)) names.add(nameKey("PyPI", path[3]));
   }
   return names;
 }
@@ -1924,6 +1885,8 @@ function npmWholeDependencies(text) {
   if (!isObject(doc)) return null;
   const out = [];
   for (const section of NPM_PLAIN_SECTIONS) {
+    // Round 26b (F10): a dependency section that is not an object (a string, a list, a number) is not read.
+    if (doc[section] !== undefined && !isObject(doc[section])) refuse(`package.json's ${callData(section)} is not an object, which this hook does not read`);
     if (!isObject(doc[section])) continue;
     for (const [name, spec] of Object.entries(doc[section])) {
       const d = npmValue(name, spec);
@@ -1944,8 +1907,12 @@ function npmWholeDependencies(text) {
         // Under a parent, behind a selector or parent path, or an alias: judged, but no declaration of the name (NARROW).
         if (d) out.push({ name: d.name, section: depth > 0 || name !== key || d.name !== name ? `${section}${NARROW}${key}` : section, spec: d.spec });
       } else if (isObject(value) && depth < 32) overrides(value, `${section}/${key}`, name, depth + 1);
+      // F10: an override value that is neither a string nor an object is not read.
+      else if (!isObject(value)) refuse(`${callData(key)}: an override value of a type the managers do not take, which this hook does not read`);
     }
   };
+  for (const k of ["overrides", "resolutions"]) if (doc[k] !== undefined && !isObject(doc[k])) refuse(`package.json's ${k} is not an object, which this hook does not read`);
+  if (doc.pnpm !== undefined && isObject(doc.pnpm) && doc.pnpm.overrides !== undefined && !isObject(doc.pnpm.overrides)) refuse("package.json's pnpm.overrides is not an object, which this hook does not read");
   if (isObject(doc.overrides)) overrides(doc.overrides, "overrides", null, 0);
   if (isObject(doc.resolutions)) overrides(doc.resolutions, "resolutions", null, 0);
   if (isObject(doc.pnpm) && isObject(doc.pnpm.overrides)) overrides(doc.pnpm.overrides, "pnpm.overrides", null, 0);
@@ -2257,7 +2224,7 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
       for (const d of cargoDependencies(entries, more)) put(out, d.name, section(d.section), d.spec);
     } else {
       const onDiskEntries = whole ? null : disk()?.assignments();
-      const local = onDiskEntries ? pyOtherSourceNames(onDiskEntries, poetryDependencies(onDiskEntries)) : new Set();
+      const local = onDiskEntries ? pyOtherSourceNames(onDiskEntries) : new Set();
       for (const d of pyprojectDependencies(entries, local)) put(out, nameKey("PyPI", d.name), section(d.section), d.spec);
       // Round 25 (S3): setuptools reads dynamic dependencies from requirements files: read them as such.
       if (whole) {
@@ -2446,9 +2413,13 @@ export function pnpmUnplainLine(text) {
  * and "patchedDependencies".
  */
 const INERT_MANIFEST_KEYS = Object.freeze({
-  "pyproject.toml": Object.freeze(["tool.uv.managed", "tool.uv.package", "tool.uv.default-groups", "tool.uv.cache-dir", "tool.uv.cache-keys", "tool.uv.required-version", "tool.uv.workspace", "tool.uv.conflicts", "tool.uv.python-preference", "tool.uv.python-downloads", "tool.uv.native-tls", "tool.uv.link-mode", "tool.uv.compile-bytecode", "tool.uv.concurrent-downloads", "tool.uv.concurrent-builds", "tool.uv.concurrent-installs"]),
+  "pyproject.toml": Object.freeze(["tool.poetry.name", "tool.poetry.version", "tool.poetry.description", "tool.poetry.authors", "tool.poetry.maintainers", "tool.poetry.license", "tool.poetry.readme", "tool.poetry.homepage", "tool.poetry.repository", "tool.poetry.documentation", "tool.poetry.keywords", "tool.poetry.classifiers", "tool.poetry.packages", "tool.poetry.include", "tool.poetry.exclude", "tool.poetry.scripts", "tool.poetry.urls", "tool.poetry.package-mode", "tool.poetry.extras", "tool.setuptools.packages", "tool.setuptools.package-dir", "tool.setuptools.py-modules", "tool.setuptools.include-package-data", "tool.setuptools.package-data", "tool.setuptools.exclude-package-data", "tool.setuptools.zip-safe", "tool.setuptools.platforms", "tool.setuptools.license-files", "tool.setuptools.script-files", "tool.setuptools_scm", "tool.hatch.version", "tool.hatch.build", "tool.hatch.envs.default.scripts", "tool.hatch.envs.default.env-vars", "tool.pdm.version", "tool.pdm.build", "tool.pdm.scripts", "tool.flit.module", "tool.flit.sdist", "tool.uv.managed", "tool.uv.package", "tool.uv.default-groups", "tool.uv.cache-dir", "tool.uv.cache-keys", "tool.uv.required-version", "tool.uv.workspace", "tool.uv.conflicts", "tool.uv.python-preference", "tool.uv.python-downloads", "tool.uv.native-tls", "tool.uv.link-mode", "tool.uv.compile-bytecode", "tool.uv.concurrent-downloads", "tool.uv.concurrent-builds", "tool.uv.concurrent-installs"]),
   "package.json": Object.freeze(["pnpm.onlyBuiltDependencies", "pnpm.neverBuiltDependencies", "pnpm.ignoredBuiltDependencies", "pnpm.allowedDeprecatedVersions", "pnpm.peerDependencyRules", "pnpm.updateConfig", "pnpm.requiredScripts", "pnpm.auditConfig"]),
 });
+/** Round 26b (D2): the namespaces of the Python resolvers and build tools: any key under one that is no judged value and not inert is a setting. */
+const PY_RESOLVER_NAMESPACE = /^tool\.(?:poetry|uv|pdm|hatch|flit|setuptools)\./;
+/** D2: the keys under those namespaces read as dependency values (judged there). */
+const PY_VALUE_KEYS = Object.freeze([/^tool\.poetry\.(?:dependencies|dev-dependencies|requires-plugins)(?:\.|$)/, /^tool\.poetry\.group\.[^.]+\.dependencies(?:\.|$)/, /^tool\.uv\.(?:dev|constraint|override|build-constraint)-dependencies$/, /^tool\.uv\.sources(?:\.|$)/, /^tool\.pdm\.dev-dependencies(?:\.|$)/, /^tool\.hatch\.envs\.[^.]+\.(?:extra-)?dependencies$/, /^tool\.setuptools\.dynamic(?:\.|$)/]);
 /** S3: the keys read as dependency values (judged there), not as settings. */
 const VALUE_KEYS = new Set(["tool.uv.dev-dependencies", "tool.uv.constraint-dependencies", "tool.uv.override-dependencies", "tool.uv.build-constraint-dependencies", "tool.uv.sources", "tool.uv.index", "pnpm.overrides", "pnpm.packageExtensions"]);
 function resolverSettings(file, text) {
@@ -2456,26 +2427,29 @@ function resolverSettings(file, text) {
   const inert = INERT_MANIFEST_KEYS[file] ?? [];
   const isInert = (path) => inert.some((k) => path === k || path.startsWith(`${k}.`));
   if (file === "pyproject.toml") {
-    let instance = 0;
-    let last = null;
+    // Round 26b (D2): the parsed tree, path by path: inline tables and dotted keys are expanded to
+    // their leaves, so a setting reads the same however it is written.
     const all = tomlAssignments(text, []) ?? [];
     // An index that cannot serve a public name (explicit, or at a public url) is no resolver change.
-    const harmless = new Set();
+    const harmlessIndex = (f) => sourceKind(f?.url?.s) === "public" || (f?.explicit?.raw === "true" && f?.default?.raw !== "true") || f?.priority?.s === "explicit";
     const tablesOf = new Map();
     for (const e of all) if (e.table && e.keys && (e.table.join(".") === "tool.uv.index" || e.table.join(".") === "tool.poetry.source")) (tablesOf.get(e.table) ?? tablesOf.set(e.table, {}).get(e.table))[e.keys.join(".")] = e.value;
-    for (const [t, f] of tablesOf) if (sourceKind(f.url?.s) === "public" || (f.explicit?.raw === "true" && f.default?.raw !== "true") || f.priority?.s === "explicit") harmless.add(t);
-    for (const { table, keys, value } of all) {
-      if (harmless.has(table)) continue;
-      if (!keys || !table) continue;
-      if (table !== last) {
-        instance++;
-        last = table;
+    const instanceOf = new Map();
+    for (const t of tablesOf.keys()) instanceOf.set(t, instanceOf.size + 1);
+    const emit = (path, value, instance) => {
+      if (value.t) {
+        for (const [k, v] of Object.entries(value.t)) emit(`${path}.${k}`, v, instance);
+        return;
       }
-      const path = [...table, ...keys].join(".");
-      const resolver = /^tool\.uv\./.test(path) || /^tool\.(?:poetry\.source|pdm\.source|pdm\.resolution)(?:\.|$)/.test(path) || /^tool\.hatch\..*(?:index|pip)/.test(path);
-      if (!resolver || isInert(path) || [...VALUE_KEYS].some((k) => path === k || path.startsWith(`${k}.`)) && !path.startsWith("tool.uv.index")) continue;
-      if (path === "tool.uv.index" && value.a && value.a.every((v) => v.t && (sourceKind(v.t.url?.s) === "public" || (v.t.explicit?.raw === "true" && v.t.default?.raw !== "true")))) continue;
-      out.add(`${table.join(".") === "tool.uv.index" || table.join(".") === "tool.poetry.source" ? `#${instance} ` : ""}${path} = ${value.s !== undefined ? JSON.stringify(value.s) : (value.raw ?? JSON.stringify(value))}`);
+      if (!PY_RESOLVER_NAMESPACE.test(path) || isInert(path) || PY_VALUE_KEYS.some((re) => re.test(path))) return;
+      if ((path === "tool.uv.index" || path === "tool.poetry.source") && value.a && value.a.every((v) => v.t && harmlessIndex(v.t))) return;
+      out.add(`${instance ? `#${instance} ` : ""}${path} = ${value.s !== undefined ? JSON.stringify(value.s) : (value.raw ?? JSON.stringify(value))}`);
+    };
+    for (const { table, keys, value } of all) {
+      if (!keys) continue;
+      const t = table ?? [];
+      if (tablesOf.has(table) && harmlessIndex(tablesOf.get(table))) continue;
+      emit([...t, ...keys].join("."), value, tablesOf.has(table) ? instanceOf.get(table) : 0);
     }
   } else if (file === "package.json") {
     if (!text.includes('"pnpm"') && !text.includes('"patchedDependencies"')) return out;
@@ -3042,9 +3016,9 @@ const CONFIG_FILES = Object.freeze([
 const CREDENTIAL_KEYS = ["_authtoken", "_auth", "_password", "username", "email", "always-auth", "certfile", "keyfile"];
 const CONFIG_INERT_KEYS = Object.freeze({
   // .npmrc: INERT_CONFIG_KEYS and the credentials (configInert adds INERT_CONFIG_KEYS).
-  ".npmrc": Object.freeze([...CREDENTIAL_KEYS]),
+  ".npmrc": Object.freeze([...CREDENTIAL_KEYS, "engine-strict", "shamefully-hoist"]),
   ".yarnrc": Object.freeze(["yarn-offline-mirror-pruning", "email", "username", "lastupdatecheck", "disable-self-update-check", "save-exact", "save-prefix", "init-author-name", "init-license"]),
-  ".yarnrc.yml": Object.freeze(["enabletelemetry", "nodelinker", "enableglobalcache", "cachefolder", "compressionlevel", "enablecolors", "enableprogressbars", "enableinlinebuilds", "npmauthtoken", "npmalwaysauth", "npmauthident", "defaultsemverrangeprefix"]),
+  ".yarnrc.yml": Object.freeze(["enabletelemetry", "nodelinker", "enableglobalcache", "cachefolder", "compressionlevel", "enablecolors", "enableprogressbars", "enableinlinebuilds", "npmauthtoken", "npmalwaysauth", "npmauthident", "defaultsemverrangeprefix", "enablescripts"]),
   "bunfig.toml": Object.freeze(["install.exact", "install.cache.*", "install.globaldir", "install.globalbindir", "telemetry", "loglevel", "run.*", "test.*", "smol"]),
   "config.toml": Object.freeze(["build.*", "term.*", "profile.*", "target.*", "registry.token", "registries.*.token", "http.timeout", "http.multiplexing", "cargo-new.*"]),
   config: Object.freeze(["build.*", "term.*", "profile.*", "target.*", "registry.token", "registries.*.token", "http.timeout", "http.multiplexing", "cargo-new.*"]),
@@ -3116,6 +3090,17 @@ function configKeys(config, text) {
     return out;
   }
   if (config.format === "toml") {
+    // Round 26b (F12): a strict reading: outside an open array or inline table every line is a
+    // [table] or [[table]] header, a key = value line, a comment or blank; anything else is not read.
+    let depth = 0;
+    for (const raw of lines) {
+      const line = raw.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""').replace(/#.*$/, "").trim();
+      if (depth === 0 && line && !/^\[\[?[^\][]+\]\]?$/.test(line) && !/^[A-Za-z0-9_."-][A-Za-z0-9_." -]*=/.test(line)) return null;
+      for (const ch of line) depth += ch === "[" || ch === "{" ? 1 : ch === "]" || ch === "}" ? -1 : 0;
+      if (/^\[\[?[^\][]+\]\]?$/.test(line)) depth = 0;
+      if (depth < 0) return null;
+    }
+    if (depth !== 0) return null;
     const entries = tomlAssignments(text, []);
     if (!entries) return null;
     for (const { table, keys, value } of entries) {
@@ -3235,7 +3220,8 @@ function introducedByEdit(kind, toolName, toolInput, path) {
   })();
   const disk = readManifest(path);
   if (toolName === "Write") {
-    if (typeof toolInput.content !== "string") return [];
+    // Round 26b (F10): a Write whose content is not a string is not read.
+    if (typeof toolInput.content !== "string") return refuse("a Write whose content is not a string") ?? [];
     return wholeFileChanges(kind, disk ?? "", toolInput.content);
   }
   const edits = editsOf(toolName, toolInput);
@@ -3560,8 +3546,8 @@ function cmdProgram(word, dialect) {
  * the author and license defaults npm init writes, fund, loglevel, progress, color, the cache and
  * prefix folders, update-notifier, editor, the npm version tag settings, save-exact and save-prefix;
  * pip's cache-dir, no-color, progress-bar and disable-pip-version-check; Poetry's virtualenvs.* and
- * cache-dir; Yarn's enableTelemetry and nodeLinker; Go's GOBIN, GOCACHE, GOMODCACHE, GOPATH and
- * GOTOOLCHAIN. A registry, index, release-age, tag or proxy setting is never on it.
+ * cache-dir; Yarn's enableTelemetry and nodeLinker; Go's GOBIN, GOCACHE, GOMODCACHE and GOPATH.
+ * A registry, index, release-age, tag, toolchain or proxy setting is never on it.
  */
 const INERT_CONFIG_KEYS = Object.freeze([
   "init-author-name", "init-author-email", "init-author-url", "init-license", "init-version", "init-module", "init.author.name", "init.author.email", "init.license", "init.version",
@@ -3569,7 +3555,7 @@ const INERT_CONFIG_KEYS = Object.freeze([
   "global.cache-dir", "global.no-color", "global.progress-bar", "global.disable-pip-version-check", "global.timeout", "global.retries", "user.cache-dir",
   "virtualenvs.create", "virtualenvs.in-project", "virtualenvs.path", "virtualenvs.prefer-active-python", "virtualenvs.options.system-site-packages",
   "enabletelemetry", "nodelinker",
-  "gobin", "gocache", "gomodcache", "gopath", "gotoolchain",
+  "gobin", "gocache", "gomodcache", "gopath",
 ]);
 /** S6: a configuration write in a manager's words: { keys } (lower case; empty when the key cannot be read), or null. */
 function configWriteOf(program, args) {
@@ -4901,7 +4887,7 @@ const ACCOUNT_TABLES = {
   gomodedit: optionTable("-dropexclude= -dropgodebug= -dropignore= -dropreplace= -droprequire= -dropretract= -droptool= -exclude= -fmt -go= -godebug= -ignore= -json -module= -print -replace= -require= -retract= -tool= -toolchain="),
   yarn: optionTable("--all --audit --cache-folder= --caret --check-cache --check-files --cwd= --dev --disable-pnp --emoji --enable-pnp --exact --exclude= --force --from= --frozen-lockfile --global --global-folder= --har --help --https-proxy= --ignore-engines --ignore-optional --ignore-platform --ignore-scripts --ignore-workspace-root-check --immutable --immutable-cache --include= --inline-builds --interlaced --jobs= --json --latest --link-duplicates --link-folder= --mode= --modules-folder= --mutex= --network-concurrency= --network-timeout= --no-bin-links --no-default-rc --no-lockfile --no-node-version-check --no-private --no-progress --non-interactive --offline --optional --otp= --parallel --peer --pnp --prefer-dev --prefer-offline --preferred-cache-folder= --prod --production --proxy= --pure-lockfile --recursive --registry= --save --save-dev --save-exact --save-optional --save-peer --save-tilde --scripts-prepend-node-path --silent --skip-integrity-check --strict-semver --tilde --topological --topological-dev --update-checksums --verbose --version --worktree -A -C -D -E -L -O -P -R -T -W -g -h -j= -p -s -t -v"),
   bun: optionTable("--backend= --latest --ca= --cache-dir= --cafile= --concurrent-scripts= --cpu= --cwd= --dev --dry-run --exact --filter= --frozen-lockfile --global --help --ignore-scripts --linker= --lockfile-only --network-concurrency= --no-cache --no-progress --no-save --no-summary --no-verify --omit= --only-missing --optional --os= --peer --production --quiet --recursive --registry= --save --save-text-lockfile --silent --trust --verbose --yarn -D -E -d -g -h -p -r -y"),
-  poetry: optionTable("--all-extras --ansi --compile --dev --directory= --dry-run --editable --extras= --group= --help --lock --markers= --no-ansi --no-cache --no-directory --no-interaction --no-plugins --no-root --no-update --only= --only-root --optional --platform= --project= --python= --quiet --regenerate --source= --sync --verbose --with= --without= -C= -D -E= -G= -P= -e -h -n -q -v -vv -vvv"),
+  poetry: optionTable("--all-extras --ansi --check --compile --dev --directory= --dry-run --editable --extras= --group= --help --lock --markers= --no-ansi --no-cache --no-directory --no-interaction --no-plugins --no-root --no-update --only= --only-root --optional --platform= --project= --python= --quiet --regenerate --source= --sync --verbose --with= --without= -C= -D -E= -G= -P= -e -h -n -q -v -vv -vvv"),
 };
 /** npm's one-letter options: the switches, and (NPM_SHORT_VALUE) the five that take a value. */
 const NPM_SHORT_SWITCHES = new Set(["a", "B", "D", "d", "E", "f", "g", "h", "H", "l", "O", "p", "P", "q", "s", "S", "v", "y"]);
@@ -5992,7 +5978,16 @@ function accountPython(program, args, reader) {
     if (glued) {
       const module = glued[1] ?? args[i + 1] ?? "";
       const rest = args.slice(i + (glued[1] ? 1 : 2));
-      if (PIP_MODULE.test(module)) return accountPip(rest, ACCOUNT_TABLES.pip, reader);
+      if (PIP_MODULE.test(module)) {
+        // Round 26b (F7): a configuration write through `python -m pip` is read as pip's own.
+        const cw = configWriteOf("pip", rest);
+        if (cw && (cw.keys.length === 0 || cw.keys.some((k) => !INERT_CONFIG_KEYS.includes(k)))) {
+          accountRemedy = CONFIG_REMEDY;
+          return notReadAt(`${callData([program, "-m", module, ...rest].join(" "))}, a write of pip's configuration`, a);
+        }
+        if (cw) return null;
+        return accountPip(rest, ACCOUNT_TABLES.pip, reader);
+      }
       if (PYTHON_MANAGER_MODULES.has(module)) return accountCommand([module, ...rest], "bash", 1);
       return `${program} -m ${module.slice(0, 60)}, a module this hook does not read`;
     }
@@ -6526,7 +6521,7 @@ const NAMED_OPTIONS = {
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
 // THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
-export { RUNNER_FETCH_FORMS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, MANAGER_THEN_EXPANSION, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
+export { RUNNER_FETCH_FORMS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {
@@ -6897,8 +6892,52 @@ function optionToken(option) {
 // eslint-disable-next-line no-control-regex -- the control characters are what this rule finds
 const UNUSUAL_BLANKS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00A0\u061C\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF]/g;
 const UNUSUAL_BLANK = new RegExp(UNUSUAL_BLANKS.source);
-/** Round 25 (S9): a manager word at a command position followed by an expansion as its first operand. */
-const MANAGER_THEN_EXPANSION = /(?:^|[\n;&|(]|\b(?:sudo|env|command|exec|then|do|time|nohup)[ \t])[ \t]*["']?(?:npm|pnpm|yarn|bun|pip\d*(?:\.\d+)*|uv|poetry|cargo|go)(?:\.(?:cmd|exe|bat|ps1))?["']?[ \t]+["']?(?:\$|@[A-Za-z_])/i;
+/**
+ * Round 26b (D3): one detector for an expansion in a manager's words. Each command of the line
+ * (split at ; & | and line ends) whose first word, after assignments and the prefixes a command may
+ * stand behind (sudo, env, time, nohup, command, exec, nice, timeout, then, do, if, ., &, python -m
+ * and py -m, cmd /c), is a manager or a runner: when one of its words up to its end is an expansion
+ * that could hold a verb or a package (`$x`, `${x}`, `"${a[@]}"`, `"$@"`, `$(...)`, a backtick, `@a`,
+ * `@(...)`, `$env:X`, `%X%`), the command is not read, unless a literal verb that is no install,
+ * fetch or configuration verb stands before the expansion (`npm run build -- $ARGS`). Returns the
+ * command's text, or null.
+ */
+const EXPANSION = /\$|`|%[A-Za-z_]\w*%/;
+const SPLAT = /^["']?@(?:[A-Za-z_]\w*["']?$|\()/;
+const EXPANSION_PREFIXES = new Set(["sudo", "doas", "env", "time", "nohup", "command", "exec", "nice", "timeout", "then", "do", "if", "elif", "else", ".", "&", "!", "builtin", "stdbuf", "ionice"]);
+function managerExpansion(command, dialect = "bash") {
+  const isExpansion = (w) => EXPANSION.test(w) || (dialect === "powershell" && SPLAT.test(w));
+  for (const raw of String(command).split(/[;&|\n]+/)) {
+    const words = raw.trim().split(/\s+/).filter(Boolean);
+    let i = 0;
+    for (;;) {
+      const w = (words[i] ?? "").replace(/^["']|["']$/g, "");
+      const name = programName(w);
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || EXPANSION_PREFIXES.has(name)) i++;
+      else if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?$/.test(name) && words[i + 1] === "-m") i += 2;
+      else if (name === "cmd" && /^\/{1,2}[ck]$/i.test(words[i + 1] ?? "")) i += 2;
+      else if (/^-/.test(w) && i > 0 && EXPANSION_PREFIXES.has(programName((words[i - 1] ?? "").replace(/^["']|["']$/g, "")))) i++;
+      else break;
+      if (i >= words.length) break;
+    }
+    const lead = programName((words[i] ?? "").replace(/^["']|["']$/g, "")).replace(/@[^@]*$/, "");
+    const manager = managerWord(lead) ?? (lead === "yarnpkg" ? "yarn" : null);
+    const runner = PACKAGE_RUNNERS.has(lead);
+    if (!manager && !runner) continue;
+    let verb = null;
+    for (const w of words.slice(i + 1)) {
+      if (isExpansion(w)) {
+        if (verb !== null && !runner && !isManagerVerb(manager, verb.toLowerCase())) break;
+        return words.slice(i).join(" ");
+      }
+      if (verb === null && !w.startsWith("-")) {
+        verb = w.replace(/^["']|["']$/g, "");
+        if (!runner && !isManagerVerb(manager, verb.toLowerCase())) break;
+      }
+    }
+  }
+  return null;
+}
 /** R5: what builds a command from other words. */
 const BUILDS_COMMAND = /\bxargs\b|\bset-alias\b|\bnew-alias\b|(?:^|[\s;&|(])alias\s|\bfunction\s|(?:^|[\s;&|(])fn\s|\binvoke-expression\b|\biex\b|&\s*['"\u2018-\u201d]|\bdoskey\b|[\w-]\s*\(\)\s*\{/i;
 /**
@@ -6996,14 +7035,17 @@ function accountCall(command, dialect) {
   // a package manager's name: the manager's words may come from elsewhere; held.
   const builder = BUILDS_COMMAND.exec(command);
   if (builder && namesManager(command) && buildsCommandAt(command, dialect, builder[0])) return `${builder[0].trim()} beside a package manager's name: the command it runs is built from words this hook does not see`;
-  // Round 25 (S9): a manager word whose first operand is a variable, array or splat expansion
-  // (`npm $v x`, `npm "${a[@]}"`, `npm "$@"`, PowerShell `npm @a`): its verb is not in the text; held.
-  const expanded = MANAGER_THEN_EXPANSION.exec(command);
-  if (expanded) {
-    accountRemedy = "Write the manager's verb and each package with its version on the command line itself (npm install name@1.2.3), not in a variable, an array or a splat: the hook then reads it.";
-    return `${callData(expanded[0].trim())}, a package manager whose first operand is a variable or splat expansion`;
+  // Round 26b (D3): where the detector finds no verb, a manager whose words hold an expansion where a
+  // verb or a package could be (`npm $v x`, `npm "${a[@]}"`, PowerShell `npm @a`) is held: the verb is
+  // not in the text. Where the detector finds one, the account below reads (or holds) the expansion.
+  if (!detectsInstall(command)) {
+    const expanded = managerExpansion(command, dialect);
+    if (expanded) {
+      accountRemedy = "Write the manager's verb and each package with its version on the command line itself (npm install name@1.2.3), not in a variable, an array or a splat: the hook then reads it.";
+      return `${callData(expanded)}, a package manager command with an expansion where a verb or a package could be`;
+    }
+    return null;
   }
-  if (!detectsInstall(command)) return null;
   // R4: a manager's own setting named anywhere before or on an install line the detector names.
   const setting = settingBeforeInstall(command);
   if (setting) return setting;
@@ -7201,7 +7243,12 @@ function readLedger(dir, now) {
         else cutBefore = seq;
         continue;
       }
-      if (!e || typeof e !== "object" || typeof e.package !== "string") continue;
+      // Round 26b (F13): a line that parses but is no verdict object (an array, no package) is read as a
+      // line the hook cannot read: the verdicts before it no longer count, as a torn line's do.
+      if (!e || typeof e !== "object" || Array.isArray(e) || typeof e.package !== "string") {
+        cutBefore = seq;
+        continue;
+      }
       const t = Date.parse(e.t);
       // S5: a line that names a package but is not fully valid makes that package's verdict unknown.
       if (typeof e.version !== "string" || typeof e.ecosystem !== "string" || !LEDGER_VERDICTS.has(e.verdict) || !Number.isFinite(t)) {
@@ -7923,8 +7970,19 @@ function introducedBy(input) {
   const toolInput = input.tool_input;
   if (!toolInput || typeof toolInput !== "object") return null;
   if (toolName === "Bash" || toolName === "PowerShell") {
+    // Round 26b (F10): a command that is not a string is not read.
+    if (typeof toolInput.command !== "string") {
+      refuse("a command that is not a string");
+      unreadInstalls = true;
+    }
     const found = installsIn(toolInput.command, toolName === "PowerShell" ? "powershell" : "bash");
     return { what: "command", changes: found.map((r) => ({ ecosystem: r.ecosystem, name: r.name, spec: r.spec, from: null, ...(r.tag ? { tag: true } : {}) })) };
+  }
+  // Round 25b: a NotebookEdit of a config file is held, as of a manifest.
+  if (toolName === "NotebookEdit" && typeof toolInput.notebook_path === "string" && configFileOf(toolInput.notebook_path)) {
+    refuse(`a NotebookEdit of ${callData(manifestBaseName(toolInput.notebook_path))}, a package manager's configuration file`, CONFIG_REMEDY);
+    unreadInstalls = true;
+    return { what: "edit", changes: [] };
   }
   // Round 17 (g-kinds): a NotebookEdit whose path names a manifest (any spelling manifestBaseName
   // reads, package.yaml and package.json5 included) writes it in a form this hook does not read.
@@ -7933,11 +7991,6 @@ function introducedBy(input) {
     if (manifestKind(toolInput.notebook_path) === null && !UNREAD_MANIFESTS.includes(name)) return null;
     refuse(`a NotebookEdit of ${name}, a manifest this hook reads only from Edit, MultiEdit and Write`, "No dependency_check verdict releases this edit. Change the manifest with the Edit or Write tool: the versions it sets are then judged as in any other edit.");
     unreadInstalls = true;
-    return { what: "edit", changes: [] };
-  }
-  // Round 25b: a NotebookEdit of a config file is held, as of a manifest.
-  if (toolName === "NotebookEdit" && typeof toolInput.notebook_path === "string" && configFileOf(toolInput.notebook_path)) {
-    refuse(`a NotebookEdit of ${callData(manifestBaseName(toolInput.notebook_path))}, a package manager's configuration file`, CONFIG_REMEDY);
     return { what: "edit", changes: [] };
   }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
