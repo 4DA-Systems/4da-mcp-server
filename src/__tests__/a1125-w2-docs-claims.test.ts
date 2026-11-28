@@ -18,7 +18,7 @@ import { WORD_SCAN_CAP } from "../call-budget.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands, MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
-import { BEST_EFFORT_READING, INSTALLED_MALWARE, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { BEST_EFFORT_READING, INSTALLED_MALWARE, INSTALLED_PLACEHOLDER, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -174,6 +174,9 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(next).toContain(`"${CREDENTIAL_REFUSAL("package name")}"`);
     expect(CREDENTIAL_REFUSAL("ecosystem")).toContain("not an ecosystem");
     expect(next).not.toContain("an operand of a runner command, an entry of a snippet");
+    // Rounds 16b / 16c: the placeholder text, and no sentence left saying a glued token is not matched.
+    expect(next).toContain(`("${INSTALLED_PLACEHOLDER(["lodahs@0.0.1-security"])}")`);
+    for (const doc of [readme, next]) expect(doc).not.toMatch(/glued to the letters before it[^.]*is not matched/);
   });
 
   it("docs lane, round 14: the CHANGELOG quotes the reworded STAYS_REVIEW", () => {
