@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 
 import type { HookRun, Sandbox } from "./a1123-hookfix-run.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./a1125-manager-stubs.js";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "hooks", "manifest-edit.mjs");
 

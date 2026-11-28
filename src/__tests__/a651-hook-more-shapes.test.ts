@@ -16,6 +16,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { installsIn, respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const read = (command: string, dialect: "bash" | "powershell" = "bash") => installsIn(command, dialect).map((r) => `${r.ecosystem} ${r.name} ${r.spec}`);
 

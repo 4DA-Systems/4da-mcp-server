@@ -15,6 +15,8 @@ import { describe, expect, it } from "vitest";
 
 import { recordVerdicts } from "../check-ledger.js";
 import { sandbox } from "./helpers/a1123-hookfix-run.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 const bash = (command: string) => ({ session_id: "s", cwd: tmpdir(), hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });

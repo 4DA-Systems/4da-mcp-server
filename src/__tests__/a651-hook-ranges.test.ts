@@ -22,6 +22,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { installsIn, respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE, type LedgerEntry } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 let home: string;
 beforeEach(() => {

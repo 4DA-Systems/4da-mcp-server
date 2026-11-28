@@ -28,6 +28,8 @@ import { newDependenciesSignal } from "../tools/dependency-check-signals.js";
 import { LEDGER_SERVER_VERSION, compareVersions, ledgerEntries } from "../check-ledger.js";
 import * as hook from "../../hooks/manifest-edit.mjs";
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const HOOK = join(import.meta.dirname, "..", "..", "hooks", "manifest-edit.mjs");
 

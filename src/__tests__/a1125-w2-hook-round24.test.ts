@@ -19,6 +19,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import * as hook from "../../hooks/manifest-edit.mjs";
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 let s: Sandbox;
 beforeEach(() => {

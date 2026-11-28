@@ -34,6 +34,8 @@ import { LiveIntelligence } from "../live/index.js";
 import { clearLiveIntelligence, setLiveIntelligence } from "../live-singleton.js";
 import { scanProjectTree, treeResolutionGroups } from "../project-tree.js";
 import { dispatchTool } from "../tool-dispatch.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 const PHRASES = [

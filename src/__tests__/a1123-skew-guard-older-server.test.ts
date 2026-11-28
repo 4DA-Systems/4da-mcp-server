@@ -20,6 +20,8 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { LEDGER_FILE, LEDGER_PREVIOUS_FILE, ledgerWritesSettled, recordVerdicts, startLedger } from "../check-ledger.js";
 import { serverEntry } from "./helpers/stdio-session.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = path.join(root, "hooks", "manifest-edit.mjs");

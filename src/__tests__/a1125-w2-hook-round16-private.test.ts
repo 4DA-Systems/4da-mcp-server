@@ -18,6 +18,8 @@ import { recordVerdicts, startLedger } from "../check-ledger.js";
 import type { FourDADatabase } from "../db.js";
 import { LiveIntelligence } from "../live/index.js";
 import { runDependencyCheck } from "../tools/dependency-check.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 let home: string;
