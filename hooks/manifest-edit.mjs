@@ -225,7 +225,9 @@
  * expansion is denied as not read (MANAGER_THEN_EXPANSION); a verb or package held in an
  * expansion anywhere else is not seen [test: a1125-w2-hook-round25]. L2: a runner given a bare name
  * and no fetch option runs the project's installed tool when there is one, and otherwise fetches
- * the newest release unjudged [test: a1125-w2-hook-round26]. L2: the option allow lists
+ * the newest release unjudged, and a manager on the MANAGERS list that a runner fetches to run is
+ * not judged as a fetch, while the command it runs is read as any other [test:
+ * a1125-w2-hook-round26, a651-hook-wrapped-commands]. L2: the option allow lists
  * (NAMED_OPTIONS) are lists, not proofs: what is tested is that none of their options changes the
  * named release in the tool versions tested [test: a1125-w2-hook-round14-options]. L2: on Windows, cmd.exe rewrites the arguments of
  * a .cmd or .bat program, so a manager's install, or a runner, whose arguments hold a character
