@@ -41,8 +41,11 @@ function hookConst(name: string): number {
 const MB = 1024 * 1024;
 
 describe("the changelog's section for 6.6.0", () => {
-  it("is the one unreleased section, in the heading form scripts/release.mjs requires", () => {
-    expect(changelog).toMatch(/^## 6\.6\.0 — unreleased$/m);
+  it("is the one section for 6.6.0, in the heading form scripts/release.mjs requires: unreleased before the release, dated by it", () => {
+    // scripts/release.mjs turns "— unreleased" into "— <date>" in the same change that sets package.json to 6.6.0.
+    const released = (JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string }).version === "6.6.0";
+    expect(changelog).toMatch(released ? /^## 6\.6\.0 — \d{4}-\d{2}-\d{2}$/m : /^## 6\.6\.0 — unreleased$/m);
+    expect(changelog.match(/^## 6\.6\.0 /gm)).toHaveLength(1);
     expect(changelog).not.toMatch(/^## 6\.5\.2 /m);
     expect(next).toMatch(/^### Behaviour changes to know before upgrading$/m);
   });
