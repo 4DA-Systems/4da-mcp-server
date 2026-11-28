@@ -114,3 +114,5 @@ export const ACCOUNT_TABLES: Readonly<Record<string, ReadonlyMap<string, number>
 export const SUBCOMMAND_PATHS: Readonly<Record<string, Readonly<Record<string, readonly string[] | "*">>>>;
 /** Round 32: the sub-commands that take no package changing what is installed, with their help line. */
 export const NO_PACKAGE_SUBCOMMANDS: Readonly<Record<string, Readonly<Record<string, string>>>>;
+/** Round 33: the sub-words under a SUBCOMMAND_PATHS entry that name no release ("manager path word"). */
+export const PATH_NO_PACKAGE: ReadonlySet<string>;

@@ -78,7 +78,7 @@ describe("pyproject: direct references, [tool.uv.sources] and Poetry sources", (
     onlyReal(s.edit(file, '    "requests==2.32.3",\n', `    "requests==2.32.3",\n    "${req}",\n`), "mylib");
   });
 
-  it.each([['{ path = "../mylib" }'], ['{ path = "../mylib", editable = true }'], ['{ git = "https://github.com/acme/mylib", tag = "v0.3.0" }'], ['{ url = "https://example.com/mylib.whl" }'], ["{ workspace = true }"]])(
+  it.each([['{ path = "../mylib" }'], ['{ path = "../mylib", editable = true }'], ['{ git = "https://github.com/acme/mylib", tag = "v0.3.0" }'], ['{ url = "https://files.corp.internal/mylib.whl" }'], ["{ workspace = true }"]])(
     "[tool.uv.sources] mylib = %s: the requirement goes ahead",
     (source) => {
       // Round 25 (W1): the index a source names is declared in the file (private by its shape, explicit).

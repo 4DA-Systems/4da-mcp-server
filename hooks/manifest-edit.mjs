@@ -106,11 +106,11 @@
  * section is judged there, and an entry its section already held unchanged is not judged again
  * (diffVersions) [test: a1125-w2-hook-round23, a1125-w2-hook-round18, a1123-guard-hook]. P3: an examined command that names no release in a form
  * the hook reads, and is read whole, goes ahead [test: a1125-w2-hook-round10,
- * a1125-w2-hook-account]. P3: in an examined command, the words between the manager (after its
- * global options) and the verb are read only as a sub-command path on that manager's
- * SUBCOMMAND_PATHS, with the reader that judges it, or as one of its NO_PACKAGE_SUBCOMMANDS, which
- * name no release; any other sub-command path is denied as not read (pathHeld) [test:
- * a1125-w2-hook-round32]. P3: a release the call takes from a source the hook reads as the
+ * a1125-w2-hook-account]. P3: what is promised for a command is the reading of a manager's verb on
+ * VERBS written directly after the manager and its global options (MANAGER_GLOBAL_OPTIONS), each
+ * package it names judged, of a configuration write (CONFIG_WRITE_VERBS) and of a fetch
+ * (FETCH_VERBS); a manager's other sub-commands are read best effort (L3) [test:
+ * a1125-w2-hook-forms, a1125-w2-hook-round33]. P3: a release the call takes from a source the hook reads as the
  * project's own, for example a local path, git, or a host private by its shape, is not judged
  * (sourceVerdict, urlDependency) [test: a1125-w2-hook-round18, a1125-w2-hook-round19,
  * a1123-hookfix-local-sources]. P3: a dependency entry that names an index, a registry or a source
@@ -253,8 +253,9 @@
  * package (for example an audit fix, an update with no name, a tidy) installs what the manager
  * picks, and the advice line (P6) says to run vulnerability_scan after it [test:
  * a1125-w2-hook-round27, a1125-w2-hook-round26, a1125-w2-hook-round18]. L1: a requirement that a
- * tool-specific source table (one only its own tool reads) maps to a path, git or workspace source,
- * or that a Poetry dependency maps to one unconditional path, git, url or file source, is the
+ * tool-specific source table (one only its own tool reads) maps to a path, git or workspace source
+ * (a URL only where the URL rule makes it the project's own), or that a Poetry dependency maps to
+ * one unconditional path, git or file source (a url likewise), is the
  * project's own for that tool; another installer (for example pip, or another PEP 517 front end)
  * resolves the same requirement from the index, unjudged unless a verdict on record says avoid or
  * wait, and the tool's own option that makes it read the index instead is held as a release-picking
@@ -282,7 +283,9 @@
  * JavaScript package manager on the JS_MANAGERS list that a JavaScript runner fetches to run is not
  * judged as a fetch (a package of the same name on another family's list is), nor is the
  * manager release that a manifest's packageManager or devEngines.packageManager key names, which
- * corepack fetches and runs, while the command a runner runs is read as any other [test:
+ * corepack fetches and runs, while the command a runner runs is read when it is written as
+ * separate words, and a whole command line given to a runner as one quoted word is read as a shell
+ * command line (best effort, L3) [test: a1125-w2-hook-round33,
  * a1125-w2-hook-round27, a1125-w2-hook-round26, a651-hook-wrapped-commands]. L2: the option allow lists
  * (NAMED_OPTIONS) are lists, not proofs: what is tested is that none of their options changes the
  * named release in the tool versions tested [test: a1125-w2-hook-round14-options]. L2: on Windows, cmd.exe rewrites the arguments of
@@ -305,7 +308,12 @@
  * a release with an avoid or wait verdict, or one with no verdict, it holds the call, and it
  * promises nothing where it does not see it (an option it does not know, a prefix it does not
  * walk, a spec form it does not read, a runner whose options differ, arguments cmd.exe rewrites)
- * [test: a1125-w2-hook-round28, a1125-w2-hook-round27, a1125-w2-hook-round26]. L4: an agent that sets out
+ * [test: a1125-w2-hook-round28, a1125-w2-hook-round27, a1125-w2-hook-round26]. L3: the reading of a
+ * manager's sub-commands other than its verbs on VERBS written directly after
+ * the manager (SUBCOMMAND_PATHS, NO_PACKAGE_SUBCOMMANDS) is best effort: a sub-command path the hook
+ * does not know is held, one it knows is read by its reader, and it promises nothing where a tool
+ * runs a command or installs a release through a sub-command whose table entry does not say so
+ * [test: a1125-w2-hook-round33, a1125-w2-hook-round32]. L4: an agent that sets out
  * to defeat the hook can, for example with a script that runs the install, a command the shell
  * decodes before it runs, a change of folder made in an earlier call, or a path to the data folder
  * through a parent folder or assembled from pieces [test: a1125-w2-hook-contract,
@@ -349,6 +357,14 @@
  * proxy, strict-ssl, ca or cafile key is on none of them). pip-compile goes ahead: it installs nothing (it
  * writes a requirements file, judged when an edit or an install names it); pip-sync installs what its
  * files say and reads them at the call; bun pm cache names no release and goes ahead.
+ *
+ * (Round 33.) What a runner or exec sub-command runs (npx, bunx, pnpx, npm exec, pnpm exec and dlx,
+ * yarn exec and dlx, yarn workspace <name> exec, bun x and exec, npm explore <pkg> -- <command>) is
+ * read from its program word on (runnerProgram); a program word that holds a blank or a shell
+ * operator is a whole command line given as one word and is read as a shell command line. A uv url
+ * source that the URL rule keeps (a public registry file is that name and version) is the release the
+ * name's requirement installs, read from the file the edit makes whichever line is new; a URL makes a
+ * requirement the project's own only where the URL rule does (git, file, a host private by shape).
  *
  * (Round 29.) The strict readings. Config files (configKeys), each line classified or the file not
  * read: in every format a lone CR, a form feed, NBSP, U+3000, any other unusual blank, and a byte
@@ -1376,7 +1392,9 @@ function pyprojectDependencies(entries, local = new Set()) {
     const f = d.alternatives[0];
     const conditioned = ["markers", "marker", "python", "platform", "extras", "optional"].some((k) => k in f);
     const versioned = typeof f.version?.s === "string" && !boundsNothing(f.version.s);
-    if (POETRY_OTHER_SOURCE.some((k) => k in f) && !conditioned && !versioned) others.add(nameKey("PyPI", d.name));
+    // Round 33 (T3): a url maps the name only where the one URL rule makes it the project's own.
+    const ownSource = ["path", "git", "file"].some((k) => k in f) || (typeof f.url?.s === "string" && quietly(() => urlDependency("x", f.url.s, "PyPI")) === null);
+    if (ownSource && !conditioned && !versioned) others.add(nameKey("PyPI", d.name));
   }
   const out = [];
   for (const d of poetry.values()) {
@@ -1461,9 +1479,20 @@ function pyprojectDependencies(entries, local = new Set()) {
     if (path.length === 5 && path[4] === "url" && typeof value.s === "string") urls.push({ name: path[3], section: "tool.uv.sources", url: value.s });
   }
   const fromUrls = [];
+  // Round 33 (T3): a uv url source that the URL rule keeps (a public registry file is that name and
+  // version; another host is kept as the URL) is the release the name's requirement installs: read
+  // from the file the edit makes, it replaces the requirement's spec, whichever line is new. A Poetry
+  // url dependency is its own entry, judged where it stands.
+  const uvUrl = new Map();
   for (const u of urls) {
     const d = urlDependency(u.name, u.url, "PyPI");
-    if (d) fromUrls.push({ name: d.name, section: u.section, spec: d.spec });
+    if (!d) continue;
+    if (u.section === "tool.uv.sources") uvUrl.set(nameKey("PyPI", u.name), d);
+    else fromUrls.push({ name: d.name, section: u.section, spec: d.spec });
+  }
+  for (const d of out) {
+    const at = uvUrl.get(nameKey("PyPI", d.name));
+    if (at) d.spec = at.spec;
   }
   // Round 28 (G3): a requirement beside the project's own uv source stays the project's own whatever its
   // version: uv installs it from the source and no command resolves that version from the index
@@ -1559,7 +1588,10 @@ function pyOtherSourceNames(entries) {
   // platform): uv falls back to the registry where a condition does not hold. A list of alternatives
   // is conditional by its form.
   const CONDITIONS = ["marker", "markers", "extra", "group", "python", "platform"];
-  const own = (f) => !CONDITIONS.some((k) => k in f) && (typeof f.path?.s === "string" || typeof f.git?.s === "string" || f.workspace?.raw === "true" || typeof f.url?.s === "string");
+  // Round 33 (T3): a URL is own only where the one URL rule makes it the project's own (quietly: a URL
+  // the rule keeps is read as the requirement's release, pyprojectDependencies).
+  const ownUrl = (u) => quietly(() => urlDependency("x", u, "PyPI")) === null;
+  const own = (f) => !CONDITIONS.some((k) => k in f) && (typeof f.path?.s === "string" || typeof f.git?.s === "string" || f.workspace?.raw === "true" || (typeof f.url?.s === "string" && ownUrl(f.url.s)));
   // Each name's source, its fields gathered over every line that sets one (`[tool.uv.sources.x]`
   // with `path` and `marker` on lines of their own is one source).
   const sources = new Map();
@@ -4101,6 +4133,8 @@ function configSourceOption(program, args) {
     const name = program === "go" ? a.replace(/^--/, "-").replace(/=.*$/s, "") : a.replace(/=.*$/s, "");
     const hit =
       listed.includes(name) ||
+      // Round 33 (T4): a short option with its value attached (`-Psub`, `-Csub`, `-cfile`).
+      listed.some((o) => /^-[A-Za-z]$/.test(o) && a.startsWith(o) && a.length > 2 && !a.startsWith("--")) ||
       (program === "pnpm" && /^--config\.[^=]+/.test(a)) ||
       (program === "cargo" && /^-Z./.test(a));
     if (hit) return { reason: `the option ${callData(name)}, a configuration source named on the command`, token: a };
@@ -5208,6 +5242,14 @@ function runnerFetches(words) {
       sources.push([name, name === "--no-index" ? null : String(value() ?? "")]);
       continue;
     }
+    // Round 33 (T4): --with-requirements names a requirements file: read at the call, as S2 reads one.
+    if (name === "--with-requirements" && isPy) {
+      const file = value();
+      const got = typeof file === "string" ? requirementFileInstalls(file, callCwd) : { installs: [], bad: "--with-requirements with no file" };
+      if (got.bad) bad = bad ?? got.bad;
+      else installs.push(...got.installs);
+      continue;
+    }
     if (t.held.includes(name)) {
       bad = bad ?? `the option ${callData(name)}, a configuration source or argument list this hook does not read`;
       if (!eq) i++;
@@ -5435,7 +5477,7 @@ const ACCOUNT_TABLES = {
   pip: optionTable("-w= --wheel-dir= -d= --dest= --abi= --index= --break-system-packages --cache-dir= --cert= --check-build-dependencies --client-cert= --compile --config-settings= --constraint= --debug --disable-pip-version-check --dry-run --editable= --exists-action= --extra-index-url= --find-links= --force-reinstall --global-option= --help --ignore-installed --ignore-requires-python --implementation= --index-url= --isolated --keyring-provider= --log= --no-binary= --no-build-isolation --no-cache-dir --no-clean --no-color --no-compile --no-deps --no-index --no-input --no-python-version-warning --no-warn-conflicts --no-warn-script-location --only-binary= --platform= --prefer-binary --prefix= --progress-bar= --proxy= --python= --python-version= --quiet --report= --require-hashes --require-virtualenv --requirement= --retries= --root= --root-user-action= --src= --target= --timeout= --trusted-host= --upgrade --upgrade-strategy= --use-deprecated= --use-feature= --use-pep517 --user --verbose --version -C= -I -U -V -c= -e= -f= -h -i= -q -r= -t= -v"),
   uvpip: optionTable("--all-extras --allow-insecure-host= --break-system-packages --build-constraints= --cache-dir= --color= --compile-bytecode --config-setting= --constraints= --default-index= --directory= --dry-run --editable= --exact --exclude= --excludes= --extra= --extra-index-url= --find-links= --group= --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary= --no-break-system-packages --no-build --no-build-isolation --no-build-isolation-package= --no-cache --no-config --no-deps --no-index --no-managed-python --no-progress --no-python-downloads --no-verify-hashes --offline --only-binary= --overrides= --prefix= --project= --python= --python-platform= --python-version= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --require-hashes --requirements= --strict --system --target= --torch-backend= --upgrade --upgrade-package= --user --verbose --version -C= -P= -U -V -b= -c= -e= -f= -h -i= -n -p= -q -r= -t= -v"),
   uvtool: optionTable("--allow-insecure-host= --cache-dir= --color= --compile-bytecode --config-setting= --constraints= --default-index= --directory= --editable --extra-index-url= --find-links= --force --help --index= --index-strategy= --index-url= --keyring-provider= --link-mode= --managed-python --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-index --no-managed-python --no-progress --no-python-downloads --offline --overrides= --project= --python= --quiet --refresh --refresh-package= --reinstall --reinstall-package= --upgrade-package= --verbose --version --with= --with-editable= --with-requirements= -C= -P= -V -c= -e -f= -h -i= -n -p= -q -v"),
-  uvadd: optionTable("--active --all-extras --all-groups --all-packages --allow-insecure-host= --branch= --cache-dir= --check --check-exists --color= --compile-bytecode --config-setting= --constraints= --default-index= --dev --directory= --dry-run --editable --extra= --extra-index-url= --find-links= --frozen --group= --help --index= --index-strategy= --index-url= --inexact --keyring-provider= --link-mode= --locked --managed-python --marker= --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-default-groups --no-dev --no-editable --no-extra= --no-group= --no-index --no-install-package= --no-install-project --no-install-workspace --no-managed-python --no-progress --no-python-downloads --no-sync --offline --only-dev --only-group= --optional= --package= --project= --python= --quiet --raw-sources --refresh --refresh-package= --reinstall --reinstall-package= --requirements= --rev= --script= --tag= --upgrade-package= --verbose --version -C= -P= -V -c= -f= -h -i= -m= -n -p= -q -r= -v"),
+  uvadd: optionTable("--active --all-extras --all-groups --all-packages --allow-insecure-host= --branch= --cache-dir= --check --check-exists --color= --compile-bytecode --config-setting= --constraints= --default-index= --dev --directory= --dry-run --editable --extra= --extra-index-url= --find-links= --frozen --group= --help --index= --index-strategy= --index-url= --inexact --keyring-provider= --link-mode= --locked --managed-python --marker= --native-tls --no-binary --no-binary-package= --no-build --no-build-isolation --no-build-isolation-package= --no-build-package= --no-cache --no-config --no-default-groups --no-dev --no-editable --no-extra= --no-group= --no-index --no-install-package= --no-install-project --no-install-workspace --no-managed-python --no-progress --no-python-downloads --no-sync --offline --only-dev --only-group= --optional= --package= --project= --python= --quiet --raw-sources --refresh --refresh-package= --reinstall --reinstall-package= --requirements= --rev= --script= --tag= --upgrade-package= --verbose --version -C= -P= -V -c= -f= -h -i= -m= -n -p= -q -r= -v --format= -o= --output-file= --no-hashes --no-header --no-annotate --no-emit-project --no-emit-workspace --no-emit-package= --emit-workspace --prune="),
   cargo: optionTable("--all-features --base= --bin? --bins --branch= --breaking --build --color= --debug --default-features --dev --dry-run --example? --examples --explain= --features= --force --frozen --git= --help --ignore-rust-version --index= --jobs= --keep-going --list --locked --manifest-path= --message-format= --no-default-features --no-optional --no-public --no-track --offline --optional --package= --path= --precise= --profile= --public --quiet --recursive --registry= --rename= --rev= --root= --tag= --target= --target-dir= --timings --verbose --vers= --version= --workspace -C= -F= -V -b -f -h -j= -m= -n -p= -q -v -w"),
   go: optionTable("-C= -u -d -a -asan -asmflags= -buildmode= -buildvcs= -compiler= -cover -covermode= -coverpkg= -gccgoflags= -gcflags= -installsuffix= -json -ldflags= -linkshared -mod= -modcacherw -msan -n -overlay= -p= -pgo= -pkgdir= -race -t -tags= -tool -toolexec= -trimpath -v -work -x"),
   gomodedit: optionTable("-dropexclude= -dropgodebug= -dropignore= -dropreplace= -droprequire= -dropretract= -droptool= -exclude= -fmt -go= -godebug= -ignore= -json -module= -print -replace= -require= -retract= -tool= -toolchain="),
@@ -5469,7 +5511,7 @@ const ACCOUNT_REMEDY =
 const DETECT_VERBS = new Map([
   ["pnpm", new Set(["add", "install", "i", "up", "update", "upgrade", "link", "ln"])],
   ["yarn", new Set(["add", "up", "upgrade", "install", "link"])],
-  ["bun", new Set(["add", "a", "install", "i", "update", "link"])],
+  ["bun", new Set(["add", "a", "install", "i", "update", "link", "pkg"])],
   ["pip", new Set(["install"])],
   ["uv", new Set(["add", "sync", "lock", "install", "export", "upgrade"])],
   ["poetry", new Set(["add", "install", "update", "lock"])],
@@ -5535,6 +5577,8 @@ function configSourceToken(manager, token) {
     const opt = o.toLowerCase();
     if (opt.endsWith("<key>")) return token.startsWith(opt.slice(0, -5));
     if (opt === "-z") return token.startsWith("-z");
+    // Round 33 (T4): a short form with its value attached.
+    if (/^-[a-z]$/.test(opt) && token.startsWith(opt) && !token.startsWith("--")) return true;
     return token === opt || (manager === "go" && token === "-" + opt);
   });
 }
@@ -6538,11 +6582,21 @@ function accountToolRun(args, dialect, depth) {
 }
 
 /** npx, bunx, pnpx, `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x`: the command they run, read again. */
+/**
+ * Round 33 (T1): what a runner or exec sub-command runs, from its program word on: a program word
+ * that holds a blank or a shell operator is a whole command line given as one word (`bun exec "npm
+ * i x@1"`, `pnpm exec "..."`): read as a shell command line, as `sh -c` is (best effort, L3).
+ */
+function runnerProgram(rest, dialect, depth) {
+  const word = String(rest[0] ?? "");
+  if (/[\s;&|<>()`$]/.test(word)) return accountLine(rest.map(String).join(" "), "bash", depth + 1);
+  return accountCommand(rest, dialect, depth + 1);
+}
 function accountRunner(args, dialect, depth) {
   for (let i = 0; i < args.length; i++) {
     tick();
     const a = args[i];
-    if (a === "--") return args.length > i + 1 ? accountCommand(args.slice(i + 1), dialect, depth + 1) : null;
+    if (a === "--") return args.length > i + 1 ? runnerProgram(args.slice(i + 1), dialect, depth) : null;
     if (a.startsWith("-") && a.length > 1) {
       const flag = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
       if (RUNNER_SHELL.has(flag)) {
@@ -6556,7 +6610,7 @@ function accountRunner(args, dialect, depth) {
       }
       return `the runner option ${flag}`;
     }
-    return accountCommand(args.slice(i), dialect, depth + 1);
+    return runnerProgram(args.slice(i), dialect, depth);
   }
   return null;
 }
@@ -6841,10 +6895,10 @@ function declaredHeld(key, alone, ranged = []) {
  * commits them with the versions.
  */
 const SUBCOMMAND_PATHS = Object.freeze({
-  npm: Object.freeze({ pkg: ["set", "get", "delete", "fix"], config: "*", set: "*", cache: ["add", "ls", "clean", "verify", "npx"], exec: "*", init: "*", pack: "*" }),
+  npm: Object.freeze({ explore: "*", pkg: ["set", "get", "delete", "fix"], config: "*", set: "*", cache: ["add", "ls", "clean", "verify", "npx"], exec: "*", init: "*", pack: "*" }),
   pnpm: Object.freeze({ pkg: ["set", "get", "delete"], config: "*", c: "*", set: "*", store: ["add", "path", "prune", "status"], cache: ["delete", "list", "list-registries", "view"], dlx: "*", exec: "*", create: "*" }),
-  yarn: Object.freeze({ workspace: "*", workspaces: "*", config: "*", set: "*", dlx: "*", create: "*", global: ["add", "bin", "list", "remove", "upgrade", "upgrade-interactive"] }),
-  bun: Object.freeze({ pm: ["pack", "bin", "ls", "why", "whoami", "view", "version", "pkg", "hash", "hash-string", "hash-print", "cache", "migrate", "untrusted", "trust", "default-trusted", "scan"], x: "*", create: "*" }),
+  yarn: Object.freeze({ exec: "*", run: "*", workspace: "*", workspaces: "*", config: "*", set: "*", dlx: "*", create: "*", global: ["add", "bin", "list", "remove", "upgrade", "up"] }),
+  bun: Object.freeze({ run: "*", exec: "*", pm: ["pack", "bin", "ls", "why", "whoami", "view", "version", "pkg", "hash", "hash-string", "hash-print", "cache", "migrate", "untrusted", "trust", "default-trusted", "scan"], x: "*", create: "*" }),
   pip: Object.freeze({ config: "*", cache: ["dir", "info", "list", "remove", "purge"] }),
   uv: Object.freeze({ pip: ["install", "sync", "compile", "uninstall", "freeze", "list", "show", "tree", "check"], tool: ["run", "install", "upgrade", "list", "uninstall", "update-shell", "dir"], run: "*", python: ["list", "find", "pin", "dir", "install", "uninstall"], cache: ["clean", "prune", "dir"] }),
   poetry: Object.freeze({ self: ["show"], source: ["add", "remove", "show"], config: "*", env: ["info", "list", "remove", "use", "activate"], cache: ["clear", "list"], debug: ["info", "resolve"], run: "*" }),
@@ -6852,19 +6906,33 @@ const SUBCOMMAND_PATHS = Object.freeze({
   go: Object.freeze({ mod: ["download", "edit", "tidy", "vendor", "verify", "why", "graph", "init"], work: ["edit", "sync", "use", "init", "vendor"], env: "*", run: "*" }),
 });
 /**
+ * Round 33 (T1): the sub-words listed under a SUBCOMMAND_PATHS entry that name no release (each other
+ * listed sub-word reaches a reader that judges or holds what it names): "manager path word".
+ */
+const PATH_NO_PACKAGE = Object.freeze(new Set([
+  "npm pkg get", "npm pkg delete", "npm pkg fix", "npm cache ls", "npm cache clean", "npm cache verify", "npm cache npx",
+  "pnpm pkg get", "pnpm pkg delete", "pnpm store path", "pnpm store prune", "pnpm store status", "pnpm cache delete", "pnpm cache list", "pnpm cache list-registries", "pnpm cache view",
+  "yarn global bin", "yarn global list", "yarn global remove",
+  "bun pm pack", "bun pm bin", "bun pm ls", "bun pm why", "bun pm whoami", "bun pm view", "bun pm version", "bun pm hash", "bun pm hash-string", "bun pm hash-print", "bun pm cache", "bun pm migrate", "bun pm untrusted", "bun pm trust", "bun pm default-trusted", "bun pm scan",
+  "pip cache dir", "pip cache info", "pip cache list", "pip cache remove", "pip cache purge",
+  "uv pip compile", "uv pip uninstall", "uv pip freeze", "uv pip list", "uv pip show", "uv pip tree", "uv pip check", "uv tool list", "uv tool uninstall", "uv tool update-shell", "uv tool dir", "uv python list", "uv python find", "uv python pin", "uv python dir", "uv python install", "uv python uninstall", "uv cache clean", "uv cache prune", "uv cache dir",
+  "poetry self show", "poetry source show", "poetry env info", "poetry env list", "poetry env remove", "poetry env use", "poetry env activate", "poetry cache clear", "poetry cache list", "poetry debug info", "poetry debug resolve",
+  "go mod tidy", "go mod vendor", "go mod verify", "go mod why", "go mod graph", "go mod init", "go work sync", "go work use", "go work init", "go work vendor",
+]));
+/**
  * Round 32: the sub-commands that take no package which changes what is installed, each with the
  * line its tool's help gives (or what it does): such a command, read whole, names no release.
  */
 const NO_PACKAGE_SUBCOMMANDS = Object.freeze({
-  npm: Object.freeze({ access: "set access level on published packages", adduser: "add a registry user account", audit: "run a security audit (audit fix lets npm choose: advised)", bugs: "report bugs for a package in a web browser", ci: "clean install from the lockfile", completion: "tab completion", dedupe: "reduce duplication in the package tree", deprecate: "deprecate a version of a package", diff: "the registry diff command", "dist-tag": "modify package distribution tags", docs: "open documentation in a browser", doctor: "check the environment", edit: "edit an installed package", explain: "explain installed packages", explore: "browse an installed package", "find-dupes": "find duplication in the package tree", fund: "retrieve funding information", get: "get a value from the npm configuration", help: "get help on npm", "help-search": "search npm help documentation", hook: "manage registry hooks", "install-ci-test": "install a project with a clean slate and run tests", ll: "list installed packages, long", login: "login to a registry user account", logout: "log out of the registry", ls: "list installed packages", org: "manage orgs", outdated: "check for outdated packages", owner: "manage package owners", ping: "ping the npm registry", prefix: "display prefix", profile: "change settings on the registry profile", prune: "remove extraneous packages", publish: "publish a package", query: "dependency selector query", rebuild: "rebuild a package", repo: "open package repository page", restart: "restart a package", root: "display npm root", "run-script": "run arbitrary package scripts", sbom: "generate a software bill of materials", search: "search for packages", shrinkwrap: "lock down dependency versions for publication", star: "mark your favorite packages", stars: "view packages marked as favorites", start: "start a package", stop: "stop a package", team: "manage organization teams", test: "test a package", token: "manage authentication tokens", uninstall: "remove a package", unpublish: "remove a package from the registry", unstar: "remove an item from your favorite packages", version: "bump a package version", view: "view registry info", whoami: "display npm username" }),
-  pnpm: Object.freeze({ dedupe: "perform an install removing older dependencies in the lockfile", fetch: "fetch packages from the lockfile into the store", import: "generate the lockfile from another manager's lockfile", prune: "remove unnecessary packages", rebuild: "rebuild a package", rb: "rebuild a package", remove: "remove packages", rm: "remove packages", uninstall: "remove packages", un: "remove packages", unlink: "unlink a package", audit: "check installed packages for known security issues", licenses: "check licenses", list: "print all the versions of packages installed", ls: "print all the versions of packages installed", ll: "list, long", outdated: "check for outdated packages", why: "show the packages that depend on a package", "approve-builds": "approve dependencies for running scripts", "ignored-builds": "print ignored builds", run: "run a script", start: "run the start script", test: "run the test script", t: "run the test script", "install-test": "install, then test", it: "install, then test", bin: "print the directory of bins", deploy: "deploy a package from a workspace", doctor: "check for known common issues", init: "create a package.json", pack: "create a tarball from a package", publish: "publish a package", root: "print the effective modules directory", env: "manage Node.js versions", "cat-file": "print the content of a file from the store", "cat-index": "print the index file of a package from the store", "find-hash": "print the packages with a file of a hash" }),
-  yarn: Object.freeze({ access: "registry access", audit: "perform a vulnerability audit", autoclean: "clean unnecessary files", bin: "display the bin folder", cache: "manage the cache", check: "verify package dependencies", exec: "run a command", "generate-lock-entry": "generate a lock entry", help: "help", import: "generate the lockfile from node_modules", info: "show package information", init: "create a package.json", licenses: "list licenses", list: "list installed packages", login: "store registry username", logout: "clear registry username", node: "run node", outdated: "check for outdated packages", owner: "manage package owners", pack: "create a tarball", policies: "define project-wide policies", publish: "publish a package", remove: "remove a package", run: "run a script", tag: "manage dist-tags", team: "manage teams", unlink: "unlink a package", unplug: "unplug a package", version: "bump the version", versions: "display version information", why: "explain why a package is installed", "upgrade-interactive": "interactively choose updates (advised)" }),
-  bun: Object.freeze({ run: "run a file or script", test: "run tests", repl: "start a REPL", exec: "run a shell script", remove: "remove a dependency", rm: "remove a dependency", audit: "check installed packages for vulnerabilities", outdated: "display outdated dependencies", unlink: "unregister a local package", publish: "publish a package", info: "display package metadata", why: "explain why a package is installed", build: "bundle files", init: "start an empty project", feedback: "send feedback" }),
+  npm: Object.freeze({ access: "set access level on published packages", adduser: "add a registry user account", audit: "run a security audit (audit fix lets npm choose: advised)", bugs: "report bugs for a package in a web browser", ci: "clean install from the lockfile (operands are ignored)", completion: "tab completion", dedupe: "reduce duplication in the package tree (npm chooses within the ranges: advised)", deprecate: "deprecate a version of a package", diff: "fetch two releases to compare their files; installs nothing", "dist-tag": "modify package distribution tags", docs: "open documentation in a browser", doctor: "check the environment", edit: "edit an installed package", explain: "explain installed packages", "find-dupes": "find duplication in the package tree", fund: "retrieve funding information", get: "get a value from the npm configuration", help: "get help on npm", "help-search": "search npm help documentation", hook: "manage registry hooks", "install-ci-test": "ci, then the test script (operands are ignored)", ll: "list installed packages, long", login: "login to a registry user account", logout: "log out of the registry", ls: "list installed packages", org: "manage orgs", outdated: "check for outdated packages", owner: "manage package owners", ping: "ping the npm registry", prefix: "display prefix", profile: "change settings on the registry profile", prune: "remove extraneous packages", publish: "publish a package", query: "dependency selector query", rebuild: "rebuild installed packages (an operand selects which: no fetch)", repo: "open package repository page", restart: "run the restart script (a stated limit, L2)", root: "display npm root", "run-script": "run a project script, its words passed to the script (scripts are a stated limit, L2)", sbom: "generate a software bill of materials", search: "search for packages", shrinkwrap: "lock down dependency versions for publication", star: "mark your favorite packages", stars: "view packages marked as favorites", start: "run the start script (a stated limit, L2)", stop: "run the stop script (a stated limit, L2)", team: "manage organization teams", test: "run the test script (a stated limit, L2)", token: "manage authentication tokens", uninstall: "remove a package", unpublish: "remove a package from the registry", unstar: "remove an item from your favorite packages", version: "bump a package version", view: "view registry info", whoami: "display npm username" }),
+  pnpm: Object.freeze({ dedupe: "perform an install removing older dependencies in the lockfile", fetch: "fetch packages from the lockfile into the store", import: "generate the lockfile from another manager's lockfile", prune: "remove unnecessary packages", rebuild: "rebuild a package", rb: "rebuild a package", remove: "remove packages", rm: "remove packages", uninstall: "remove packages", un: "remove packages", unlink: "unlink a package", audit: "check installed packages for known security issues", licenses: "check licenses", list: "print all the versions of packages installed", ls: "print all the versions of packages installed", ll: "list, long", outdated: "check for outdated packages", why: "show the packages that depend on a package", "approve-builds": "approve dependencies for running scripts", "ignored-builds": "print ignored builds", run: "run a project script (a stated limit, L2)", start: "run the start script (L2)", test: "run the test script (L2)", t: "run the test script (L2)", "install-test": "install, then test", it: "install, then test", bin: "print the directory of bins", deploy: "deploy a package from a workspace", doctor: "check for known common issues", init: "create a package.json", pack: "create a tarball from a package", publish: "publish a package", root: "print the effective modules directory", env: "manage Node.js versions", "cat-file": "print the content of a file from the store", "cat-index": "print the index file of a package from the store", "find-hash": "print the packages with a file of a hash" }),
+  yarn: Object.freeze({ access: "registry access", audit: "perform a vulnerability audit", autoclean: "clean unnecessary files", bin: "display the bin folder", cache: "manage the cache", check: "verify package dependencies", "generate-lock-entry": "generate a lock entry", help: "help", import: "generate the lockfile from node_modules", info: "show package information", init: "create a package.json", licenses: "list licenses", list: "list installed packages", login: "store registry username", logout: "clear registry username", node: "run node", outdated: "check for outdated packages", owner: "manage package owners", pack: "create a tarball", publish: "publish a package", remove: "remove a package", tag: "manage dist-tags", team: "manage teams", unlink: "unlink a package", unplug: "unplug a package", version: "bump the version", versions: "display version information", why: "explain why a package is installed", "upgrade-interactive": "interactively choose updates (advised)" }),
+  bun: Object.freeze({ test: "run tests", repl: "start a REPL", remove: "remove a dependency", rm: "remove a dependency", audit: "check installed packages for vulnerabilities", outdated: "display outdated dependencies", unlink: "unregister a local package", publish: "publish a package", info: "display package metadata", why: "explain why a package is installed", build: "bundle files", init: "start a project (it adds the dev dependencies Bun chooses: a stated limit, L1)", feedback: "send feedback" }),
   pip: Object.freeze({ uninstall: "uninstall packages", freeze: "output installed packages in requirements format", inspect: "inspect the Python environment", list: "list installed packages", show: "show information about installed packages", check: "verify installed packages have compatible dependencies", search: "search PyPI", index: "inspect information available from package indexes", hash: "compute hashes of package archives", completion: "a helper command for command completion", debug: "show information useful for debugging", help: "show help for commands" }),
-  uv: Object.freeze({ init: "create a new project", remove: "remove dependencies from the project", tree: "display the project's dependency tree", venv: "create a virtual environment", build: "build Python packages", publish: "upload distributions to an index", version: "display uv's version", help: "display documentation for a command" }),
+  uv: Object.freeze({ init: "create a new project", remove: "remove dependencies from the project", tree: "display the project's dependency tree", venv: "create a virtual environment", build: "build Python packages (its build requirements are fetched as the project declares)", publish: "upload distributions to an index", version: "display uv's version", help: "display documentation for a command" }),
   poetry: Object.freeze({ sync: "install from the lockfile and remove what it does not hold", about: "information about Poetry", build: "build a package", check: "validate the content of pyproject.toml", help: "display help", init: "create a pyproject.toml", list: "list commands", new: "create a new project", publish: "publish a package", remove: "remove a package", search: "search for packages", show: "show information about packages", version: "show or bump the project's version", export: "export the lock file (plugin)", shell: "spawn a shell (plugin)" }),
   cargo: Object.freeze({ fetch: "fetch dependencies of a package from the network, as the lockfile says (advised)", rm: "remove dependencies (alias of remove)", build: "compile the current package", b: "build", check: "analyze the current package", c: "check", clean: "remove the target directory", clippy: "checks a package for common mistakes", config: "inspect configuration values", doc: "build a package's documentation", d: "doc", fix: "automatically fix lint warnings", fmt: "format the code", "generate-lockfile": "generate the lockfile (advised)", help: "help", info: "display information about a package", init: "create a new package in an existing directory", "locate-project": "print the path of Cargo.toml", login: "log in to a registry", logout: "remove an API token", metadata: "output resolved dependencies", new: "create a new package", owner: "manage owners of a crate", package: "assemble the local package into a tarball", pkgid: "print a package id", publish: "upload a package to the registry", "read-manifest": "print Cargo.toml as JSON", remove: "remove dependencies", report: "generate and display reports", run: "run a binary or example", r: "run", rustc: "compile with extra options", rustdoc: "build documentation with options", search: "search packages on crates.io", test: "run tests", t: "test", bench: "run benchmarks", tree: "display a tree of dependencies", uninstall: "remove a binary", vendor: "vendor all dependencies locally", "verify-project": "check Cargo.toml", version: "show version", yank: "remove a version from the index" }),
-  go: Object.freeze({ bug: "start a bug report", build: "compile packages and dependencies", clean: "remove object files", doc: "show documentation", fix: "apply fixes", fmt: "gofmt package sources", generate: "generate Go files", help: "help", list: "list packages or modules", telemetry: "manage telemetry", test: "test packages", tool: "run a specified go tool", version: "print Go version", vet: "report likely mistakes" }),
+  go: Object.freeze({ bug: "start a bug report", build: "compile packages and dependencies", clean: "remove object files", doc: "show documentation", fix: "apply fixes", fmt: "gofmt package sources", generate: "run the //go:generate commands written in the source files (a stated limit, L2: scripts)", help: "help", list: "list packages or modules (-m x@v looks a version up, installs nothing)", telemetry: "manage telemetry", test: "test packages", tool: "run a tool the module's go.mod declares (fetched as go.mod says)", version: "print Go version", vet: "report likely mistakes" }),
 });
 /** Round 32: on a command the hook examines, the part not read when the sub-command path is on no table, or null. */
 function pathHeld(manager, sub, rest) {
@@ -6892,6 +6960,13 @@ function accountJs(manager, args, dialect, depth, reader) {
   if (isRunnerCommand(manager, sub)) return accountRunner(rest, dialect, depth);
   if ((manager === "pnpm" || manager === "yarn") && managerWord(programName(sub))) return accountCommand([sub, ...rest], dialect, depth + 1);
   if (manager === "npm" && verb === "pkg") return accountNpmPkg(rest);
+  // Round 33 (T1): `npm explore <pkg> -- <command>` runs the words after -- in the package's folder.
+  if (manager === "npm" && verb === "explore") {
+    const dash = rest.indexOf("--");
+    return dash >= 0 && dash + 1 < rest.length ? runnerProgram(rest.slice(dash + 1), dialect, depth) : null;
+  }
+  // Round 33 (T1): `yarn global upgrade|up|upgrade-interactive x@v` is read as `yarn upgrade x@v` is.
+  if (manager === "yarn" && sub === "global" && ["upgrade", "up"].includes(rest[0])) return accountJs("yarn", ["upgrade", ...rest.slice(1)], dialect, depth, reader);
   // Round 32 (F1, F5): `pnpm pkg set` and `bun pm pkg set` are npm's pkg set; `pnpm store add` fetches what it names.
   if (manager === "pnpm" && sub === "pkg") return accountNpmPkg(rest);
   if (manager === "bun" && sub === "pm" && rest[0] === "pkg") return accountNpmPkg(rest.slice(1));
@@ -7170,7 +7245,7 @@ const NAMED_OPTIONS = {
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
 // THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
-export { RUNNER_FETCH_FORMS, SUBCOMMAND_PATHS, NO_PACKAGE_SUBCOMMANDS, ACCOUNT_TABLES, CREDENTIAL_KEYS, JS_MANAGERS, PNPM_INERT_KEYS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
+export { RUNNER_FETCH_FORMS, PATH_NO_PACKAGE, SUBCOMMAND_PATHS, NO_PACKAGE_SUBCOMMANDS, ACCOUNT_TABLES, CREDENTIAL_KEYS, JS_MANAGERS, PNPM_INERT_KEYS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {

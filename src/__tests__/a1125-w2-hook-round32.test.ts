@@ -45,7 +45,7 @@ describe("F1, F5: a sub-command path on no table is not read", () => {
   // avoid verdict, and by a variable: each examined command is judged, held, or on a table.
   const PACKAGE: Record<string, string> = { npm: "lodash@4.17.20", pnpm: "lodash@4.17.20", yarn: "lodash@4.17.20", bun: "lodash@4.17.20", pip: "requests==2.19.0", uv: "requests==2.19.0", poetry: "requests==2.19.0", cargo: "regex@=1.5.4", go: "golang.org/x/text@v0.3.0" };
   for (const [manager, { version, commands }] of Object.entries(FIXTURE)) {
-    if (manager === "note") continue;
+    if (manager === "note" || manager === "audit") continue;
     for (const sub of commands) {
       for (const tail of [PACKAGE[manager], "$X"]) {
         const command = `${manager} ${sub} ${tail}`;
