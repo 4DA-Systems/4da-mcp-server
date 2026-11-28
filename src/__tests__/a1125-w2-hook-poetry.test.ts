@@ -84,8 +84,9 @@ describe("round 25 (W1): a Poetry source the file does not declare is held", () 
 
 describe("what Poetry takes from elsewhere stays unread", () => {
   it.each([
-    ["a path source", `${HEAD}dependencies = { requests = { path = "../requests", version = "2.19.0" } }\n`],
-    ["a git source", `${HEAD}dependencies = { requests = { git = "https://example.com/r.git", version = "2.19.0" } }\n`],
+    // Round 28 (G3): a path or git source is own unless it also names a version that bounds something.
+    ["a path source", `${HEAD}dependencies = { requests = { path = "../requests" } }\n`],
+    ["a git source", `${HEAD}dependencies = { requests = { git = "https://example.com/r.git", version = "*" } }\n`],
     ["an inline table that holds no dependency", `${HEAD}urls = { changelog = "https://example.com/2.19.0" }\n`],
   ])("%s", (_label, text) => {
     s.ledger([AVOID]);

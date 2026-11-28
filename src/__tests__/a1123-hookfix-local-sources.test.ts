@@ -30,9 +30,10 @@ function onlyReal(run: { decision: string; text: string; items: Array<Record<str
 
 describe("Cargo: path, git and another registry", () => {
   it.each([
-    ['mylib = { path = "../mylib", version = "0.3.0" }'],
-    ['mylib = { git = "https://github.com/acme/mylib", version = "0.3.0" }'],
-    ['mylib = { version = "0.3.0", git = "https://example.com/x", branch = "main" }'],
+    // Round 28 (G3): own only without a version; with one the version is judged (below).
+    ['mylib = { path = "../mylib" }'],
+    ['mylib = { git = "https://github.com/acme/mylib" }'],
+    ['mylib = { git = "https://example.com/x", branch = "main" }'],
   ])("inline: %s", (line) => {
     // Round 25 (W1): a registry name is resolved from .cargo/config.toml; here a host private by its shape.
     s.file(".cargo/config.toml", '[registries.corp]\nindex = "sparse+https://cargo.corp.internal/index/"\n');
@@ -42,13 +43,13 @@ describe("Cargo: path, git and another registry", () => {
 
   it("table form and dotted keys", () => {
     const file = s.file("Cargo.toml", CARGO);
-    onlyReal(s.edit(file, 'anyhow = "1.0.89"\n', 'anyhow = "1.0.89"\n\n[dependencies.mylib]\nversion = "0.3.0"\npath = "../mylib"\n'), "mylib");
-    onlyReal(s.edit(file, 'anyhow = "1.0.89"\n', 'anyhow = "1.0.89"\nmylib.version = "0.3.0"\nmylib.path = "../mylib"\n'), "mylib");
+    onlyReal(s.edit(file, 'anyhow = "1.0.89"\n', 'anyhow = "1.0.89"\n\n[dependencies.mylib]\npath = "../mylib"\n'), "mylib");
+    onlyReal(s.edit(file, 'anyhow = "1.0.89"\n', 'anyhow = "1.0.89"\nmylib.path = "../mylib"\n'), "mylib");
   });
 
-  it("a bump of a path dependency's version goes ahead", () => {
+  it("round 28 (G3): a version beside a path or git source is judged, and a bump of it", () => {
     const file = s.file("Cargo.toml", CARGO + 'mylib = { path = "../mylib", version = "0.3.0" }\n');
-    onlyReal(s.edit(file, 'version = "0.3.0"', 'version = "0.4.0"'), "mylib");
+    expect(s.edit(file, 'version = "0.3.0"', 'version = "0.4.0"').items?.map((i) => i.package)).toEqual(["mylib"]);
   });
 
   it("a crates.io dependency in the same table is still held", () => {

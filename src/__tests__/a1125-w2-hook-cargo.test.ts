@@ -96,8 +96,9 @@ describe("what changes no version is not held, with the avoid on record", () => 
 
 describe("what cargo does not read as a crates.io dependency stays unread", () => {
   it.each([
-    ["a path dependency in a root inline table", `dependencies = { smallvec = { path = "../sv", version = "1.6.0" } }\n${P}`],
-    ["a git dependency as a root dotted key", `dependencies.smallvec = { git = "https://example.com/sv", version = "1.6.0" }\n${P}`],
+    // Round 28 (G3): a path or git entry is the project's own only without a version.
+    ["a path dependency in a root inline table", `dependencies = { smallvec = { path = "../sv" } }\n${P}`],
+    ["a git dependency as a root dotted key", `dependencies.smallvec = { git = "https://example.com/sv" }\n${P}`],
     ["a dotted key under [package.metadata]", `${P}\n[package.metadata.x]\ndependencies.smallvec = "1.6.0"\n`],
     ["[package] fields", P.replace('"0.1.0"', '"1.6.0"')],
     ["a workspace reference", `${P}\n[dependencies]\nsmallvec = { workspace = true }\n`],

@@ -102,3 +102,5 @@ export const CONFIG_SOURCE_OPTIONS: Readonly<Record<string, readonly string[]>>;
 export const INDEX_TABLE_KEYS: Readonly<Record<string, readonly string[]>>;
 /** Round 27 (E4): npm option names (abbreviations read against them). */
 export const NPM_OPTIONS: readonly string[];
+/** Round 28 (F11): the JavaScript package managers an npm-family runner may run (their own command is read). */
+export const JS_MANAGERS: ReadonlySet<string>;
