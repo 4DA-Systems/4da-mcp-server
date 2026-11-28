@@ -139,8 +139,8 @@
  * command names, and one that a requirements file names on an include or constraint line, is read from disk at the
  * call, the latter relative to the file that names it, and its entries are judged as the call's;
  * one the hook cannot read, one past REQUIREMENTS_DEPTH levels, one past REQUIREMENTS_FILES files
- * in all for each file a command or an edit names (every include it reaches counted, siblings
- * too), one named by a command that changes its folder, and one holding an option line not on
+ * in all for each file a command or an edit names (every distinct file it reaches counted once,
+ * siblings too), one named by a command that changes its folder, and one holding an option line not on
  * REQUIREMENTS_INERT_OPTIONS, are denied as not read (requirementFileInstalls, includeRequirements)
  * [test: a1125-w2-hook-round25, a1125-w2-hook-round29]. P3: a write of a manager's own configuration by one of its
  * CONFIG_WRITE_VERBS is denied as not read unless each key it writes is on INERT_CONFIG_KEYS, and a
@@ -187,7 +187,7 @@
  * is the check ledger file or in the data folder that holds it (the path is checked, not the text
  * the call writes), a Bash or PowerShell command that names that file or folder, or whose text holds
  * check-ledger anywhere except where it is followed by a JavaScript or TypeScript source extension
- * (optionally after .d. or .test.), and a command whose
+ * (optionally after .d. or .test.) as the end of the word, and a command whose
  * text holds, without regard to letter case, the data folder's base name of any length, the name of
  * the data folder's setting or the ledger file's base name, with no ASCII letter, digit,
  * underscore, dot or hyphen directly before it and, after it, the end of the text or a character
@@ -340,8 +340,10 @@
  * order mark past the start make the file not read. ini (.npmrc, pip.conf, pip.ini): blank, a comment
  * (# or ; first), a [section], or key=value with no leading blank, no trailing backslash and no # or ;
  * inside an unquoted value; pip's extra-index-url, find-links, trusted-host, no-binary and
- * only-binary take continuation lines indented by spaces. .yarnrc: `key value` lines with no leading
- * blank. .yarnrc.yml: the plain-line grammar of pnpm-workspace.yaml (no anchor, alias, tag, flow
+ * only-binary take continuation lines indented by spaces. .yarnrc (round 30, J2): one key and one
+ * value per line (a bare token or one quoted string), optionally a # comment after them, and nothing
+ * else, no leading blank: Yarn 1's parser reads further pairs on a line, a colon form and indented
+ * nested blocks, none of which is read. .yarnrc.yml: the plain-line grammar of pnpm-workspace.yaml (no anchor, alias, tag, flow
  * collection or second document), indentation by spaces only, an indented line only under a `key:`
  * line with no value. TOML config files and the TOML manifests: the strict walk (tomlValid): every
  * line a [table] or [[table]] header, a key = value, a comment or blank; a value a string (basic
@@ -1617,7 +1619,7 @@ function includeRequirements(out, inc, base, depth, seen) {
   seen.add(path.toLowerCase());
   const text = readManifest(path);
   if (text === null) return refuse(`${callData(inc.file)}, a requirements file named by ${inc.kind} that the hook could not read`, "No dependency_check verdict releases this: the file it names must be readable (a path relative to the file that names it), so that the versions in it are judged.");
-  for (const line of text.replace(/\\\r?\n/g, "").split("\n")) {
+  for (const line of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
     tick();
     const nested = requirementsInclude(line);
     if (nested) {
@@ -1637,7 +1639,7 @@ function includeRequirements(out, inc, base, depth, seen) {
 const REQUIREMENTS_INERT_OPTIONS = Object.freeze(["--hash", "-e", "--editable", "-r", "--requirement", "-c", "--constraint"]);
 function requirementOptions(text, base, depth = 1, seen = new Set()) {
   const out = new Set();
-  for (const raw of String(text).replace(/\\\r?\n/g, " ").split("\n")) {
+  for (const raw of String(text).replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
     if (!line.startsWith("-")) continue;
     const name = /^(-{1,2}[A-Za-z][\w-]*)/.exec(line)?.[1] ?? line;
@@ -1874,6 +1876,9 @@ function pnpmWorkspaceVersions(text, out) {
       extSection = null;
       continue;
     }
+    // Round 30 (J1): a line under a version section whose key the hook does not read (an empty key, a
+    // name past 214 characters) is not read, never dropped.
+    if (!m && top !== null) refuse(`${callData(trimmed)}: a line under pnpm-workspace.yaml's ${callData(top)} whose name this hook does not read`);
     if (!m || top === null) continue;
     const key = m[1] ?? m[2] ?? m[3];
     const value = yamlScalar(m[4]);
@@ -1917,7 +1922,11 @@ function pnpmWorkspaceVersions(text, out) {
       if (!d) continue;
       spec = d.spec;
     }
-    if (name === null) continue;
+    if (name === null) {
+      // Round 30 (J1): an override key the hook cannot resolve to one package is not read, never dropped.
+      refuse(`the override key ${callData(key)}, which this hook does not resolve to one package`);
+      continue;
+    }
     if (top === "catalogs" && (catalog === null || indent <= catalogIndent)) continue;
     const section = top === "catalogs" ? `catalogs.${catalog}` : top;
     // Round 25 (S5): a key given twice under one section is not read (YAML readers differ on it).
@@ -2269,7 +2278,7 @@ const GO_LOCAL_PATH = /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|[A-Za-z]:[\\/])/;
 function goDirectives(text, block = null) {
   const requires = [];
   const local = [];
-  for (const raw of text.split("\n")) {
+  for (const raw of text.split(/\r?\n/)) {
     tick();
     // go.mod allows a module path or version in double quotes (`replace x => "github.com/fork/x" v1.0.0`).
     // The comment is dropped first; a line still over the bound is refused, not skipped.
@@ -2429,7 +2438,7 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     // Round 29 (H4): the files of -r and -c are counted over the whole file read (siblings too), not per chain.
     const seen = new Set();
     // pip joins a line that ends in a backslash with the next (`requests\` + `==2.0.0`).
-    for (const line of text.replace(/\\\r?\n/g, "").split("\n")) {
+    for (const line of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
       tick();
       // Round 25 (S1): `-r <file>` and `-c <file>` are read from disk, their lines judged as this file's.
       const inc = requirementsInclude(line);
@@ -3133,7 +3142,11 @@ function repeatable(changes) {
   const out = [];
   for (const c of changes) {
     if (typeof c?.name === "string" && c.name.length > 214) refuse("a package name over 214 characters");
-    if (typeof c?.name !== "string" || !NAME_TEXT.test(c.name)) continue;
+    // Round 30 (J1): an entry whose name the hook does not read as a package name is not read, never dropped.
+    if (typeof c?.name !== "string" || !NAME_TEXT.test(c.name)) {
+      if (!(typeof c?.name === "string" && c.name.length > 214)) refuse(`a dependency name this hook does not read: ${callData(String(c?.name ?? ""))}`);
+      continue;
+    }
     // A version past the bound is held as not read, never dropped (round 3 of the hook review).
     const long = typeof c.to === "string" ? specTooLong(c.to) : null;
     if (long) {
@@ -3358,9 +3371,12 @@ function configKeys(config, text) {
       const line = raw.trim();
       if (!line || (line.startsWith("#") && raw.startsWith("#"))) continue;
       if (/^\s/.test(raw)) return null;
-      const m = /^("[^"]+"|[^\s"#]+)\s+(.*)$/.exec(line);
-      if (!m || m[2].endsWith("\\")) return null;
-      out.set(m[1].replace(/"/g, "").toLowerCase(), m[2].trim());
+      // Round 30 (J2): exactly ONE key and ONE value (a bare token or one quoted string), then at most
+      // a # comment, and nothing else. Yarn 1's lockfile-style parser reads further key / value pairs on one line, and a
+      // colon form and indented (nested) lines too: none of these is read.
+      const m = /^("(?:[^"\\\n]|\\.)+"|[^\s"#:]+)[ \t]+("(?:[^"\\\n]|\\.)*"|[^\s"#:]+)(?:[ \t]+#.*)?[ \t]*$/.exec(line);
+      if (!m) return null;
+      out.set(m[1].replace(/"/g, "").toLowerCase(), m[2]);
     }
     return out;
   }
@@ -4368,7 +4384,7 @@ function poetrySpec(word) {
   const at = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:\[[^\]]{0,200}\])?@(.+)$/.exec(word);
   if (at) {
     const v = at[2].trim();
-    if (v.toLowerCase() === LATEST) return { name: at[1], spec: LATEST };
+    if (v === LATEST) return { name: at[1], spec: LATEST };
     if (/[/:]/.test(v)) return null;
     if (specTooLong(v)) return refuse(specTooLong(v));
     if (exactFor("PyPI", v) || /^[~^]\s*\d/.test(v)) return { name: at[1], spec: v };
@@ -4597,7 +4613,7 @@ function jsInstalls(manager, args) {
     }
     const version = jsVersion(raw);
     if (version) out.push({ ecosystem: "npm", name, spec: version });
-    else if (raw.trim().toLowerCase() === LATEST) out.push({ ecosystem: "npm", name, spec: LATEST });
+    else if (raw.trim() === LATEST) out.push({ ecosystem: "npm", name, spec: LATEST });
     else if (isDistTag(raw.trim())) out.push({ ecosystem: "npm", name, spec: raw.trim(), tag: true });
   }
   return out;
@@ -4865,8 +4881,12 @@ function npmPkgSet(words, json) {
     const override = under === 2 || parts[0] === "overrides" || parts[0] === "resolutions";
     const name = override ? overrideTarget(parts.at(-1)) : parts.at(-1);
     // The value as package.json reads it: a version or range, `latest`, an alias (`npm:lodash@4.17.20`).
+    // Round 30 (J1): an override key the hook cannot resolve to one package is not read, never dropped.
+    if (!name) refuse(`the override key ${callData(parts.at(-1))}, which this hook does not resolve to one package`);
     const d = name ? npmDeclared(name, value) : null;
     if (d && NAME_TEXT.test(d.name)) out.push({ ecosystem: "npm", name: d.name, spec: d.spec });
+    // Round 30 (J1): a name the hook does not read is not read, never dropped.
+    else if (d) refuse(`a dependency name this hook does not read: ${callData(String(d.name))}`);
   }
   return out;
 }
@@ -5678,7 +5698,7 @@ function jsOperand(word) {
     else return npmBareName(raw.slice(4)) ? { name: raw.slice(4) } : null;
   }
   const v = raw.trim();
-  return quietly(() => jsVersion(raw) !== null) || v.toLowerCase() === LATEST || isDistTag(v) ? { name } : null;
+  return quietly(() => jsVersion(raw) !== null) || v === LATEST || isDistTag(v) ? { name } : null;
 }
 
 /**
@@ -6789,7 +6809,7 @@ function accountNpmPkg(rest) {
     const section = kv.slice(0, eq).split(/[.[]/)[0];
     if (!NPM_PKG_SECTIONS.has(section) && section !== "pnpm" && section !== "overrides" && section !== "resolutions") continue;
     const value = kv.slice(eq + 1);
-    if (value.toLowerCase() !== LATEST && quietly(() => jsVersion(value)) === null) return `npm pkg set ${kv.slice(0, 200)}`;
+    if (value !== LATEST && quietly(() => jsVersion(value)) === null) return `npm pkg set ${kv.slice(0, 200)}`;
   }
   return null;
 }
@@ -8358,7 +8378,8 @@ function denialFor(introduced, ledger, dir, what) {
  * name. And since the hook denies only where
  * a ledger exists, a removed ledger means no denials until the server starts again.
  */
-const LEDGER_MENTION = /check-ledger(?!\.(?:d\.)?(?:test\.)?[cm]?[jt]sx?\b)/;
+// Round 30: the source extension must END the word (check-ledger.mjs.bak and .ts.orig name the ledger).
+const LEDGER_MENTION = /check-ledger(?!\.(?:d\.)?(?:test\.)?[cm]?[jt]sx?(?![A-Za-z0-9_.-]))/;
 /** Programs that only show a file or a folder: one of them, alone on the line, may name the ledger. */
 const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "more", "wc", "get-content", "gc", "ls", "dir", "get-childitem", "gci", "du", "grep", "select-string", "sls"]);
 
@@ -8680,9 +8701,11 @@ function judgeCall(input, env, now) {
     if (specTooLong(spec)) refuse(specTooLong(spec));
     // Round 29: a range that bounds nothing (`>=0`, `>=0.0.0`, `*.x`) is the reading latest in a command
     // too (P3); `*` written in a command stays the reading `*`.
-    else if (NAME_TEXT.test(c.name) && !c.tag && !c.url && spec !== "*" && spec.toLowerCase() !== LATEST && specText(c.spec) === spec && boundsNothing(spec)) changes.push({ ...c, spec: LATEST });
+    else if (NAME_TEXT.test(c.name) && !c.tag && !c.url && spec !== "*" && spec !== LATEST && specText(c.spec) === spec && boundsNothing(spec)) changes.push({ ...c, spec: LATEST });
     else if (NAME_TEXT.test(c.name) && (specText(c.spec) === spec || (c.tag && isDistTag(spec)) || c.url)) changes.push(c);
     else if (String(c.name).length > 214) refuse("a package name over 214 characters");
+    // Round 30 (J1): a name the hook does not read as a package name is not read, never dropped.
+    else if (!NAME_TEXT.test(c.name)) refuse(`a dependency name this hook does not read: ${callData(String(c.name))}`);
   }
   overBudget();
   const unread = () => unreadPart !== null && (unreadInstalls || mayInstall(input));
