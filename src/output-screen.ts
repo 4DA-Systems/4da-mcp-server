@@ -103,6 +103,19 @@ export const byShape = (value: string) => `${value.slice(0, 4)}... (${value.leng
 
 /** A text with every CREDENTIAL_SHAPES token rendered by shape (overlapping matches: the earliest, longest wins). */
 export function screenText(text: string): string {
+  // Round 17, C5(b): to a fixed point. Masking one token can leave the next at a word boundary (an AWS key id glued to
+  // sk_test_...: "AKIA... (20 characters)sk_test_..."), so the text is screened again until no shape matches; each
+  // round removes at least one token, and the rounds are bounded.
+  let current = text;
+  for (let round = 0; round < 16; round++) {
+    const next = screenOnce(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
+
+function screenOnce(text: string): string {
   const found = credentialSpans(text).sort((x, y) => x[0] - y[0] || y[1] - x[1]);
   if (found.length === 0) return text;
   let out = "";

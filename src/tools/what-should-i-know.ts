@@ -14,17 +14,17 @@
  * 1. The level rests on the caller's declaration: each package declared public is checked at the `version` it states, and a public entry without `version` never leaves the answer at safe_to_delegate. [tests: a1137-confirm-review12 (generated), a1132-round9]
  * 2. A name the briefing read and reported (a seen kind marked "read" in `SEEN_KINDS`) that the caller dismissed holds the answer from safe_to_delegate, with its `DISMISSED_READ` text, or `DISMISSED_INSTEAD` where the call declared a name one edit from it instead. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
  * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), and a path under such a name at a `/` (a Go module's sub-path, a scope's package), is never in a request the call makes: `refusePrivateRequest`, the choke point every registry, proxy, OSV.dev and GitHub request passes, refuses it under the call's `withRequestVeto`, and a public entry in or under that set is refused; a public parent of a private path is a name of its own, sent when the caller declares it public. [tests: a1138-round15 (generated), a1137-round14 (property)]
- * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`), whole, is never in any response the server returns (`screenJsonRpc`, at the transport's send: each stdio message, and over HTTP each body chunk of any type and each header value, by whole lines, so a token split across chunks is screened whole; `credentialSpans`, the one matcher both screens use, matches what `CREDENTIAL_SHAPES` matches: a shape of `BOUNDARY_SHAPES` at a word boundary, each other shape glued to the text before it or not), outside the `task` field of a what_should_i_know answer. [tests: a1139-round16b (generated), a1139-round16 (generated), a1138-round15 (generated), a1137-round14 (generated)]
- * 5. That `task` field is the reading copy of the caller's task, as `readingCopy` makes it: control characters removed, percent-escapes decoded, default-ignorable characters (`DEFAULT_IGNORABLE`, the Unicode property) removed, NFKC-folded with each dash and slash look-alike as - and /, markup dropped, line continuations joined, each run of blanks one space, and a line over `MAX_READ_LINE` characters left out; where it differs from the caller's task in more than blanks (space separators, tabs, line breaks) the answer carries `TASK_FOLDED`. [tests: a1139-round16 (generated), a1138-round15, a1136-round13]
+ * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`), whole, is never in any response the server returns (`screenJsonRpc`, at the transport's send: each stdio message, and over HTTP each body chunk of any type and each header value, by whole lines, so a token split across chunks is screened whole; `credentialSpans`, the one matcher both screens use, matches what `CREDENTIAL_SHAPES` matches: a shape of `BOUNDARY_SHAPES` at a word boundary, each other shape glued to the text before it or not), outside the `task` field of a what_should_i_know answer; a text is screened until no shape is left in it, and a request whose id has a credential's shape is not run and is answered with id null (`CREDENTIAL_ID_REFUSED`). [tests: a1140-round17 (generated), a1139-round16b (generated), a1139-round16 (generated), a1138-round15 (generated), a1137-round14 (generated)]
+ * 5. That `task` field is the reading copy of the caller's task, as `readingCopy` makes it: control characters removed, percent-escapes decoded, default-ignorable characters (`DEFAULT_IGNORABLE`, the Unicode property) removed, NFKC-folded with each Dash_Punctuation character and each of `DASH_EXTRAS` as - and each of `SLASH_LOOKALIKES` as /, emphasis dropped where `MARKUP_RULE` holds, tags dropped, line continuations joined, each run of blanks one space, and a line over `MAX_READ_LINE` characters left out; where it differs from the caller's task in more than blanks (space separators, tabs and line breaks, U+2028, U+2029 and NEL among them) the answer carries `TASK_FOLDED`. [tests: a1140-round17 (generated), a1139-round16 (generated), a1138-round15, a1136-round13]
  * 6. A declared item's check ledger line is the line dependency_check writes for the same item: its engine and `recordVerdicts` for a looked-up item, `checkAndRecord` for one the project's configuration makes private. [tests: a1136-round13]
  * 7. The briefing also checks versions it happens to read in the task, for example on a command's operand, in a snippet or beside a name; that reading is best effort, and a version written in a spelling it does not read is not checked. [tests: a1134-round11, a1135-round12]
- * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of a package the task touches (one it declares or adds, or an installed dependency `detectTaskPackages` finds named in the task), installed malware anywhere in the project (`INSTALLED_MALWARE`) or an installed npm security placeholder (`INSTALLED_PLACEHOLDER`, found by the scan's own detector), each human_only whatever the task, running install drift, a decision conflict (`decisionConflictsFor`, over the declared names, the names the briefing read in the task and the installed ones it touches), a name waiting in to_confirm, or something the briefing noticed it could not read; another version-confirmed finding of the project is listed in `advisories` with scope "project" and leaves the level as it is, and a safe reason then says so (`PROJECT_FINDINGS_LISTED`). [tests: a1139-round16, a1139-round16b, a1139-confirm-review14, a1135-confirm-review10, a1137-confirm-review12]
+ * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of a package the task touches (one the call declares, public or private, one the briefing read in the task, or an installed dependency `detectTaskPackages` finds named in the task; the installed copy of a declared package counts even where the declared version is its fix, review_needed with that said), installed malware (`INSTALLED_MALWARE`) or an installed npm security placeholder (`INSTALLED_PLACEHOLDER`, found by the scan's own detector) anywhere in the full scan (dev, optional and peer dependencies, transitive copies, sub-projects, and the copy on disk in node_modules), each human_only whatever the task, running install drift, a decision conflict (`decisionConflictsFor`, over the declared names, the names the briefing read in the task and the installed ones it touches), a name waiting in to_confirm, or something the briefing noticed it could not read; another version-confirmed finding of the project is listed in `advisories` with scope "project" and leaves the level as it is, and a safe reason then says so (`PROJECT_FINDINGS_LISTED`). [tests: a1140-round17 (generated), a1139-round16, a1139-round16b, a1139-confirm-review14, a1135-confirm-review10, a1137-confirm-review12]
  * 9. When the briefing notices it cannot read a command or a snippet whole, for example a quote problem, a source option, or a line over `MAX_READ_LINE` characters, it says so with `unreadableReason` and the answer is not safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
  * 10. When the briefing notices a command of a manager it does not read, for example gem, brew or composer at a command position with its own verb, it says so, its words are not offered or looked up, and the answer is not safe_to_delegate; it does not promise to notice each such command. [tests: a1138-round15, a1137-round14]
  * 11. With a package-source spelling of `SOURCE_SPELLINGS` in the task, the names the task adds are not looked up (`SOURCE_HELD`); the answer is held from safe_to_delegate when that held a name, and a task that holds such a spelling but no name to hold can be safe. [tests: a1137-confirm-review12 (generated), a1127-confirm-promises]
  * 12. A call reads at most `MAX_SNIPPETS` snippets and checks at most `WORD_SCAN_CAP` distinct words of its own for near-miss names, and checks its deadline between stages and lines; past a bound the answer says which and is not safe_to_delegate. [tests: a1133-round10, a1134-round11]
  * 13. The cost bounds are measured, not enforced by the dispatcher: the CPU tests keep each generated input of up to 200,000 characters under 3 s of child CPU. [tests: a1134-round11, a1135-round12, a1136-round13]
- * 14. A text constant is said only where its rule in `TEXT_RULES` holds, for example `RESTS_ON_DECLARATION` ends a safe reason, `BEST_EFFORT_READING` precedes it in a call that declared a package, `STAYS_REVIEW` is not said with safe_to_delegate, and `NO_DECISION_CONFLICT` is said where `decisionConflictsFor` found no conflict. [tests: a1137-confirm-review12 (generated), a1139-confirm-review14]
+ * 14. A text constant, and each fixed sentence the briefing's modules hold (`SENTENCES`, rebuilt from the source by `literalsOf`), is said only where its rule in `TEXT_RULES` holds, for example `RESTS_ON_DECLARATION` ends a safe reason, `BEST_EFFORT_READING` precedes it in a call that declared a package, `STAYS_REVIEW` is not said with safe_to_delegate, and `NO_DECISION_CONFLICT` is said where `decisionConflictsFor` found no conflict. [tests: a1137-confirm-review12 (generated), a1139-confirm-review14, a1140-round17]
  * 15. `to_confirm` lists names the briefing noticed: a prompt for the caller, not a complete reading. [tests: a1134-round11]
  * 16. The project's own scan reads the installed dependencies and sends their names unless the project's configuration marks them private; a declaration does not change that, and no task text goes to an embedding provider. [tests: a1127-confirm-promises, a1136-round13]
  * 17. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`) in an argument of any tool (a shape of `BOUNDARY_SHAPES` at a word boundary, the others glued or not) is not sent to any host and not stored: `screenArguments` refuses a name, version, ecosystem or path holding one (`CREDENTIAL_REFUSAL`), and for what_should_i_know each string argument but `task` and `not_packages` (the task words a call dismisses, compared and not sent; its `packages` refused entry by entry), and masks it in the free text a tool stores or sends on purpose. [tests: a1139-round16, a1139-round16b (generated), a1137-round14b (generated)]
@@ -484,7 +484,8 @@ export async function executeWhatShouldIKnow(
 const NEVER_SEND = new WeakMap<object, { forbidden: (name: string, eco?: string | null) => boolean }>();
 
 /** Blanks only (space separators, tab, line breaks): not U+FEFF, which JS \s counts and the copy removes (round 16, C5). */
-const BLANKS = /[\p{Zs}\t\n\v\f\r]+/gu;
+// Round 17, C5(d): NEL, U+2028 and U+2029 are line breaks too.
+const BLANKS = /[\p{Zs}\t\n\v\f\r\u0085\u2028\u2029]+/gu;
 const withoutBlanks = (text: string) => text.replace(BLANKS, "");
 
 /** Steps 1 to 4 of readingCopy, line by line. */
@@ -589,7 +590,7 @@ async function executeBriefing(
     const exact = detectTaskPackages(depsText, files, deps, MAX_TASK_PACKAGES + 1).filter((p) => notConsumed(p.name)).map(bindVersion);
     return [...exact.slice(0, MAX_TASK_PACKAGES), ...detectFamilyPackages(task, files, deps, exact.slice(0, MAX_TASK_PACKAGES))];
   };
-  const { scan, scanStatus, scanBlock } = await awaitScan(liveIntel, () => taskPackages().some((p) => p.dev));
+  const { scan, scanStatus, scanBlock } = await awaitScan(liveIntel);
 
   // ── 1. The dependencies this task touches ─────────────────────────────
   const packages = taskPackages();
@@ -1140,9 +1141,23 @@ async function executeBriefing(
     });
   }
   const taskKeys = new Set(packages.map((p) => `${p.ecosystem}\0${p.name}`));
-  if (scan) pushAll(advisories, projectAdvisories(scan, taskKeys));
+  // Round 17, C2: a package the task touches is also one the call declares (public or private) or the briefing read in
+  // the task (looked up, a version it read, a name waiting in to_confirm), compared by forbiddenKey's fold.
+  const touchedFold = new Set([...declared.entries.map((d) => d.name), ...newPackages.map((p) => p.name), ...wantedVersions.map((r) => r.name), ...waiting.map((w) => w.word)].map(forbiddenKey));
+  const touched: Touched = (v) => taskKeys.has(`${v.ecosystem}\0${v.package}`) || touchedFold.has(forbiddenKey(v.package));
+  if (scan) pushAll(advisories, projectAdvisories(scan, touched));
   // Round 16, C1(b): how many project-wide findings the safe reason says are listed (distinct package@version).
-  const projectFindingCount = scan ? new Set(projectFindings(scan, taskKeys).map((v) => `${v.ecosystem}\0${v.package}@${v.currentVersion}`)).size : 0;
+  const projectFindingCount = scan ? new Set(projectFindings(scan, touched).map((v) => `${v.ecosystem}\0${v.package}@${v.currentVersion}`)).size : 0;
+  // Round 17, C2: an installed version with a confirmed vulnerability of a package the call declares or the briefing
+  // read, but the task text does not name as installed: the task touches it (the declared version may be its fix), so
+  // the level is review_needed with that said; the installed copy is the vulnerable one.
+  const touchedInstalled = scan
+    ? scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !v.installDriftOf && !taskKeys.has(`${v.ecosystem}\0${v.package}`) && touchedFold.has(forbiddenKey(v.package)))
+    : [];
+  const touchedInstalledReasons = [...new Set(touchedInstalled.map((v) => {
+    const d = declared.entries.find((e) => forbiddenKey(e.name) === forbiddenKey(v.package));
+    return `the installed ${v.package} ${v.currentVersion} has a confirmed vulnerability (${v.vulnId})${d ? `; the declared ${d.name}${d.version ? ` ${d.version}` : ""} was checked` : ""}: the installed copy is the vulnerable one, so make sure the task replaces it`;
+  }))];
 
   // ── 3. Decisions: windows, conflicts, wisdom ──────────────────────────
   const decisionWindows = (db ? getOpenDecisionWindows(db) : [])
@@ -1180,6 +1195,8 @@ async function executeBriefing(
       uncheckedPackages,
       withheldWords: withheldWords.filter((w) => w.standing),
       projectFindings: projectFindingCount,
+      touchedInstalledReasons,
+      nonMalwareDrift: (scan?.vulnerabilities ?? []).some((v) => v.installDriftOf && !((v as { malware?: boolean }).malware === true || /^MAL-/i.test(String(v.vulnId ?? "")))),
       taskDependencies,
       decisionWindows,
       decisionConflicts,
@@ -1351,11 +1368,7 @@ async function executeBriefing(
 // Steps
 // ============================================================================
 
-async function awaitScan(
-  liveIntel: BriefingLiveIntel | null,
-  /** Evaluated after re-resolution: whether a task package is a direct devDependency. */
-  needsDevScope: () => boolean = () => false,
-): Promise<{
+async function awaitScan(liveIntel: BriefingLiveIntel | null): Promise<{
   scan: VulnerabilityScanResult | null;
   scanStatus: ScanStatus;
   scanBlock: BriefingScan;
@@ -1374,10 +1387,10 @@ async function awaitScan(
     }
     try {
       // The startup scan leaves direct devDependencies out; a task about one
-      // (node-fetch 2.6.0, a devDependency) read "vulnerabilities: []" from it.
-      scan = await liveIntel.ensureVulnerabilities(liveIntel.getProjectRoot() ?? process.cwd(), SCAN_WAIT_MS, {
-        includeDev: needsDevScope(),
-      });
+      // (node-fetch 2.6.0, a devDependency) read "vulnerabilities: []" from it. Round 17, C1: every briefing reads the
+      // full scope (dev included), so malware or a security placeholder installed as a dev dependency is seen whatever
+      // the task: one scan serves the level's rules and the installed-malware question, cached for the session.
+      scan = await liveIntel.ensureVulnerabilities(liveIntel.getProjectRoot() ?? process.cwd(), SCAN_WAIT_MS, { includeDev: true });
     } catch {
       scan = null;
     }
@@ -1512,15 +1525,18 @@ function labelOf(d: TaskDependency, all: TaskDependency[]): string {
 }
 
 /** One summary row for the project's other confirmed findings, plus running install drift. */
-/** The project's confirmed findings on packages the task does not touch (the task's packages keyed by ecosystem and name). */
-function projectFindings(scan: VulnerabilityScanResult, taskKeys: Set<string>) {
-  return scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !taskKeys.has(`${v.ecosystem}\0${v.package}`) && !v.installDriftOf);
+/** Whether a scan row is about a package the task touches (round 17, C2: named installed, declared, or read). */
+type Touched = (v: { ecosystem: string; package: string }) => boolean;
+/** The project's confirmed findings on packages the task does not touch. */
+function projectFindings(scan: VulnerabilityScanResult, touched: Touched) {
+  return scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !touched(v) && !v.installDriftOf);
 }
 
 /** Round 16, C1(a): installed copies whose installed version is malware (a MAL- record or the scan's malware flag), anywhere in the project. */
 export function installedMalware(scan: VulnerabilityScanResult | null | undefined): string[] {
-  const rows = (scan?.vulnerabilities ?? []).filter((v) => !v.installDriftOf && ((v as { malware?: boolean }).malware === true || /^MAL-/i.test(String(v.vulnId ?? ""))));
-  return [...new Set(rows.map((v) => `${v.package}@${v.currentVersion}`))].sort();
+  // Round 17, C1(b): lockfile rows and drift rows alike (a drift row's currentVersion is the copy on disk).
+  const rows = (scan?.vulnerabilities ?? []).filter((v) => (v as { malware?: boolean }).malware === true || /^MAL-/i.test(String(v.vulnId ?? "")));
+  return [...new Set(rows.map((v) => `${v.package}@${v.currentVersion}${v.installDriftOf ? ` (in node_modules; the lockfile pins ${v.installDriftOf})` : ""}`))].sort();
 }
 
 /** Round 16b: installed copies at npm's security-placeholder version, as the scan's detector lists them (name@version). */
@@ -1528,10 +1544,10 @@ export function installedPlaceholders(scan: VulnerabilityScanResult | null | und
   return [...new Set((scan?.securityPlaceholders ?? []).map((p) => `${p.package}@${p.version}`))].sort();
 }
 
-function projectAdvisories(scan: VulnerabilityScanResult, taskKeys: Set<string>): Advisory[] {
+function projectAdvisories(scan: VulnerabilityScanResult, touched: Touched): Advisory[] {
   const out: Advisory[] = [];
   // The task's packages are keyed by ecosystem and name: npm's jsonwebtoken is not the crate.
-  const actionable = projectFindings(scan, taskKeys);
+  const actionable = projectFindings(scan, touched);
   const packages = new Set(actionable.map((v) => v.package));
   if (packages.size > 0) {
     const severities = new Set(actionable.map((v) => presentedSeverity(v)));
@@ -1764,6 +1780,10 @@ function assessDelegation(input: {
   taskDependencies: TaskDependency[];
   /** Round 16, C1(b): the project's confirmed findings outside the task (listed, scope "project"; the level is untouched). */
   projectFindings?: number;
+  /** Round 17, C2: confirmed vulnerabilities of the installed copy of a package the call declares or the briefing read. */
+  touchedInstalledReasons?: string[];
+  /** Round 17, C1(b): whether some drift row on disk is a vulnerable copy that is not malware. */
+  nonMalwareDrift?: boolean;
   decisionWindows: DecisionWindow[];
   decisionConflicts: Array<{ technology: string }>;
   relevantWisdom: WisdomEntry[];
@@ -1850,7 +1870,9 @@ function assessDelegation(input: {
   if (confirmed.length > 0) reasons.push(`${confirmed.length} confirmed vulnerabilit${confirmed.length !== 1 ? "ies" : "y"} in the packages this task touches`);
   const crossing = taskDependencies.filter((d) => (d.majors_crossed ?? 0) > 0);
   if (crossing.length > 0) reasons.push(`the upgrade crosses ${crossing.map((d) => `${d.majors_crossed} major version${d.majors_crossed !== 1 ? "s" : ""} of ${labelOf(d, taskDependencies)}`).join(", ")} (check upgrade_impact for breaking changes)`);
-  if (runningDrift.length > 0) reasons.push("node_modules runs a vulnerable copy the lockfile does not pin");
+  // Round 17, C1(b): a copy on disk that is malware is said by INSTALLED_MALWARE (human_only), never as "a vulnerable copy".
+  if (runningDrift.length > 0 && input.nonMalwareDrift !== false) reasons.push("node_modules runs a vulnerable copy the lockfile does not pin");
+  pushAll(reasons, input.touchedInstalledReasons ?? []);
   if (relevantWisdom.length > 3) reasons.push(`${relevantWisdom.length} recorded decisions bear on this task`);
   if (reasons.length > 0) {
     return { level: "review_needed", reason: `Delegate, then review: ${reasons.join("; ")}.` };
@@ -1912,7 +1934,7 @@ function summarize(
   const notices = deps.reduce((n, d) => n + (d.maintenance_notices?.length ?? 0), 0);
   if (notices > 0) parts.push(`${notices} maintenance notice${notices !== 1 ? "s" : ""} on them (not ${notices !== 1 ? "vulnerabilities" : "a vulnerability"})`);
   const project = advisories.filter((a) => a.scope === "project").length;
-  if (project > 0) parts.push(`${project} project-wide finding${project !== 1 ? "s" : ""} (not about this task)`);
+  if (project > 0) parts.push(`${project} project-wide finding${project !== 1 ? "s" : ""} (advisories with scope \"project\")`);
   if (conflicts.length > 0) parts.push(`${conflicts.length} recorded-decision conflict${conflicts.length !== 1 ? "s" : ""}`);
   if (wisdom.length > 0) parts.push(`${wisdom.length} relevant decision${wisdom.length !== 1 ? "s" : ""}/memor${wisdom.length !== 1 ? "ies" : "y"}`);
   if (scanStatus !== "ready") parts.push(`vulnerability scan ${scanStatus}`);

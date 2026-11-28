@@ -49,11 +49,18 @@ export interface InstallCommand {
  * The task as the readers read it (V3, V4): markup a chat or a document wraps a command in is dropped (HTML
  * tags such as `<code>`, markdown's `**` and `__`), and a line continuation (a trailing backslash, PowerShell's
  * backtick, cmd's caret, each after a blank) is joined to the next line. Linear.
+ *
+ * Round 17, C4: emphasis is dropped by an exact rule (`MARKUP_RULE`), never inside a path-like or identifier-like
+ * word: a `**` pair around text on one line, with no word character or `*` outside either end (`**bold**` is bold);
+ * a `__` pair only around text that holds a blank, with no word character or `_` outside (`__two words__`), so
+ * `__init__.py`, `__main__`, `__bold__` and `snake__case` stay as written.
  */
+export const MARKUP_RULE = "a ** pair around text on one line with no word character or * outside either end; a __ pair only around text holding a blank, with no word character or _ outside";
 export function readingText(task: string): string {
   return task
     .replace(/<\/?(?:code|pre|kbd|samp|tt|b|i|u|em|strong|span|p|div|br|li|ul|ol)\b[^<>]{0,100}>/gi, " ")
-    .replace(/(?<=\s|^)(?:\*\*|__)|(?:\*\*|__)(?=\s|$|[.,;:!?])/g, "")
+    .replace(/(?<![\w*])\*\*(?=[^\s*])([^*\n]{0,200}?[^\s*])\*\*(?![\w*])/g, "$1")
+    .replace(/(?<![\w_])__(?=[^\s_])([^_\n]{0,200}?\s[^_\n]{0,200}?[^\s_])__(?![\w_])/g, "$1")
     // A lookbehind, not a leading `[ \t]+`: a 100 KB run of blanks was rescanned from every position (quadratic).
     .replace(/(?<=[ \t])[\\`^][ \t]*\r?\n[ \t]*/g, " ");
 }
