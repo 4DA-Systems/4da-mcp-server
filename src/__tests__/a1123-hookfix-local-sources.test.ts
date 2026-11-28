@@ -32,7 +32,6 @@ describe("Cargo: path, git and another registry", () => {
   it.each([
     ['mylib = { path = "../mylib", version = "0.3.0" }'],
     ['mylib = { git = "https://github.com/acme/mylib", version = "0.3.0" }'],
-    ['mylib = { version = "0.3.0", registry = "corp" }'],
     ['mylib = { version = "0.3.0", git = "https://example.com/x", branch = "main" }'],
   ])("inline: %s", (line) => {
     // Round 25 (W1): a registry name is resolved from .cargo/config.toml; here a host private by its shape.
@@ -78,7 +77,7 @@ describe("pyproject: direct references, [tool.uv.sources] and Poetry sources", (
     onlyReal(s.edit(file, '    "requests==2.32.3",\n', `    "requests==2.32.3",\n    "${req}",\n`), "mylib");
   });
 
-  it.each([['{ path = "../mylib" }'], ['{ path = "../mylib", editable = true }'], ['{ git = "https://github.com/acme/mylib", tag = "v0.3.0" }'], ['{ url = "https://example.com/mylib.whl" }'], ['{ index = "corp" }'], ["{ workspace = true }"]])(
+  it.each([['{ path = "../mylib" }'], ['{ path = "../mylib", editable = true }'], ['{ git = "https://github.com/acme/mylib", tag = "v0.3.0" }'], ['{ url = "https://example.com/mylib.whl" }'], ["{ workspace = true }"]])(
     "[tool.uv.sources] mylib = %s: the requirement goes ahead",
     (source) => {
       // Round 25 (W1): the index a source names is declared in the file (private by its shape, explicit).
@@ -102,8 +101,6 @@ describe("pyproject: direct references, [tool.uv.sources] and Poetry sources", (
     ['{ git = "https://github.com/acme/mylib.git", tag = "v0.3.0" }'],
     // Round 18 (M2): a URL is the project's own only on a host private by its shape (example.com is not).
     ['{ url = "https://files.corp/mylib-0.3.0.tar.gz" }'],
-    ['{ version = "0.3.0", source = "corp" }'],
-    ['[{ version = "0.3.0", python = "<3.11", source = "corp" }, { version = "0.4.0", python = ">=3.11" }]'],
   ])("Poetry mylib = %s", (value) => {
     // Round 25 (W1): the source is declared in the file, at a host private by its shape.
     const file = s.file("pyproject.toml", `${POETRY}\n[[tool.poetry.source]]\nname = "corp"\nurl = "https://pypi.corp.internal/simple"\npriority = "explicit"\n`);
@@ -147,5 +144,19 @@ describe("go.mod: replace to a local directory", () => {
   it("a replace block with a version on its left side introduces nothing", () => {
     const file = s.file("go.mod", GOMOD);
     expect(s.edit(file, "go 1.22\n", "go 1.22\n\nreplace (\n\tgithub.com/google/uuid v1.6.0 => ../uuid\n)\n").decision).toBe("allow");
+  });
+});
+
+
+// Round 26b (D1): a source named by name is not resolved: the dependency is judged (a private name
+// goes ahead by its private record).
+describe("D1: named sources are judged", () => {
+  it("Cargo registry, uv index and Poetry source by name", () => {
+    const cargo = s.file("Cargo.toml", CARGO);
+    expect(s.edit(cargo, 'anyhow = "1.0.89"\n', 'anyhow = "1.0.89"\nmylib = { version = "0.3.0", registry = "corp" }\n').items?.map((i) => i.package)).toEqual(["mylib"]);
+    const py = s.file("pyproject.toml", PYPROJECT + '\n[tool.uv.sources]\nmylib = { index = "corp" }\n');
+    expect(s.edit(py, '    "requests==2.32.3",\n', '    "requests==2.32.3",\n    "mylib==0.3.0",\n').items?.map((i) => i.package)).toEqual(["mylib"]);
+    const po = s.file("pyproject.toml", POETRY);
+    expect(s.edit(po, 'requests = "2.32.3"\n', 'requests = "2.32.3"\nmylib = { version = "0.3.0", source = "corp" }\n').items?.map((i) => i.package)).toEqual(["mylib"]);
   });
 });

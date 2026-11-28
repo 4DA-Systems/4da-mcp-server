@@ -163,7 +163,7 @@ describe("controls: harmless commands are not read as installs", () => {
     "arr=(npm i lodash@4.17.20)",
     "f() { npm i lodash@4.17.20; }",
     "npm view lodash@4.17.20",
-    "npx lodash@4.17.20",
+    // (round 26, R2: `npx lodash@4.17.20` fetches that release: judged, a1125-w2-hook-round26)
   ])("%s", (command) => {
     expect(installsIn(command, "bash")).toEqual([]);
   });

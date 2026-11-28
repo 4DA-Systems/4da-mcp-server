@@ -238,9 +238,14 @@ describe("it fails open", () => {
   });
 
   it("input it does not understand: exit 0, no output", () => {
-    for (const payload of ["", "[]", "null", { hook_event_name: "PreToolUse" }, { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: "x" }, { tool_name: "Bash", tool_input: { command: "npm i lodash@4.17.20" } }, pre("Read", { file_path: "package.json" }), pre("Bash", { command: 42 }), pre("Edit", { file_path: 7 })]) {
+    for (const payload of ["", "[]", "null", { hook_event_name: "PreToolUse" }, { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: "x" }, { tool_name: "Bash", tool_input: { command: "npm i lodash@4.17.20" } }, pre("Read", { file_path: "package.json" }), pre("Edit", { file_path: 7 })]) {
       expect(hook(payload), JSON.stringify(payload)).toEqual({ status: 0, stdout: "" });
     }
+  });
+
+  // Round 26b (F10): a Bash command that is not a string is held, not ignored.
+  it("a Bash command that is not a string is held", () => {
+    expect(hook(pre("Bash", { command: 42 })).stdout).toContain("deny");
   });
 
   // Round 13: a payload that does not parse at all is held where a ledger exists (eleventh independent check, S31).
