@@ -153,7 +153,7 @@ import {
 import { liveIntelFor, resolveProjectScope } from "./project-scope.js";
 import { majorsCrossed, majorsCrossedLoose } from "./upgrade-impact-report.js";
 import type { ResolvedDependency } from "../live/types.js";
-import { exclusionNotes, lockfileProblemNotes, splitLockfileProblems, type TreeDiscovery } from "../project-tree.js";
+import { exclusionNotes, isLockfileName, lockfileProblemNotes, splitLockfileProblems, type TreeDiscovery } from "../project-tree.js";
 import { walkBudgetNote } from "../walk-budget.js";
 import { escapeUnsafeDirs, liveUnsafeDirs, type UnsafeDirSources } from "../live/shell-safe.js";
 import * as path from "node:path";
@@ -1816,12 +1816,21 @@ function notScannedLockfiles(discovery: ReturnType<NonNullable<BriefingLiveIntel
   return counts;
 }
 
+/** Round 20b: the note for lockfiles that could not be read: SCAN_LOCKFILE_UNREADABLE, as a sentence. */
+function lockfileUnreadableNote(files: string[]): string {
+  const text = SCAN_LOCKFILE_UNREADABLE(files);
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}, so ${files.length === 1 ? "its" : "their"} dependencies were not checked.`;
+}
+
 /** Round 20: why a scan that ran has nothing to answer with, from its own record of what it withheld; null when not that. */
 function scanUnavailableCause(scan: VulnerabilityScanResult | null): string | null {
   const withheld = scan?.privateExcluded;
   if (!scan || !withheld || withheld.count === 0 || scan.totalScanned > 0 || scan.offline) return null;
   const files = withheld.unreadable?.files ?? [];
-  const npmrc = files.filter((f) => /(?:^|[\\/])\.npmrc$/.test(f));
+  // Round 20b: an .npmrc that could not be read withholds every npm name (private-packages.ts unreadRuleReason): its
+  // file is named in each withheld name's reason, not in the unreadable-file list. Decided before the all-private cause.
+  const npmrcUnread = withheld.dependencies.some((d) => /\.npmrc\b/.test(String(d.why ?? "")) && /could not be read|it may name a private registry or source/.test(String(d.why ?? "")));
+  const npmrc = [...files.filter((f) => /(?:^|[\\/])\.npmrc$/.test(f)), ...(npmrcUnread ? [".npmrc"] : [])];
   const lockfiles = files.filter((f) => !npmrc.includes(f));
   const causes = [
     ...(npmrc.length > 0 ? [SCAN_NPMRC_UNREADABLE(withheld.count)] : []),
@@ -1852,10 +1861,17 @@ function lockfilesNotRead(liveIntel: BriefingLiveIntel | null): { notes: string[
   const root = liveIntel?.getProjectRoot?.() ?? null;
   const show = (file: string) => (root ? path.relative(root, file).replace(/\\/g, "/") || path.basename(file) : file);
   const gaps = [...mergeConflicts, ...unreadable, ...partial, ...refused];
+  const unreadableLocks = unreadable.filter((p) => isLockfileName(p.file));
   const reasonOf = (p: (typeof gaps)[number]) => (mergeConflicts.includes(p) ? "merge_conflict" : unreadable.includes(p) ? "unreadable" : partial.includes(p) ? "partial" : "refused") as "merge_conflict" | "unreadable" | "partial" | "refused";
   return {
     // The walk first: what it never reached can hold any of the task's packages.
-    notes: [...(walk ? [walk] : []), ...lockfileProblemNotes(gaps, show)],
+    // Round 20b: a lockfile that could not be read is said by SCAN_LOCKFILE_UNREADABLE whatever the failure (EISDIR,
+    // EACCES, EPERM, ENOENT after discovery, a decode error), with its path and the error; other files keep their notes.
+    notes: [
+      ...(walk ? [walk] : []),
+      ...(unreadableLocks.length > 0 ? [lockfileUnreadableNote(unreadableLocks.map((p) => `${show(p.file)} (${String(p.error).replace(/^could not be read \((.*)\)$/s, "$1")})`))] : []),
+      ...lockfileProblemNotes(gaps.filter((p) => !unreadableLocks.includes(p)), show),
+    ],
     files: gaps.map((p) => ({ path: show(p.file), reason: reasonOf(p), error: p.error })),
     walkCut: walk !== null,
   };

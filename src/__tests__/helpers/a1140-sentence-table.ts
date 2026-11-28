@@ -248,6 +248,7 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["NOT CHECKED: ${} word${} in the task ${} not looked up (${}): nothing about ${} was sent.", "withheld-said"],
   ["the directory walk stopped at its directory bound, so the directories it had not reached were not read and their lockfiles were not counted", "any"],
   ["NOT CHECKED: ${}. A dependency in that part was checked nowhere, so this is not a complete result: pass project_path for the part of the project you need${}.", "any"],
+  ["${}${}, so ${} dependencies were not checked.", "any"],
   ["NOT CHECKED: whether the directory walk read the whole project is not known, so this is not a complete result.", "any"],
   ["${} This briefing cannot clear the task while that is unchecked: fix what is named, then ask again.", "not-safe"],
   ["The task touches ${}, which a recorded decision rejected. A human decides whether to revisit it.", "human"],

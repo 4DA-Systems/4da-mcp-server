@@ -61,3 +61,56 @@ describe("2: a scan that ran and answered nothing names its cause", () => {
     expect(brokenTextRules(r, args)).toEqual([]);
   });
 });
+
+describe("20b: the unreadable .npmrc is named before the all-private cause; one text for an unreadable lockfile", () => {
+  const scanWith = async (privateExcluded: Record<string, unknown>) => {
+    const live = await h.live();
+    const scan = { scannedAt: "2026-11-28T00:00:00Z", projectPath: h.dir, ecosystemsScanned: ["npm"], totalScanned: 0, totalVulnerable: 0, platformInactiveVulnerable: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }, vulnerabilities: [], cleanCount: 0, scanDurationMs: 1, cached: false, offline: false, privateExcluded };
+    return (await executeWhatShouldIKnow(null, { ...args, project_path: h.dir } as never, Object.assign(Object.create(live), { ensureVulnerabilities: async () => scan, getVulnerabilities: () => scan }))) as Record<string, any>;
+  };
+  it("an injected .npmrc read failure (the reason each withheld name carries): SCAN_NPMRC_UNREADABLE, not SCAN_ALL_PRIVATE", async () => {
+    const why = ".npmrc could not be read (EACCES): it may name a private registry or source for any npm package here, so none is treated as public";
+    const r = await scanWith({ count: 1, dependencies: [{ ecosystem: "npm", name: "zod", version: "3.24.1", why, kind: "name" }] });
+    expect(r.delegation_assessment.reason).toContain(SCAN_NPMRC_UNREADABLE(1));
+    expect(r.delegation_assessment.reason).not.toContain("every installed dependency is private");
+    expect(brokenTextRules(r, args)).toEqual([]);
+  });
+  it.skipIf(process.platform !== "win32")("a real .npmrc the process cannot read (a deny-read ACL), where the platform enforces it", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const file = path.join(h.dir, ".npmrc");
+    fs.writeFileSync(file, "save-exact=true\n");
+    try {
+      execFileSync("icacls", [file, "/deny", "*S-1-1-0:(R)"], { stdio: "ignore" });
+    } catch {
+      return; // no icacls here: the injected case above stands for it
+    }
+    let enforced = false;
+    try {
+      fs.readFileSync(file, "utf8");
+    } catch {
+      enforced = true;
+    }
+    try {
+      // A process holding the backup privilege reads past a deny ACL (Git Bash on this machine does): nothing to test then.
+      if (!enforced) return;
+      const r = (await executeWhatShouldIKnow(null, { ...args, project_path: h.dir } as never, await h.live())) as Record<string, any>;
+      expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+      expect(r.delegation_assessment.reason).toContain("the project's .npmrc could not be read");
+    } finally {
+      execFileSync("icacls", [file, "/remove:d", "*S-1-1-0"], { stdio: "ignore" });
+    }
+  });
+  it("a package-lock.json that is a directory: the lockfile text with its path and error, not the older UNREADABLE note", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    fs.rmSync(path.join(h.dir, "package-lock.json"), { force: true });
+    fs.mkdirSync(path.join(h.dir, "package-lock.json"));
+    const r = (await executeWhatShouldIKnow(null, { ...args, project_path: h.dir } as never, await h.live())) as Record<string, any>;
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(r.delegation_assessment.reason).toMatch(/The lockfile package-lock\.json \(EISDIR[^)]*\) could not be read, so its dependencies were not checked\./);
+    expect(r.delegation_assessment.reason).not.toMatch(/UNREADABLE: \d+ lockfile/);
+    expect(brokenTextRules(r, args)).toEqual([]);
+  });
+});

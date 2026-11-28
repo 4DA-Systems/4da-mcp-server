@@ -1163,7 +1163,7 @@ export function withMergeConflicts(discovery: TreeDiscovery | null, conflicted: 
 }
 
 /** Whether `file` has a lockfile's name (not a manifest's, such as package.json or pyproject.toml). */
-function isLockfileName(file: string): boolean {
+export function isLockfileName(file: string): boolean {
   const base = file.split(/[\\/]/).pop() ?? file;
   return /^(?:package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|deno\.lock|Cargo\.lock|poetry\.lock|uv\.lock|pdm\.lock|Pipfile\.lock|go\.sum|Gemfile\.lock|gems\.locked|composer\.lock)$/.test(base);
 }
