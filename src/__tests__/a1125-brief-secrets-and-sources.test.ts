@@ -51,7 +51,9 @@ describe("E1: a credential in the task is never sent", () => {
     ["add the key sk-proj-zqxtok9f8e7d6c5b4a3 to .env and install openai", null],
     ["add AKIAZQXTOK1234567890 to the aws credentials file", "AKIA"],
     ["install stripe and add sk_live_ZQXTOK51HxyzAbc to the config", "sk_l"],
-    ["add xoxb-ZQXTOK-123-abc to the slack config", "xoxb"],
+    // Round 16c: a realistic Slack bot token, assembled at run time (xoxb-<digits>-<digits>-<alnum>); the Slack shape is digit-first since 16b, so
+    // the older made-up spelling xoxb-ZQXTOK-123-abc is no longer a credential shape (it waits in to_confirm, not looked up).
+    [`add ${["xox", "b-2847193650", "-1928374650123-ZQXtokAbCdEfGhIjKlMnOpQr"].join("")} to the slack config`, "xoxb"],
     ["add npm_ZQXTOK0123456789abcdefghij0123456789 to .npmrc", "npm_"],
     ["add OPENAI_API_KEY=sk-proj-zqxtokEQ12345 to .env", null],
     ["use the token npm_ZQXTOKuse0123456789 to publish", null],

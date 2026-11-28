@@ -200,24 +200,27 @@ function operandName(spec: string): string | null {
  * measurement (a1139-round16b: the bundled popular npm and PyPI names, the bench world's names and 50,000 words joined
  * in pairs). A shape whose prefix is distinctive matches anywhere, glued to the text before it or not; a shape whose
  * prefix is ordinary text keeps a leading boundary (BOUNDARY_SHAPES: "sk-" sits inside "risk-", "task-", "desk-";
- * "sk_test_" inside "task_test_"). Bodies were tightened where glued words matched: GitHub and npm tokens take 20
- * characters (real ones 36), Hugging Face 30 (real 34+), Slack a digit first (real ones xoxb-<digits>-...).
+ * "sk_test_" inside "task_test_"). Round 16c: each body takes the issuer's documented length as its lower bound
+ * (GitHub classic and npm 36, Hugging Face 34, GitLab 20, Stripe publishable 24 and webhook 32, Google 35, Shopify 32
+ * hex, DigitalOcean 64 hex); a GitHub fine-grained token takes 22 word characters or more (its first part; any longer
+ * spelling stays masked whole). Slack is digit-first (real ones xoxb-<digits>-...): with its old body ("xox?-" and six
+ * word characters) it matched generated words even at a boundary ("xoxe-...").
  */
 const ANYWHERE_SHAPES: readonly string[] = [
-  "gh[pousr]_[A-Za-z0-9]{20,}",
-  "github_pat_\\w{10,}",
+  "gh[pousr]_[A-Za-z0-9]{36,}",
+  "github_pat_\\w{22,}",
   "(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{12,}",
-  "pk_live_\\w{6,}",
-  "whsec_\\w{10,}",
+  "pk_live_[A-Za-z0-9]{24,}",
+  "whsec_[A-Za-z0-9]{32,}",
   "xox[abposre]-[0-9][\\w-]{6,}",
-  "npm_[A-Za-z0-9]{20,}",
-  "glpat-[\\w-]{10,}",
-  "AIza[\\w-]{20,}",
-  "hf_[A-Za-z0-9]{30,}",
+  "npm_[A-Za-z0-9]{36,}",
+  "glpat-[\\w-]{20,}",
+  "AIza[\\w-]{35,}",
+  "hf_[A-Za-z0-9]{34,}",
   "pypi-[\\w-]{20,}",
   "SG\\.[\\w-]{10,}\\.[\\w-]{10,}",
-  "shp(?:at|ss|ca|pa)_[a-fA-F0-9]{16,}",
-  "dop_v1_[a-f0-9]{20,}",
+  "shp(?:at|ss|ca|pa)_[a-fA-F0-9]{32,}",
+  "dop_v1_[a-f0-9]{64,}",
   "eyJ[\\w-]{8,}\\.[\\w-]{8,}(?:\\.[\\w-]*)?",
 ];
 /** Round 16b: the shapes whose prefix is ordinary text: matched only at a word boundary (\b before the prefix). */
