@@ -67,7 +67,11 @@
  * from its own old and new text [test: a1125-w2-hook-round23, a1125-w2-hook-round7,
  * a1125-w2-hook-round16]. P2: a Write is read from the content it writes, and an examined edit the
  * hook cannot read in these ways is denied as not read [test: a1125-w2-hook-round17,
- * a1125-w2-hook-round23].
+ * a1125-w2-hook-round23]. P2: the file an examined edit makes is read with the hook's strict
+ * reading of its kind (JSON for the JavaScript manifest, with no comment, trailing comma or single quote
+ * that a manager may accept; TOML; the Go module grammar), and an edit that changes the file into
+ * one that reading does not accept is denied as not read (manifestSyntaxError) [test:
+ * a1125-w2-hook-round28].
  *
  * P3 (verdicts): for each release an examined call names in a form the hook reads, the call is
  * denied unless the ledger holds a proceed or review answer that counts for that reading, or a
@@ -105,12 +109,14 @@
  * a1123-hookfix-local-sources]. P3: a dependency entry that names an index, a registry or a source
  * by name is not resolved: it is judged as a public registry release of its name and version, and a
  * private name goes ahead only by its private record; each alternative of an entry is read on its
- * own: an alternative that is a literal path or git source exempts only itself, and when any
- * alternative or condition leaves a registry reading possible, that reading is judged, so a
- * project requirement is the project's own only when its source entry is one table, with no
- * marker, extra, group, python or platform condition, whose source is a literal path, a git
- * source, workspace = true, or a URL read by the URL rule (pyOtherSourceNames, urlDependency)
- * [test: a1125-w2-hook-round27, a1125-w2-hook-round26b, a1123-hookfix-local-sources]. P3: in a manifest, a dependency value is judged when it is a
+ * own: an alternative that is a literal path or git source with no version exempts only itself,
+ * one that also names a version that bounds something is judged for that version, and an
+ * alternative with a condition exempts the name only when no alternative and no requirement gives
+ * a registry version, so a project requirement is the project's own only when its source entry is
+ * one table, with no marker, extra, group, python or platform condition, whose source is a literal
+ * path, a git source, workspace = true, or a URL read by the URL rule (pyOtherSourceNames,
+ * urlDependency) [test: a1125-w2-hook-round28, a1125-w2-hook-round27, a1125-w2-hook-round26b,
+ * a1123-hookfix-local-sources]. P3: in a manifest, a dependency value is judged when it is a
  * registry spec in its ecosystem's grammar or a form that wraps one (for example a Yarn alias or
  * patch of a registry release), is the project's own when it is one of the forms on the
  * OWN_SOURCE_FORMS list or the like forms of the other manifest kinds, and is otherwise denied as
@@ -137,14 +143,7 @@
  * makes and compared key by key with the file on disk, and it is denied as not read when it adds,
  * changes or removes a key that is not on that file's CONFIG_INERT_KEYS, when the hook cannot read
  * either text, or, for a file that is code, when it changes the file at all (configFileChange)
- * [test: a1125-w2-hook-round25b]. P3: a package that a runner fetches in one of the
- * RUNNER_FETCH_FORMS, that is named with a version, a range, a dist-tag or the reading latest, or
- * named on a fetch option, is judged as an install of that reading is, whether or not P1 examines
- * the call; an option before the package, or before the command the runner runs, is read only when
- * it is on that runner's RUNNER_OPTIONS table with its arity, an index or registry option among
- * them is read by the source rule an install's options get (sourceVerdict), and a fetch in a form
- * the hook does not read, or an option off the table, is denied as not read, whether or not P1
- * examines the call (runnerFetches) [test: a1125-w2-hook-round27, a1125-w2-hook-round26]. P3: a configuration write is read operand by operand
+ * [test: a1125-w2-hook-round25b]. P3: a configuration write is read operand by operand
  * in its manager's own grammar, past the global options before its sub-command that are on
  * MANAGER_GLOBAL_OPTIONS for that manager (for one manager its own option table with its
  * abbreviations, NPM_OPTIONS), every key it writes judged against INERT_CONFIG_KEYS; a write whose
@@ -245,20 +244,22 @@
  * steps over with their options and operands (commandStart), and after cmd /c or an interpreter's
  * options and its module option, is a manager or a runner, and one of whose words is a variable, array,
  * command-substitution or splat expansion, is denied as not read unless a literal verb that is no
- * install, fetch, configuration or runner sub-command stands before that expansion; after a runner
- * or a runner sub-command, an expansion anywhere in its words is denied, except after a sub-command
- * that runs a program named on the line, where only one at or before that program's name is
- * (managerExpansion); an expansion in any other place, for example in a program the hook does not
- * read, is not seen [test: a1125-w2-hook-round27, a1125-w2-hook-round25, a1125-w2-hook-round26b]. L2: a runner given a bare name
+ * install, fetch or configuration verb stands before that expansion, and an expansion before a
+ * manager's verb, the value of an option included, is denied as not read on any line the hook
+ * reads; the words of a program that a manager's run command runs, and an expansion in any other
+ * place, for example in a program the hook does not read, are outside this sentence
+ * (managerExpansion) [test: a1125-w2-hook-round28, a1125-w2-hook-round27, a1125-w2-hook-round25,
+ * a1125-w2-hook-round26b]. L2: a runner given a bare name
  * and no fetch option fetches the newest release unjudged, except that a JavaScript runner first
  * runs the project's installed tool when there is one (the Python tool runner never does), and a
- * manager on the MANAGERS list that a runner fetches to run is not judged as a fetch, nor is the
+ * JavaScript package manager on the JS_MANAGERS list that a JavaScript runner fetches to run is not
+ * judged as a fetch (a package of the same name on another family's list is), nor is the
  * manager release that a manifest's packageManager or devEngines.packageManager key names, which
  * corepack fetches and runs, while the command a runner runs is read as any other [test:
  * a1125-w2-hook-round27, a1125-w2-hook-round26, a651-hook-wrapped-commands]. L2: the option allow lists
  * (NAMED_OPTIONS) are lists, not proofs: what is tested is that none of their options changes the
  * named release in the tool versions tested [test: a1125-w2-hook-round14-options]. L2: on Windows, cmd.exe rewrites the arguments of
- * a .cmd or .bat program, so a manager's install, or a runner, whose arguments hold a character
+ * a .cmd or .bat program, so a manager's install whose arguments hold a character
  * cmd.exe treats specially (CMD_SPECIAL) is read only when each word the shell starts from PATH is
  * shown not to be one; the words looked up are the first program word of each command the hook
  * reads, the command a runner runs included (the manager after npx is the first word of the
@@ -272,7 +273,12 @@
  * is denied as not read (cmdProgram, P2) [test: a1125-w2-hook-round23, a1125-w2-hook-round24]. L3: the further guard on a name given alone or as
  * a range (the notes list its causes) is best effort: it holds a call where it sees a reason the
  * manager may pick another release, and promises nothing where it does not [test:
- * a1125-w2-hook-round17, a1125-w2-hook-round18, a1125-w2-hook-round19]. L4: an agent that sets out
+ * a1125-w2-hook-round17, a1125-w2-hook-round18, a1125-w2-hook-round19]. L3: the reading of a
+ * package a runner fetches (RUNNER_FETCH_FORMS) is best effort: where the hook sees a runner fetch
+ * a release with an avoid or wait verdict, or one with no verdict, it holds the call, and it
+ * promises nothing where it does not see it (an option it does not know, a prefix it does not
+ * walk, a spec form it does not read, a runner whose options differ, arguments cmd.exe rewrites)
+ * [test: a1125-w2-hook-round28, a1125-w2-hook-round27, a1125-w2-hook-round26]. L4: an agent that sets out
  * to defeat the hook can, for example with a script that runs the install, a command the shell
  * decodes before it runs, a change of folder made in an earlier call, or a path to the data folder
  * through a parent folder or assembled from pieces [test: a1125-w2-hook-contract,
@@ -402,7 +408,8 @@
  * ci`, `pnpm install --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`, `poetry
  * install`, `cargo fetch`, `build` (`b`), `run` (`r`) and `test` (`t`), which resolve and download what the manifest asks for (`check` is not on the list), `go mod download`, npm / pnpm / Yarn / Bun `link`,
  * and the updates the manager chooses: npm and pnpm `audit` (`npm audit fix`, `pnpm audit --fix`; a
- * plain audit is advised too), npm, pnpm and Yarn `dedupe`, `go mod tidy`, `uv lock` and `poetry lock`,
+ * plain audit is advised too), npm, pnpm and Yarn `dedupe`, `go mod tidy`, `go work sync`, `uv lock`, `uv pip
+ * compile`, `poetry lock` and `cargo generate-lockfile`,
  * also run by npx, bunx or pnpx, with or without a version on the manager (`npx pnpm@9 install`);
  * not text that only mentions one),
  * where a ledger exists and the guard is on or advising, the hook adds one line of advice at
@@ -476,7 +483,8 @@
  *   beside a named package; a spec that is no version this hook reads ("write an exact version"); a
  *   manager's own setting (npm_config_*, PIP_*, UV_*, POETRY_*, YARN_*, BUN_CONFIG*, CARGO_ registry,
  *   source, net and http settings, GOPROXY, GOFLAGS, GOPRIVATE, GONOPROXY, GONOSUMDB, GOINSECURE,
- *   GOTOOLCHAIN, any letter case) named anywhere at or before an install line, by its name in the raw
+ *   GOTOOLCHAIN, any letter case) named anywhere at or before an install line the detector names (a
+ *   runner line is not one: `npm_config_registry=x npx y@1` is inside the runner limit, L3), by its name in the raw
  *   text (a placement setting such as npm_config_save_dev: "written as `--save-dev`"); xargs,
  *   Set-Alias, New-Alias, alias, function, fn, `f() {`, Invoke-Expression, iex, `&` with a string or
  *   doskey beside a package manager's name; a blank or control other than space, tab, CR and LF
@@ -1082,8 +1090,9 @@ function cargoDependencies(entries, more = null) {
       refuse(`${callData(d.name)}: ${typed}, which this hook does not read`);
       continue;
     }
-    // A literal path or git source is the project's own.
-    if ("path" in fields || "git" in fields) continue;
+    // A literal path or git source with no version is the project's own. Round 28 (G3): one that also
+    // carries a version is judged for that version (a publish, and cargo package, resolve it from the registry).
+    if (("path" in fields || "git" in fields) && fields.version === undefined) continue;
     // Round 26b (D1): a registry named by name or index (registry, registry-index) is not resolved:
     // the dependency is judged as a crates.io release of that name and version (a private name is
     // released by its private record, FOURDA_PRIVATE_PACKAGES).
@@ -1286,7 +1295,9 @@ function pyprojectDependencies(entries, local = new Set()) {
         refuse(`${callData(d.name)}: ${typed}, which this hook does not read`);
         continue;
       }
-      if (POETRY_OTHER_SOURCE.some((k) => k in f)) continue;
+      // Round 28 (G3): a path, git, url or file alternative is own unless it also names a version that
+      // bounds something, which is judged (the version a publish of the project asks the registry for).
+      if (POETRY_OTHER_SOURCE.some((k) => k in f) && !(typeof f.version?.s === "string" && !boundsNothing(f.version.s))) continue;
       // W3: a Poetry version that is no string (`requests = 2`) is held.
       if (f.version !== undefined && typeof f.version.s !== "string") refuse(`${callData(d.name)}: a Poetry version that is not a string, which this hook does not read`);
       const version = f.version?.s;
@@ -1361,6 +1372,9 @@ function pyprojectDependencies(entries, local = new Set()) {
     const d = urlDependency(u.name, u.url, "PyPI");
     if (d) fromUrls.push({ name: d.name, section: u.section, spec: d.spec });
   }
+  // Round 28 (G3): a requirement beside the project's own uv source stays the project's own whatever its
+  // version: uv installs it from the source and no command resolves that version from the index
+  // (unlike Cargo, whose package and publish resolve a version beside a path from the registry).
   return out.filter((d) => !others.has(nameKey("PyPI", d.name))).concat(fromUrls);
 }
 
@@ -2539,7 +2553,151 @@ function resolverSettings(file, text) {
   return out;
 }
 
+/**
+ * Round 28 (G2): whether the text an examined edit makes is valid in its manifest kind, by a strict
+ * reading: package.json as JSON (no comments, trailing commas or single quotes, which Bun accepts),
+ * Cargo.toml and pyproject.toml as TOML (every line a header, a key = value, a comment or blank),
+ * go.mod and go.work by their directive grammar. Returns the kind's name when the text is not valid,
+ * or null.
+ */
+const GO_DIRECTIVES = new Set(["module", "go", "toolchain", "godebug", "require", "replace", "exclude", "retract", "tool", "ignore", "use"]);
+function manifestSyntaxError(file, text) {
+  if (file === "package.json") {
+    try {
+      const doc = JSON.parse(text.replace(/^﻿/, ""));
+      return doc !== null && typeof doc === "object" && !Array.isArray(doc) ? null : "JSON object";
+    } catch {
+      return "JSON";
+    }
+  }
+  if (file === "Cargo.toml" || file === "pyproject.toml") return tomlValid(text) ? null : "TOML";
+  if (file === "go.mod") {
+    let block = false;
+    for (const raw of text.replace(/^﻿/, "").split(/\r?\n/)) {
+      const line = raw.replace(/\/\/.*$/, "").trim();
+      if (!line) continue;
+      if (!line.includes(String.fromCharCode(96)) && (line.match(/"/g) ?? []).length % 2 === 1) return "go.mod";
+      if (block) {
+        if (line === ")") block = false;
+        else if (/[()]/.test(line)) return "go.mod";
+        continue;
+      }
+      const [word, ...rest] = line.split(/\s+/);
+      if (!GO_DIRECTIVES.has(word)) return "go.mod";
+      if (rest.join(" ") === "(") block = true;
+      else if (rest.length === 0 || /[()]/.test(rest.join(" "))) return "go.mod";
+    }
+    return block ? "go.mod" : null;
+  }
+  return null;
+}
+/** G2: a strict structural reading of a TOML text over the hook's tokens. */
+function tomlValid(text) {
+  if (/\r(?!\n)/.test(text)) return false;
+  const toks = tomlTokens(text);
+  if (!toks) return false;
+  let i = 0;
+  const k = (j) => toks[j]?.t;
+  const BARE_KEY = /^[A-Za-z0-9_-]+$/;
+  const BARE_VALUE = /^(?:true|false|[+-]?(?:inf|nan)|[+-]?[0-9][0-9A-Za-z_:+-]*)$/;
+  const key = () => {
+    for (;;) {
+      if (k(i) === "str" || (k(i) === "bare" && BARE_KEY.test(toks[i].v))) i++;
+      else return false;
+      if (k(i) !== ".") return true;
+      i++;
+    }
+  };
+  const nls = () => {
+    while (k(i) === "nl") i++;
+  };
+  let depth = 0;
+  const value = () => {
+    if (k(i) === "str") {
+      i++;
+      return true;
+    }
+    if (k(i) === "bare") {
+      if (!BARE_VALUE.test(toks[i].v)) return false;
+      i++;
+      // A float (1.5) or a date-time with a space (1979-05-27 07:32:00) runs over tokens.
+      while ((k(i) === "." && k(i + 1) === "bare") || (k(i) === "bare" && BARE_VALUE.test(toks[i].v))) i += k(i) === "." ? 2 : 1;
+      return true;
+    }
+    if (++depth > MAX_NESTING) return false;
+    if (k(i) === "[") {
+      i++;
+      for (;;) {
+        nls();
+        if (k(i) === "]") break;
+        if (!value()) return false;
+        nls();
+        if (k(i) === ",") {
+          i++;
+          continue;
+        }
+        nls();
+        if (k(i) !== "]") return false;
+        break;
+      }
+      i++;
+      depth--;
+      return true;
+    }
+    if (k(i) === "{") {
+      i++;
+      if (k(i) !== "}") {
+        for (;;) {
+          if (!key() || k(i) !== "=") return false;
+          i++;
+          if (!value()) return false;
+          if (k(i) === ",") {
+            i++;
+            continue;
+          }
+          if (k(i) !== "}") return false;
+          break;
+        }
+      }
+      i++;
+      depth--;
+      return true;
+    }
+    return false;
+  };
+  while (i < toks.length) {
+    tick();
+    nls();
+    if (i >= toks.length) break;
+    if (k(i) === "[") {
+      const twice = k(i + 1) === "[";
+      i += twice ? 2 : 1;
+      if (!key() || k(i) !== "]") return false;
+      i++;
+      if (twice) {
+        if (k(i) !== "]") return false;
+        i++;
+      }
+    } else {
+      if (!key() || k(i) !== "=") return false;
+      i++;
+      if (!value()) return false;
+    }
+    if (i < toks.length && k(i) !== "nl") return false;
+  }
+  return true;
+}
 function wholeFileChanges(file, before, after) {
+  const out = wholeFileChangesOf(file, before, after);
+  // Round 28 (G2): the file an examined edit makes must be valid in its kind, by the hook's strict
+  // reading (after any part the readers already found not read, which is named first).
+  if (after !== before && unreadPart === null) {
+    const invalid = manifestSyntaxError(file, after);
+    if (invalid) refuse(`the file this edit makes is not valid ${invalid}: fix the syntax`, `No dependency_check verdict releases this edit. Write ${file} as valid ${invalid} (for package.json: double quotes, no comments or trailing commas): the versions it sets are then judged as in any other edit.`);
+  }
+  return out;
+}
+function wholeFileChangesOf(file, before, after) {
   // Round 25b: a TOML file with a carriage return alone as a line end: the hook's line reading and the manager's may differ.
   if ((file === "Cargo.toml" || file === "pyproject.toml") && /\r(?!\n)/.test(after) && after !== before) refuse(`a ${file} with a carriage return alone as a line end, which this hook does not read`);
   // Round 25 (S3): a new or changed resolver setting that is no dependency value is held.
@@ -3707,11 +3865,12 @@ function configWriteOf(program, args) {
     }
     return keys.length > 0 ? keys : null;
   };
-  if (program === "npm" && cmd === "set") {
+  // Round 28 (G4): `npm set` and `pnpm set` are `config set` (each manager's own help, npm 10.9.2, pnpm 10.34.6).
+  if ((program === "npm" || program === "pnpm") && cmd === "set") {
     const keys = pairs(pos.slice(1));
     return keys ? { keys: [...keys, ...optionKeys] } : NOT_READ;
   }
-  if (["npm", "pnpm", "yarn", "bun"].includes(program) && (cmd === "config" || (program === "npm" && pos[0] === "c"))) {
+  if (["npm", "pnpm", "yarn", "bun"].includes(program) && (cmd === "config" || ((program === "npm" || program === "pnpm") && pos[0] === "c"))) {
     const sub = pos[1];
     const ops = pos.slice(2);
     if (sub === "set") {
@@ -3722,7 +3881,7 @@ function configWriteOf(program, args) {
       // Yarn and Bun: one key and its value (a JSON value with --json is one operand).
       return ops.length === 2 && !ops[0].includes("=") ? { keys: [keyOf(ops[0]), ...optionKeys] } : NOT_READ;
     }
-    if (["delete", "rm", "unset"].includes(sub)) {
+    if (["delete", "rm", "del", "unset"].includes(sub)) {
       if (ops.length === 0) return NOT_READ;
       if ((program === "yarn" || program === "bun") && ops.length !== 1) return NOT_READ;
       return { keys: [...ops.map(keyOf), ...optionKeys] };
@@ -3731,7 +3890,9 @@ function configWriteOf(program, args) {
     return null;
   }
   // Yarn 2+ `yarn set resolution <descriptor> <range>` pins a resolution in the lockfile (`yarn set version` changes Yarn itself).
-  if (program === "yarn" && pos[0] === "set" && pos[1] === "resolution") return NOT_READ;
+  // Round 28 (G4): every `yarn set` (Yarn 2+: `set version` writes yarnPath to .yarnrc.yml, `set
+  // resolution` pins a lockfile resolution) is not read: the user changes the Yarn release.
+  if (program === "yarn" && pos[0] === "set") return { keys: [], remedy: "This changes the Yarn release or a resolution the lockfile pins: the user changes the Yarn release, not an agent. FOURDA_GUARD is the user's setting, not yours to change." };
   if (program === "pip" && pos[0] === "config" && ["set", "unset", "edit"].includes(pos[1])) {
     if (pos[1] === "edit") return NOT_READ;
     const ops = pos.slice(2);
@@ -4762,12 +4923,14 @@ const RUNNER_FETCH_FORMS = Object.freeze([
  * the command a runner runs, is not read.
  */
 const RUNNER_OPTIONS = Object.freeze({
-  npm: Object.freeze({ flags: ["-y", "--yes", "--no", "--no-install", "-q", "--quiet", "-s", "--silent", "--bun", "--ws", "--workspaces", "--include-workspace-root", "--shell-mode", "--json"], values: ["--loglevel", "-w", "--workspace", "-c", "--call", "--node-options", "--scope", "--reporter", "--prefix", "--cache"], fetch: ["-p", "--package"], source: ["--registry"], held: ["--userconfig", "--globalconfig"] }),
-  uvx: Object.freeze({ flags: ["-q", "--quiet", "-v", "--verbose", "--isolated", "--no-cache", "-n", "--offline", "--refresh", "--upgrade", "-U", "--reinstall", "--native-tls", "--no-progress", "--no-python-downloads", "--managed-python", "--no-managed-python"], values: ["--color", "--python", "-p", "--python-preference", "--directory", "--project", "--refresh-package", "--cache-dir", "--with-editable", "--exclude-newer", "--prerelease", "--resolution"], fetch: ["--with", "--from"], source: ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], held: ["--config-file", "--with-requirements", "--constraints", "--overrides", "-c"] }),
-  uvrun: Object.freeze({ flags: ["-q", "--quiet", "-v", "--verbose", "--isolated", "--no-cache", "-n", "--offline", "--frozen", "--locked", "--no-sync", "--no-project", "--all-extras", "--no-dev", "--all-groups", "--no-default-groups", "--active", "--script", "-s", "--module", "-m", "--native-tls", "--no-progress", "--refresh", "--reinstall", "-U", "--upgrade", "--exact", "--inexact"], values: ["--color", "--python", "-p", "--directory", "--project", "--package", "--extra", "--group", "--only-group", "--no-group", "--env-file", "--cache-dir", "--with-editable", "--refresh-package", "--exclude-newer", "--prerelease", "--resolution"], fetch: ["--with"], source: ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], held: ["--config-file", "--with-requirements"] }),
+  npm: Object.freeze({ flags: ["-y", "--yes", "--no", "--no-install", "-q", "--quiet", "-s", "--silent", "--bun", "--ws", "--workspaces", "--include-workspace-root", "--shell-mode", "--json"], values: ["--loglevel", "-w", "--workspace", "-c", "--call", "--node-options", "--scope", "--reporter", "--prefix", "--cache"], fetch: ["-p", "--package"], source: ["--registry"], held: ["--userconfig", "--globalconfig", "--before"] }),
+  uvx: Object.freeze({ flags: ["-q", "--quiet", "-v", "--verbose", "--isolated", "--no-cache", "-n", "--offline", "--refresh", "--upgrade", "-U", "--reinstall", "--native-tls", "--no-progress", "--no-python-downloads", "--managed-python", "--no-managed-python"], values: ["--color", "--python", "-p", "--python-preference", "--directory", "--project", "--refresh-package", "--cache-dir", "--with-editable"], fetch: ["--with", "--from"], source: ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], held: ["--config-file", "--with-requirements", "--constraints", "--overrides", "-c", "--exclude-newer", "--prerelease", "--resolution", "--upgrade-package", "-P"] }),
+  uvrun: Object.freeze({ flags: ["-q", "--quiet", "-v", "--verbose", "--isolated", "--no-cache", "-n", "--offline", "--frozen", "--locked", "--no-sync", "--no-project", "--all-extras", "--no-dev", "--all-groups", "--no-default-groups", "--active", "--script", "-s", "--module", "-m", "--native-tls", "--no-progress", "--refresh", "--reinstall", "-U", "--upgrade", "--exact", "--inexact"], values: ["--color", "--python", "-p", "--directory", "--project", "--package", "--extra", "--group", "--only-group", "--no-group", "--env-file", "--cache-dir", "--with-editable", "--refresh-package"], fetch: ["--with"], source: ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], held: ["--config-file", "--with-requirements", "--exclude-newer", "--prerelease", "--resolution", "--upgrade-package", "-P"] }),
   pipx: Object.freeze({ flags: ["-q", "--quiet", "-v", "--verbose", "-f", "--force", "--include-deps", "-e", "--editable", "--no-cache", "--system-site-packages", "--include-apps", "--global"], values: ["--python", "--suffix", "--path"], fetch: ["--spec"], source: ["--index-url", "-i"], held: ["--pip-args"] }),
   gorun: Object.freeze({ flags: ["-race", "-v", "-x", "-n", "-a", "-trimpath", "-msan", "-asan", "-cover", "-work", "-linkshared", "-buildvcs=false", "-buildvcs=true"], values: ["-tags", "-ldflags", "-gcflags", "-asmflags", "-exec", "-C", "-p", "-mod", "-buildmode", "-compiler", "-gccgoflags", "-installsuffix", "-pkgdir", "-toolexec", "-pgo", "-covermode", "-coverpkg", "-o"], fetch: [], source: [], held: ["-modfile", "-overlay"] }),
 });
+/** Round 28 (F11): the JavaScript package managers an npm-family runner may run (their own command is read). */
+const JS_MANAGERS = new Set(["npm", "pnpm", "yarn", "yarnpkg", "bun", "npx", "pnpx", "bunx", "corepack"]);
 /** R2: the create-<name> package npm init <name> runs (`@s` is @s/create, `@s/x` is @s/create-x). */
 function createPackage(name) {
   if (name.startsWith("@")) {
@@ -4834,17 +4997,18 @@ function runnerFetches(words) {
   const installs = [];
   let bad = null;
   const npmSpec = (w, bareIsLatest) => {
-    // A package manager on the MANAGERS list fetched to run (`npx -y pnpm@9 add x`): its own command is
-    // read as the install it is; the manager release itself is not judged here (L2).
-    const named = NPM_SPEC.exec(w)?.[1] ?? w;
-    if (MANAGERS.includes(named.toLowerCase())) return [];
-    const file = registryFile(w);
-    if (file && file.ecosystem === "npm") return [file];
-    const m = NPM_SPEC.exec(w);
-    // Round 27 (E2): a dist-tag is a spec, judged as an install of name@tag is (latest is the reading latest).
-    if (m) return [{ ecosystem: "npm", name: m[1], spec: m[2] === "latest" ? LATEST : m[2], ...(m[2] !== "latest" && isDistTag(m[2]) ? { tag: true } : {}) }];
+    // Round 28 (F2): the operand read as an install reads it (jsOperand, jsInstalls): an alias, a
+    // registry tarball, a dist-tag; a form it does not read (another URL, @x) is not read.
+    const k = jsOperand(w);
+    if (k === null) return null;
+    if (k === "local") return [];
+    // A JavaScript package manager fetched to run (`npx -y pnpm@9 add x`): its own command is read as
+    // the install it is; the manager release itself is not judged here (L2). Round 28 (F11): only a
+    // manager of the runner's own family: `npx go@3.0.1` is the npm package go.
+    if (JS_MANAGERS.has(String(k.name).toLowerCase())) return [];
     if (npmBareName(w)) return bareIsLatest ? [{ ecosystem: "npm", name: w, spec: LATEST }] : [];
-    return null;
+    const got = quietly(() => jsInstalls("npm", ["install", w])) ?? [];
+    return got.length > 0 ? got : null;
   };
   const pySpec = (w, bareIsLatest) => {
     const at2 = /^([A-Za-z0-9][A-Za-z0-9._-]*)@(.+)$/.exec(w);
@@ -4865,8 +5029,9 @@ function runnerFetches(words) {
   const sources = [];
   for (let i = 0; i < rest.length; i++) {
     const w = rest[i];
+    // Round 28 (F4): after `--` the next word is the package (or the program a runner runs).
     if (w === "--") {
-      if (kind === "npm") first = rest[i + 1] ?? null;
+      first = rest[i + 1] ?? null;
       break;
     }
     if (!w.startsWith("-")) {
@@ -5175,7 +5340,7 @@ const MANAGERS = Object.freeze(["npm", ...DETECT_VERBS.keys()]);
  * installs resolve (a registry, an index, a release-age setting): examined like an install, held
  * unless the key written is on INERT_CONFIG_KEYS.
  */
-const CONFIG_WRITE_VERBS = Object.freeze({ npm: Object.freeze(["config", "c", "set", "--userconfig", "--globalconfig"]), pnpm: Object.freeze(["config", "--userconfig", "--globalconfig"]), yarn: Object.freeze(["config", "set"]), bun: Object.freeze(["config"]), pip: Object.freeze(["config"]), poetry: Object.freeze(["config", "source"]), go: Object.freeze(["-w", "-u"]) });
+const CONFIG_WRITE_VERBS = Object.freeze({ npm: Object.freeze(["config", "c", "set", "--userconfig", "--globalconfig"]), pnpm: Object.freeze(["config", "c", "set", "--userconfig", "--globalconfig"]), yarn: Object.freeze(["config", "set"]), bun: Object.freeze(["config"]), pip: Object.freeze(["config"]), poetry: Object.freeze(["config", "source"]), go: Object.freeze(["-w", "-u"]) });
 /**
  * Round 25 (S7): the verbs that fetch a named registry release to disk for a later install from a
  * local path (npm pack and npm cache add, pip download and pip wheel, go mod download): a release
@@ -6071,7 +6236,7 @@ function accountCommand(words, dialect, depth, exempt = true) {
   if (configWrite) {
     const bad = configWrite.keys.find((k) => !INERT_CONFIG_KEYS.includes(k));
     if (bad !== undefined || configWrite.keys.length === 0) {
-      accountRemedy = "This changes how later installs resolve: give the option on the install command, or check the exact version with dependency_check and write it. The settings that change no resolution (INERT_CONFIG_KEYS) go ahead.";
+      accountRemedy = configWrite.remedy ?? "This changes how later installs resolve: give the option on the install command, or check the exact version with dependency_check and write it. The settings that change no resolution (INERT_CONFIG_KEYS) go ahead.";
       return notReadAt(`${callData(words.slice(start).join(" "))}, a write of ${program}'s configuration (${bad !== undefined ? `the key ${callData(bad)}` : "a key the hook cannot read"})`, words[start]);
     }
     return null;
@@ -6776,7 +6941,7 @@ const NAMED_OPTIONS = {
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
 // THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
-export { RUNNER_FETCH_FORMS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
+export { RUNNER_FETCH_FORMS, JS_MANAGERS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {
@@ -7163,7 +7328,7 @@ const EXPANSION = /\$|`|%[A-Za-z_]\w*%/;
 const SPLAT = /^["']?@(?:[A-Za-z_]\w*["']?$|\()/;
 /** The runner sub-commands of a manager: the word after them (after their options) is the package fetched. */
 const RUNNER_SUBCOMMANDS = { npm: ["exec", "x", "init", "create", "innit"], pnpm: ["dlx", "exec", "create"], yarn: ["dlx", "create"], bun: ["x", "create", "init"], uv: ["tool", "run"], pipx: ["run", "install", "inject"], go: ["run"] };
-function managerExpansion(command, dialect = "bash") {
+function managerExpansion(command, dialect = "bash", beforeVerb = false) {
   const isExpansion = (w) => EXPANSION.test(w) || (dialect === "powershell" && SPLAT.test(w));
   // The commands of the line split at ; & | line ends, and the parentheses and braces of a subshell or group.
   for (const raw of String(command).split(/[;&|\n\r]+|(?<![$@])[(){}]/)) {
@@ -7199,11 +7364,13 @@ function managerExpansion(command, dialect = "bash") {
     let install = false;
     for (const w of words.slice(i + 1)) {
       if (isExpansion(w)) {
-        if (seen < need || install) return words.slice(i).join(" ");
+        // Round 28 (G5): `beforeVerb`: only an expansion before the first word (an option's value included).
+        if (beforeVerb ? seen === 0 : seen < need || install) return words.slice(i).join(" ");
         break;
       }
       if (w.startsWith("-")) continue;
       seen++;
+      if (beforeVerb) break;
       if (seen === 1 && manager) {
         verb = w.toLowerCase();
         if (isManagerVerb(manager, verb)) install = true;
@@ -7344,6 +7511,13 @@ function accountCall(command, dialect) {
       }
     }
     return null;
+  }
+  // Round 28 (G5): where the detector names the line, an expansion before a manager's verb (the value
+  // of a global option: `npm --cache @X install`, `pnpm --dir $D add x`) is not read either.
+  const early = managerExpansion(command, dialect, true);
+  if (early) {
+    accountRemedy = "Write the manager's options, verb and each package with its version on the command line itself, not in a variable, an array or a splat: the hook then reads it.";
+    return `${callData(early)}, a package manager command with an expansion before its verb`;
   }
   // R4: a manager's own setting named anywhere before or on an install line the detector names.
   const setting = settingBeforeInstall(command);
@@ -8685,10 +8859,10 @@ const ADVICE_VERBS = new Map([
   ["yarn", new Set(["add", "install", "up", "upgrade", "link", "dedupe"])],
   ["bun", new Set(["add", "a", "install", "i", "update", "link"])],
   ["pip", new Set(["install"])],
-  ["uv", new Set(["add", "sync", "install", "lock"])],
+  ["uv", new Set(["add", "sync", "install", "lock", "compile"])],
   ["poetry", new Set(["add", "install", "update", "sync", "lock"])],
-  ["cargo", new Set(["add", "install", "update", "fetch", "build", "b", "run", "r", "test", "t"])],
-  ["go", new Set(["get", "install", "download", "tidy"])],
+  ["cargo", new Set(["add", "install", "update", "fetch", "build", "b", "run", "r", "test", "t", "generate-lockfile"])],
+  ["go", new Set(["get", "install", "download", "tidy", "sync"])],
 ]);
 // Round 27 (F12): the updates the manager chooses (npm audit fix, pnpm audit --fix, dedupe, go mod
 // tidy, uv lock --upgrade, poetry lock) are advised too.

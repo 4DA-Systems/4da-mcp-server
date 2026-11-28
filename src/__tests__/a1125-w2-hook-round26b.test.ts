@@ -51,8 +51,10 @@ describe("D1: a source named by name is not resolved: the dependency is judged",
     expect(s.write(s.file("pyproject.toml", head), `${head}requests = { path = "../r" }\n`).decision).toBe("allow");
   });
   it("a literal path or git source stays the project's own", () => {
-    expect(s.write(join(s.project, "Cargo.toml"), C('[dependencies]\nregex = { path = "../regex", version = "=1.5.4" }')).decision).toBe("allow");
-    const t = '[tool.uv.sources]\nrequests = { git = "https://github.com/psf/requests" }\n';
+    // Round 28 (G3): own only without a version; a version beside the path is judged.
+    expect(s.write(join(s.project, "Cargo.toml"), C('[dependencies]\nregex = { path = "../regex" }')).decision).toBe("allow");
+    expect(s.write(join(s.project, "Cargo.toml"), C('[dependencies]\nregex = { path = "../regex", version = "=1.5.4" }')).text).toContain("answered avoid");
+    const t ='[tool.uv.sources]\nrequests = { git = "https://github.com/psf/requests" }\n';
     expect(s.write(s.file("pyproject.toml", P("").replace('"requests==2.19.0"', "") + t), P(t)).decision).toBe("allow");
   });
 });
