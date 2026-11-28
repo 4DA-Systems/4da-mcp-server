@@ -94,12 +94,32 @@ function sentenceRules(): TextRule[] {
       "some copy on disk is a vulnerable copy that is not malware",
     ],
   };
-  return SENTENCES.flatMap(([text, rule]) => {
+  const malwareCopies = (r: Answer) => new Set([...String(r?.delegation_assessment?.reason ?? "").matchAll(/This project has ([^.]+?) installed, which (?:is|are) recorded as malware/g)].flatMap((m) => m[1].split(/, | and /)).map((x) => x.replace(/ \(in node_modules.*$/, "").replace(/@.*$/, "")));
+  HOLDS["not-human"] = [(r) => level(r) !== "human_only", "any level but human_only"];
+  HOLDS["no-malware-copy"] = [
+    (r) => ((r?.advisories ?? []) as Answer[]).filter((x) => /the reinstall is the whole fix/.test(String(x.action))).every((x) => !malwareCopies(r).has(String(x.title).split(":")[0])),
+    "not about a copy INSTALLED_MALWARE names",
+  ];
+  HOLDS["human-real-vuln"] = [
+    (r) => level(r) === "human_only" && ((r?.task_dependencies ?? []) as Answer[]).some((d) => (d.vulnerabilities ?? []).some((v: Answer) => /critical|high/.test(String(v.severity)) && !v.fixed_version && !/^MAL-/i.test(String(v.id)))),
+    "human_only, with a high or critical task vulnerability without a fix that is no malicious-package record",
+  ];
+  HOLDS["not-scanned"] = [(r) => Number(r?.lockfiles_not_scanned ?? 0) > 0, "lockfiles_not_scanned above 0"];
+  const extra: TextRule[] = [
+    { constant: "Delegate, then review", found: (r) => /Delegate, then review: /.test(reason(r)), holds: (r) => level(r) !== "human_only" && level(r) !== "safe_to_delegate", when: "not with human_only or safe_to_delegate" },
+    {
+      constant: "Vulnerability scan ready (unread lockfiles said)",
+      found: (r) => /^Vulnerability scan ready/.test(reason(r)) && Number(r?.lockfiles_not_scanned ?? 0) > 0,
+      holds: (r) => /under ignored, excluded or test-fixture folders/.test(reason(r)),
+      when: "where lockfiles_not_scanned is above 0, the reason says so",
+    },
+  ];
+  return [...extra, ...SENTENCES.flatMap(([text, rule]) => {
     const h = HOLDS[rule];
     if (!h) return [];
     const re = sentencePattern(text);
     return [{ constant: `sentence: ${text.slice(0, 60)}`, found: (r: Answer) => re.test(said(r)), holds: h[0], when: h[1] }];
-  });
+  })];
 }
 
 /** The rules a given answer breaks (empty: every text it says is true at its level). */

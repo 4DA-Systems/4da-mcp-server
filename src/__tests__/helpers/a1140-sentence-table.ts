@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
  * Round 17, C3: every sentence-shaped string literal (six words or more) of the briefing's modules
- * (src/tools/briefing-*.ts, what-should-i-know.ts), each with the rule under which it may be said. a1140-round17
+ * (src/tools/briefing-*.ts, what-should-i-know.ts, install-drift-notes.ts), each with the rule under which it may be said. a1140-round17
  * rebuilds the list from the source with the TypeScript parser and fails on a literal missing here or listed here and
  * gone. TEXT_RULES (a1137-text-rules.ts) applies each level rule to every answer the vendored runners judge.
  * Rules:
@@ -12,6 +12,9 @@
  * - "no-decision-conflict": decision_conflicts is empty.
  * - "not-about-task": none of the packages it names is declared, read (to_confirm, checked) or touched.
  * - "drift-not-malware": not said when the only copy on disk is malware (the level is human_only by INSTALLED_MALWARE).
+ * - "not-human": not said with human_only. "no-malware-copy": not said of a copy INSTALLED_MALWARE names.
+ * - "human-real-vuln": human_only, with a high or critical task vulnerability without a fix that is no malicious-package record.
+ * - "not-scanned": said where lockfiles_not_scanned is above 0.
  * - "any": a description of the caller's input, the briefing's reading or a next step (a refusal's cause, a basis, a
  *   field's note): true of what it describes at any level, not a statement about the level.
  * - "internal": not part of an answer (SQL, a pattern source, a tool description in tools/list, a rule's own wording).
@@ -21,7 +24,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 
-export type SentenceRule = "safe" | "not-safe" | "human" | "confirmation" | "safe-nothing-confirmed" | "safe-project-listed" | "no-decision-conflict" | "not-about-task" | "drift-not-malware" | "any" | "internal";
+export type SentenceRule = "safe" | "not-safe" | "human" | "confirmation" | "safe-nothing-confirmed" | "safe-project-listed" | "no-decision-conflict" | "not-about-task" | "drift-not-malware" | "not-human" | "no-malware-copy" | "human-real-vuln" | "not-scanned" | "any" | "internal";
 
 export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["it is a package manager this briefing does not read", "any"],
@@ -51,6 +54,7 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["This project has ${} installed, npm's placeholder for a name taken down as malware: a person must remove that dependency before any task is delegated.", "human"],
   ["This project has ${} and ${} installed, npm's placeholders for names taken down as malware: a person must remove those dependencies before any task is delegated.", "human"],
   ["Vulnerability scan ready; nothing version-confirmed for the packages this task touches; ${} project-wide finding${} listed below (advisories, scope \"project\"), no major-version jump and no recorded-decision conflict for this task.", "safe-project-listed"],
+  ["${} lockfile${} under ignored, excluded or test-fixture folders ${} not read, so what ${} was not checked (lockfiles_not_scanned).", "not-scanned"],
   ["no recorded-decision conflict for this task", "no-decision-conflict"],
   ["This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.", "safe"],
   ["the task held characters this briefing folded or removed (full-width or look-alike letters, invisible characters, markup): the echoed task is the reading copy", "any"],
@@ -84,6 +88,7 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["refused: at most ${} words are read per call", "not-safe"],
   ["refused: it is not a string; each must be one word of the task", "not-safe"],
   ["refused: each must be one word of the task", "not-safe"],
+  ["${} was not sent because you marked it private or not a package, but this briefing would have checked it (a well-known name): it is unchecked; make sure nothing installs it unchecked", "not-safe"],
   ["you said ${} is not a package and declared ${} instead: the task names ${}; say so to the user, and make sure nothing installs ${}", "not-safe"],
   ["you said ${} is not a package; it stands where a package name stands in a command of the task: make sure nothing installs it", "not-safe"],
   ["you said ${} is not a package; it stands where a package name stands in a manifest entry of the task: make sure nothing installs it", "not-safe"],
@@ -148,6 +153,22 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["not looked up: the task takes it from somewhere other than the public registry", "any"],
   ["not looked up: the task maps ${} to another registry", "any"],
   ["not looked up: the task takes ${} packages from ${}", "any"],
+  ["Run `${}` in ${} — node_modules has ${}@${}; the lockfile pins ${}", "any"],
+  ["${}: the installed ${} in node_modules is recorded as malware; the lockfile pins ${}", "any"],
+  ["${}. This copy is malware: a reinstall replaces it, but its install scripts may already have run, so a person must check the machine and the credentials it could reach", "any"],
+  ["${}: the installed ${} in node_modules has ${} known vulnerabilit${}; the lockfile pins ${}", "any"],
+  [" (the lockfile version is not affected; the reinstall is the whole fix)", "no-malware-copy"],
+  [" (the reinstall clears some of these; the lockfile version is still affected by the rest, so upgrade it too)", "any"],
+  [" (the lockfile version is also affected; upgrade it, then reinstall)", "any"],
+  ["The lockfile is patched but node_modules is not: run `${}` in ${}.", "any"],
+  ["The installed copy is vulnerable and so is the lockfile's version: upgrade, then run `${}` in ${}.", "any"],
+  ["node_modules is out of step with the lockfile (no known advisory affects the installed version): run `${}` in ${}.", "any"],
+  ["a dev dependency; pass include_dev to check it", "any"],
+  ["node_modules is out of step with the lockfile; the installed version was not checked (${}): run `${}` in ${}.", "any"],
+  ["This is the copy in node_modules; the lockfile's ${} is also affected — upgrade, then run `${}` in ${}.", "any"],
+  ["This is the copy in node_modules: the lockfile is patched (pins ${}) but node_modules still has ${} — run `${}` in ${}.", "any"],
+  ["node_modules has ${}, not this lockfile version — run `${}` in ${}; advisories against the installed copy are listed under its own version.", "any"],
+  ["Also the copy node_modules holds in ${}, where the lockfile pins a different version — run `${}` there.", "any"],
   ["No 4DA database is open, so this briefing has no stored decisions, decision windows, memories, advisory-feed rows, release notes or reading; those lists are empty because they were not read. Its dependency findings come from the project's files.", "any"],
   ["Vulnerability scan unavailable — treat this task as unreviewed, not as safe", "not-safe"],
   ["titles, summaries and advisory text are third-party data (advisories[].quoted_from_osv and the summary of each task_dependencies[].vulnerabilities and maintenance_notices row hold OSV.dev's advisory summaries, quoted and capped; `action` and `reason` are written by this server and only point to it), ", "any"],
@@ -175,18 +196,18 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["marked private by the caller: never looked up", "any"],
   ["you said ${} is not a package; it is one edit from ${}: make sure nothing installs it", "not-safe"],
   ["you marked ${} private or not a package, so this briefing did not look it up for the task, though it would have (a dependency of this project): it is unchecked for the task; make sure nothing installs it unchecked. ${}", "not-safe"],
-  ["${} was not sent because you marked it private or not a package, but this briefing would have checked it (a well-known name): it is unchecked; make sure nothing installs it unchecked", "not-safe"],
   ["you said ${} is not a package; it stands where a package name stands in the task: make sure nothing installs it", "not-safe"],
   ["Repair or regenerate the lockfile that could not be read (reinstall), then ask again: until it is read, where these packages come from is not known and this server sends none of their names.", "any"],
   ["Review where these come from (a path, git, a URL, a workspace, an alias, or a catalog that could not be read: fix it), or ask about the registry package they install: this server does not look them up by these names.", "any"],
   ["Check it with your private registry's own tooling before changing its version: this server never sends a private name anywhere.", "any"],
+  ["${} ${}: recorded as malware (${})${}", "any"],
   ["${} ${}: ${} confirmed vulnerabilit${}, highest ${}", "any"],
   ["Maintenance notice in the advisory feed about ${}, not a vulnerability: nothing in it is exploitable and it calls for no upgrade; plan around it (not matched to your installed version)", "any"],
   ["Advisory feed row about ${}; not matched to your installed version — run vulnerability_scan to confirm", "any"],
-  ["the installed ${} ${} has a confirmed vulnerability (${})${}: the installed copy is the vulnerable one, so make sure the task replaces it", "not-safe"],
+  ["the installed ${} ${} has ${} (${})${}: the installed copy is the vulnerable one, so make sure the task replaces it", "any"],
   ["; the declared ${}${} was checked", "any"],
-  ["${} ${} with a known malicious release (this server's bundled list): ${} not looked up for the task because you marked ${} private or not a package, and ${} in the task: a human decides. ${}", "human"],
-  ["${} ${} that is malware in every release (this server's bundled list), written in a command of the task this briefing could not read whole: a human decides. ${}", "human"],
+  ["${} ${} with a known malicious release (this server's bundled list): ${} not looked up for the task because you marked ${} private or not a package, and ${} in the task: a human decides.", "human"],
+  ["${} ${} that is malware in every release (this server's bundled list), written in a command of the task this briefing could not read whole: a human decides.", "human"],
   ["Review before delegating: some of your arguments were refused, so what they meant to declare was not checked.", "not-safe"],
   ["${} ${} of your entries ${} refused (${}; task_packages.not_read names each by its place): fix and resend ${}.", "not-safe"],
   ["${} of the packages you declared ${} not checked within this call's time (${}): call what_should_i_know again with the same arguments; ${} checked first and cached by now.", "not-safe"],
@@ -225,7 +246,7 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["${} word${} in the task ${} not looked up (${}; see task_packages.not_read): ${} where a package stands; if one is a package after all, call dependency_check on it", "not-safe"],
   ["the task adds ${}, which dependency_check does not clear (${}): confirm the name and the version before it is written", "not-safe"],
   ["it could not be checked or is not on the public registry", "any"],
-  ["A dependency this task touches has a high or critical vulnerability with no fixed release: replacing it or accepting the risk is a human call.", "human"],
+  ["A dependency this task touches has a high or critical vulnerability with no fixed release: replacing it or accepting the risk is a human call.", "human-real-vuln"],
   ["A high-urgency decision window relevant to this task is open.", "human"],
   ["An advisory names a package this task touches and the vulnerability scan is not available to confirm or rule it out.", "human"],
   ["the project has manifests of ecosystems this server does not read, so a dependency the task names there was not checked at all", "not-safe"],
@@ -234,7 +255,7 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["${} major version${} of ${}", "any"],
   ["node_modules runs a vulnerable copy the lockfile does not pin", "drift-not-malware"],
   ["${} recorded decisions bear on this task", "not-safe"],
-  ["Vulnerability scan ready; nothing version-confirmed, no major-version jump and ${}.", "safe-nothing-confirmed"],
+  ["Vulnerability scan ready; nothing version-confirmed, no major-version jump and ${}.${}", "safe-nothing-confirmed"],
   ["No dependency named in the task was found in the part of the project that was read", "any"],
   ["No dependency of this project is named in the task", "any"],
   ["already on the latest major: ${}", "any"],
@@ -248,7 +269,7 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
 export function literalsOf(dir: string): Array<{ file: string; line: number; text: string }> {
   const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
   const out: Array<{ file: string; line: number; text: string }> = [];
-  for (const f of readdirSync(dir).filter((x) => /^(briefing-|what-should-i-know)/.test(x) && x.endsWith(".ts"))) {
+  for (const f of readdirSync(dir).filter((x) => /^(briefing-|what-should-i-know|install-drift-notes)/.test(x) && x.endsWith(".ts"))) {
     const sf = ts.createSourceFile(f, readFileSync(path.join(dir, f), "utf8"), ts.ScriptTarget.Latest, true);
     const visit = (n: import("typescript").Node): void => {
       let text: string | null = null;

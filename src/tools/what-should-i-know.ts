@@ -12,13 +12,13 @@
  *
  * THE CONTRACT (round 14). Revised in round 16. Each numbered sentence ends with the tests that pin it; nothing outside this block is.
  * 1. The level rests on the caller's declaration: each package declared public is checked at the `version` it states, and a public entry without `version` never leaves the answer at safe_to_delegate. [tests: a1137-confirm-review12 (generated), a1132-round9]
- * 2. A name the briefing read and reported (a seen kind marked "read" in `SEEN_KINDS`) that the caller dismissed holds the answer from safe_to_delegate, with its `DISMISSED_READ` text, or `DISMISSED_INSTEAD` where the call declared a name one edit from it instead. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated)]
- * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), and a path under such a name at a `/` (a Go module's sub-path, a scope's package), is never in a request the call makes: `refusePrivateRequest`, the choke point every registry, proxy, OSV.dev and GitHub request passes, refuses it under the call's `withRequestVeto`, and a public entry in or under that set is refused; a public parent of a private path is a name of its own, sent when the caller declares it public. [tests: a1138-round15 (generated), a1137-round14 (property)]
+ * 2. A name the briefing read and reported (a seen kind marked "read" in `SEEN_KINDS`) that the caller dismissed holds the answer from safe_to_delegate, with its `DISMISSED_READ` text, `DISMISSED_INSTEAD` where the call declared a name one edit from it instead, or `DISMISSED_KNOWN` where the name is one this briefing would have checked on its own. [tests: a1137-round14 (generated), a1137-confirm-review12 (generated), a1141-round18]
+ * 3. A name the caller dismissed or declared private, compared by `forbiddenKey` (the fold `baseName` in its union form), and a path under such a name at a `/` (a Go module's sub-path, a scope's package), is never in a request the call makes for the declaration or the task (the lookups of declared, read and near-miss names): `refusePrivateRequest`, the choke point every registry, proxy, OSV.dev and GitHub request passes, refuses it under the call's `withRequestVeto`, and a public entry in or under that set is refused; a public parent of a private path is a name of its own, sent when the caller declares it public; the project's own scan of installed dependencies is sentence 16's, and the answer says so (`SCAN_STILL_READS`). [tests: a1138-round15 (generated), a1137-round14 (property)]
  * 4. A value of a credential shape this server knows (`CREDENTIAL_SHAPES`), whole, is never in any response the server returns (`screenJsonRpc`, at the transport's send: each stdio message, and over HTTP each body chunk of any type and each header value, by whole lines, so a token split across chunks is screened whole; `credentialSpans`, the one matcher both screens use, matches what `CREDENTIAL_SHAPES` matches: a shape of `BOUNDARY_SHAPES` at a word boundary, each other shape glued to the text before it or not), outside the `task` field of a what_should_i_know answer; a text is screened until no shape is left in it, and a request whose id has a credential's shape is not run and is answered with id null (`CREDENTIAL_ID_REFUSED`). [tests: a1140-round17 (generated), a1139-round16b (generated), a1139-round16 (generated), a1138-round15 (generated), a1137-round14 (generated)]
- * 5. That `task` field is the reading copy of the caller's task, as `readingCopy` makes it: control characters removed, percent-escapes decoded, default-ignorable characters (`DEFAULT_IGNORABLE`, the Unicode property) removed, NFKC-folded with each Dash_Punctuation character and each of `DASH_EXTRAS` as - and each of `SLASH_LOOKALIKES` as /, emphasis dropped where `MARKUP_RULE` holds, tags dropped, line continuations joined, each run of blanks one space, and a line over `MAX_READ_LINE` characters left out; where it differs from the caller's task in more than blanks (space separators, tabs and line breaks, U+2028, U+2029 and NEL among them) the answer carries `TASK_FOLDED`. [tests: a1140-round17 (generated), a1139-round16 (generated), a1138-round15, a1136-round13]
+ * 5. That `task` field is the briefing's reading copy of the caller's task, not the caller's text; where it differs from the caller's task in more than blanks (`BLANKS`) the answer carries `TASK_FOLDED`, and what the reading drops or folds is best effort, described in the NOTES. [tests: a1141-round18 (generated), a1140-round17 (generated), a1136-round13]
  * 6. A declared item's check ledger line is the line dependency_check writes for the same item: its engine and `recordVerdicts` for a looked-up item, `checkAndRecord` for one the project's configuration makes private. [tests: a1136-round13]
  * 7. The briefing also checks versions it happens to read in the task, for example on a command's operand, in a snippet or beside a name; that reading is best effort, and a version written in a spelling it does not read is not checked. [tests: a1134-round11, a1135-round12]
- * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of a package the task touches (one the call declares, public or private, one the briefing read in the task, or an installed dependency `detectTaskPackages` finds named in the task; the installed copy of a declared package counts even where the declared version is its fix, review_needed with that said), installed malware (`INSTALLED_MALWARE`) or an installed npm security placeholder (`INSTALLED_PLACEHOLDER`, found by the scan's own detector) anywhere in the full scan (dev, optional and peer dependencies, transitive copies, sub-projects, and the copy on disk in node_modules), each human_only whatever the task, running install drift, a decision conflict (`decisionConflictsFor`, over the declared names, the names the briefing read in the task and the installed ones it touches), a name waiting in to_confirm, or something the briefing noticed it could not read; another version-confirmed finding of the project is listed in `advisories` with scope "project" and leaves the level as it is, and a safe reason then says so (`PROJECT_FINDINGS_LISTED`). [tests: a1140-round17 (generated), a1139-round16, a1139-round16b, a1139-confirm-review14, a1135-confirm-review10, a1137-confirm-review12]
+ * 8. The level is raised, for example, by a finding on a checked package, a version-confirmed vulnerability of a package the task touches (one the call declares, public or private, one the briefing read in the task, or an installed dependency `detectTaskPackages` finds named in the task by `forbiddenKey`'s fold or, for Go, by a package path under the module; the installed copy of a declared package counts even where the declared version is its fix, review_needed with that said), installed malware (`INSTALLED_MALWARE`) or an installed npm security placeholder (`INSTALLED_PLACEHOLDER`, found by the scan's own detector) in the lockfiles the scan reads or in the copy on disk of a direct dependency (the drift check reads direct npm dependencies of a folder that holds a lockfile and its own node_modules; other copies on disk are not read), each human_only whatever the task, running install drift within the same bound, a decision conflict (`decisionConflictsFor`, over the declared names, the names the briefing read in the task and the installed ones it touches), a name waiting in to_confirm, or something the briefing noticed it could not read; another version-confirmed finding of the project is listed in `advisories` with scope "project" and leaves the level as it is, and a safe reason then says so (`PROJECT_FINDINGS_LISTED`), and says how many lockfiles the scan found and did not read (`NOT_SCANNED_LOCKFILES`). [tests: a1141-round18 (generated), a1140-round17 (generated), a1139-round16, a1139-round16b, a1139-confirm-review14, a1135-confirm-review10, a1137-confirm-review12]
  * 9. When the briefing notices it cannot read a command or a snippet whole, for example a quote problem, a source option, or a line over `MAX_READ_LINE` characters, it says so with `unreadableReason` and the answer is not safe_to_delegate. [tests: a1137-confirm-review12 (generated)]
  * 10. When the briefing notices a command of a manager it does not read, for example gem, brew or composer at a command position with its own verb, it says so, its words are not offered or looked up, and the answer is not safe_to_delegate; it does not promise to notice each such command. [tests: a1138-round15, a1137-round14]
  * 11. With a package-source spelling of `SOURCE_SPELLINGS` in the task, the names the task adds are not looked up (`SOURCE_HELD`); the answer is held from safe_to_delegate when that held a name, and a task that holds such a spelling but no name to hold can be safe. [tests: a1137-confirm-review12 (generated), a1127-confirm-promises]
@@ -31,7 +31,15 @@
  * 18. The briefing checks npm, PyPI, crates.io and Go packages: what a task installs through any other manager or tool is outside what its answer covers, whatever the level, and a safe reason says so (`OUTSIDE_COVERAGE`). [tests: a1138-round15, a1137-confirm-review12 (generated)]
  * END OF THE CONTRACT.
  *
- * NOTES: how it reads; not part of the contract. The readers are briefing-command-check.ts (commands and forms),
+ * NOTES: how it reads; not part of the contract.
+ * The reading copy (readingCopy), best effort: control characters removed (also those a percent-escape decodes to),
+ * percent-escapes decoded, default-ignorable characters (DEFAULT_IGNORABLE) removed, NFKC-folded, each Dash_Punctuation
+ * character and each of DASH_EXTRAS as "-" and each of SLASH_LOOKALIKES as "/", emphasis dropped where MARKUP_RULE holds,
+ * a fixed list of HTML tags dropped, line continuations after a blank joined, a lone CR read as a line break, each run of
+ * blanks and space separators one space, a line over MAX_READ_LINE characters left out.
+ * Outside the scan (not read): a malware copy in node_modules that no lockfile lists, a copy on disk that is not a
+ * direct npm dependency of a folder holding a lockfile and its own node_modules, a go.sum line that go.mod does not
+ * require, and a `-c` constraints file. A JSON-RPC batch holding a credential-shaped id is refused whole. The readers are briefing-command-check.ts (commands and forms),
  * briefing-snippets.ts (manifest snippets), briefing-new-packages.ts and briefing-requested-versions.ts (prose), each
  * with its own notes; the level is assembled in this file.
  *
@@ -56,6 +64,7 @@ import {
   INSTALLED_PLACEHOLDER,
   PROJECT_FINDINGS_LISTED,
   NO_DECISION_CONFLICT,
+  NOT_SCANNED_LOCKFILES,
   TASK_FOLDED,
   BEST_EFFORT_READING,
   SCAN_STILL_READS,
@@ -68,6 +77,7 @@ import {
   dismissedBy,
   DISMISSED_READ,
   DISMISSED_INSTEAD,
+  DISMISSED_KNOWN,
   SEEN_KINDS,
   MAX_TO_CONFIRM,
   NEXT_STEP,
@@ -309,6 +319,8 @@ export interface WhatShouldIKnowResult {
    * Lockfiles (or manifests) found and not read, or not read whole: what they pin was checked
    * nowhere, so the briefing never clears the task over them. Absent when every one was read.
    */
+  /** Round 18, N7: how many lockfiles the walk found and the scan did not read (git-ignored, excluded, fixture folders). */
+  lockfiles_not_scanned?: number;
   lockfiles_not_read?: Array<{ path: string; reason: "merge_conflict" | "unreadable" | "partial" | "refused"; error: string }>;
   _meta: { untrusted_text: string };
 }
@@ -485,11 +497,19 @@ const NEVER_SEND = new WeakMap<object, { forbidden: (name: string, eco?: string 
 
 /** Blanks only (space separators, tab, line breaks): not U+FEFF, which JS \s counts and the copy removes (round 16, C5). */
 // Round 17, C5(d): NEL, U+2028 and U+2029 are line breaks too.
-const BLANKS = /[\p{Zs}\t\n\v\f\r\u0085\u2028\u2029]+/gu;
+export const BLANKS = /[\p{Zs}\t\n\v\f\r\u0085\u2028\u2029]+/gu;
 const withoutBlanks = (text: string) => text.replace(BLANKS, "");
 
-/** Steps 1 to 4 of readingCopy, line by line. */
-const readingLines = (text: string) => readingText(readableText(cleanText(text))).split("\n").map(collapseBlanks);
+/**
+ * Steps 1 to 4 of readingCopy, line by line. Round 18, N2: controls decoded from a percent-escape are removed too
+ * (cleanText after decoding), a lone CR is a line break, and each run of space separators (U+1680 among them) and
+ * tabs is one space.
+ */
+const readingLines = (text: string) =>
+  readingText(cleanText(readableText(cleanText(text))))
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((l) => collapseBlanks(l).replace(/[\p{Zs}\t]+/gu, " "));
 
 /**
  * Round 16, C5: the reading copy of a task (the answer's task field), each step in order:
@@ -1044,7 +1064,7 @@ async function executeBriefing(
         .map((w) =>
           w.dependency
             ? `you marked ${w.name} private or not a package, so this briefing did not look it up for the task, though it would have (a dependency of this project): it is unchecked for the task; make sure nothing installs it unchecked. ${SCAN_STILL_READS.replace(/\.$/, "")}`
-            : `${w.name} was not sent because you marked it private or not a package, but this briefing would have checked it (a well-known name): it is unchecked; make sure nothing installs it unchecked`,
+            : DISMISSED_KNOWN(w.name),
         ),
     )
     // A word the screen withheld where a package stands (its shape only, never its value): no command is named.
@@ -1107,8 +1127,13 @@ async function executeBriefing(
       ).values(),
     ];
     const n = dep.vulnerabilities.length;
+    // Round 18, E4: a malicious-package record is not a vulnerability to weigh: the row says malware.
+    const malwareIds = dep.vulnerabilities.filter((v) => /^MAL-/i.test(String(v.id))).map((v) => v.id);
     advisories.push({
-      title: `${labelOf(dep, taskDependencies)} ${dep.installed.join("/")}: ${n} confirmed vulnerabilit${n !== 1 ? "ies" : "y"}, highest ${top.severity}`,
+      title:
+        malwareIds.length > 0
+          ? `${labelOf(dep, taskDependencies)} ${dep.installed.join("/")}: recorded as malware (${malwareIds.join(", ")})${n > malwareIds.length ? `, and ${n - malwareIds.length} confirmed vulnerabilit${n - malwareIds.length !== 1 ? "ies" : "y"}` : ""}`
+          : `${labelOf(dep, taskDependencies)} ${dep.installed.join("/")}: ${n} confirmed vulnerabilit${n !== 1 ? "ies" : "y"}, highest ${top.severity}`,
       signal_type: "security_alert",
       priority: top.severity,
       action: copies.map((v) => adviceFor(advice, v)).join(" | "),
@@ -1154,10 +1179,17 @@ async function executeBriefing(
   const touchedInstalled = scan
     ? scan.vulnerabilities.filter((v) => isActionableVulnerability(v) && !v.installDriftOf && !taskKeys.has(`${v.ecosystem}\0${v.package}`) && touchedFold.has(forbiddenKey(v.package)))
     : [];
-  const touchedInstalledReasons = [...new Set(touchedInstalled.map((v) => {
-    const d = declared.entries.find((e) => forbiddenKey(e.name) === forbiddenKey(v.package));
-    return `the installed ${v.package} ${v.currentVersion} has a confirmed vulnerability (${v.vulnId})${d ? `; the declared ${d.name}${d.version ? ` ${d.version}` : ""} was checked` : ""}: the installed copy is the vulnerable one, so make sure the task replaces it`;
-  }))];
+  const byCopy = new Map<string, { pkg: string; version: string; ids: string[] }>();
+  for (const v of touchedInstalled) {
+    const key = `${v.ecosystem}\0${v.package}\0${v.currentVersion}`;
+    const row = byCopy.get(key) ?? { pkg: v.package, version: v.currentVersion, ids: [] };
+    if (!row.ids.includes(v.vulnId)) row.ids.push(v.vulnId);
+    byCopy.set(key, row);
+  }
+  const touchedInstalledReasons = [...byCopy.values()].map(({ pkg, version, ids }) => {
+    const d = declared.entries.find((e) => forbiddenKey(e.name) === forbiddenKey(pkg));
+    return `the installed ${pkg} ${version} has ${ids.length === 1 ? "a confirmed vulnerability" : `${ids.length} confirmed vulnerabilities`} (${ids.sort().join(", ")})${d ? `; the declared ${d.name}${d.version ? ` ${d.version}` : ""} was checked` : ""}: the installed copy is the vulnerable one, so make sure the task replaces it`;
+  });
 
   // ── 3. Decisions: windows, conflicts, wisdom ──────────────────────────
   const decisionWindows = (db ? getOpenDecisionWindows(db) : [])
@@ -1182,11 +1214,15 @@ async function executeBriefing(
   // scan's word (audit 6.2.5 D-5: an upgrade of jackson-databind in WebGoat's pom.xml
   // came back safe_to_delegate).
   const notCovered = exclusionNotes(liveIntel?.getDiscovery?.() ?? null).filter((n) => n.startsWith("NOT COVERED"));
+  // Round 18, N7: lockfiles the walk found and the scan did not read (git-ignored, output or excluded folders, links out
+  // of the root, test fixtures), by the scan's own list: a "ready" scan says so.
+  const lockfilesNotScanned = notScannedLockfiles(liveIntel?.getDiscovery?.() ?? null);
   const notRead = lockfilesNotRead(liveIntel);
 
   const finalize = (relevantWisdom: WisdomEntry[], wisdomMode: WisdomRecallMode, wisdomNote?: string): WhatShouldIKnowResult => {
     const assessed = assessDelegation({
       notCovered,
+      lockfilesNotScanned,
       scanStatus,
       advisories,
       newPackages,
@@ -1206,30 +1242,27 @@ async function executeBriefing(
     // (confirmation_needed), unless what is known already makes the task human_only. It outranks
     // review_needed and unknown: the agent can act on it now. With nothing waiting, the level follows
     // from every checked row, so a confirmed typosquat or critical pin is human_only again (wave 2, P4/P5).
-    const malwareInstalled = installedMalware(scan);
-    if (malwareInstalled.length > 0) {
-      assessed.reason = assessed.level === "safe_to_delegate" ? INSTALLED_MALWARE(malwareInstalled) : `${INSTALLED_MALWARE(malwareInstalled)} ${assessed.reason}`;
+    // Round 18, N4 / E5: one way to raise to human_only. A safe reason is replaced (its "nothing version-confirmed"
+    // and coverage sentences are true only at safe_to_delegate); any other reason follows as "Also: ...", without its
+    // "Delegate, then review" opening, which is not said with human_only.
+    const raiseToHuman = (lead: string) => {
+      assessed.reason = assessed.level === "safe_to_delegate" ? lead : `${lead} Also: ${assessed.reason.replace(/^Delegate, then review: /, "")}`;
       assessed.level = "human_only";
-    }
+    };
+    const malwareInstalled = installedMalware(scan);
+    if (malwareInstalled.length > 0) raiseToHuman(INSTALLED_MALWARE(malwareInstalled));
     // Round 16b: an installed npm security placeholder (the scan's own detector, osv-scanner.ts securityPlaceholdersOf,
     // read from scan.securityPlaceholders) holds every briefing at human_only too.
     const placeholders = installedPlaceholders(scan);
-    if (placeholders.length > 0) {
-      assessed.reason = assessed.level === "safe_to_delegate" ? INSTALLED_PLACEHOLDER(placeholders) : `${INSTALLED_PLACEHOLDER(placeholders)} ${assessed.reason}`;
-      assessed.level = "human_only";
-    }
-    if (maliciousWithheld.length > 0) {
-      assessed.level = "human_only";
-      assessed.reason = `${maliciousWithheld.map((w) => w.name).join(", ")} ${maliciousWithheld.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list): ${maliciousWithheld.length === 1 ? "it was" : "they were"} not looked up for the task because you marked ${maliciousWithheld.length === 1 ? "it" : "them"} private or not a package, and ${maliciousWithheld.length === 1 ? "it stands" : "they stand"} in the task: a human decides. ${assessed.reason}`;
-    }
+    if (placeholders.length > 0) raiseToHuman(INSTALLED_PLACEHOLDER(placeholders));
+    if (maliciousWithheld.length > 0)
+      raiseToHuman(`${maliciousWithheld.map((w) => w.name).join(", ")} ${maliciousWithheld.length === 1 ? "is a name" : "are names"} with a known malicious release (this server's bundled list): ${maliciousWithheld.length === 1 ? "it was" : "they were"} not looked up for the task because you marked ${maliciousWithheld.length === 1 ? "it" : "them"} private or not a package, and ${maliciousWithheld.length === 1 ? "it stands" : "they stand"} in the task: a human decides.`);
     // Round 9 (docs lane 5): a name with a known malicious release on the bundled list, written in a command the
     // grammar could not read whole (so no reader looks it up, m10), decides on its own, offline: human_only. A command
     // read whole has its operands looked up and judged at the version written.
     const maliciousInCommands = [...new Set(evidence.commands.filter((c) => !c.canonical).flatMap((c) => c.words.filter((w) => knownMalwareOnly(w, c.ecosystem))))];
-    if (maliciousInCommands.length > 0 && assessed.level !== "human_only") {
-      assessed.level = "human_only";
-      assessed.reason = `${maliciousInCommands.join(", ")} ${maliciousInCommands.length === 1 ? "is a name" : "are names"} that is malware in every release (this server's bundled list), written in a command of the task this briefing could not read whole: a human decides. ${assessed.reason}`;
-    }
+    if (maliciousInCommands.length > 0 && assessed.level !== "human_only")
+      raiseToHuman(`${maliciousInCommands.join(", ")} ${maliciousInCommands.length === 1 ? "is a name" : "are names"} that is malware in every release (this server's bundled list), written in a command of the task this briefing could not read whole: a human decides.`);
     // Round 6b, item 1: refused entries are the caller's arguments, not words of the task; the level is no more
     // reassuring than review_needed while one is refused.
     if (tooMany) {
@@ -1349,7 +1382,8 @@ async function executeBriefing(
       scan_status: scanStatus,
       scan: scanBlock,
       ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
-      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${waiting.length > 0 ? `${confirmationSummary(waiting.length)} ` : ""}${taskWithheld.length > 0 ? `${withheldWordsText(taskWithheld)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
+      ...(lockfilesNotScanned > 0 ? { lockfiles_not_scanned: lockfilesNotScanned } : {}),
+      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${waiting.length > 0 ? `${confirmationSummary(waiting.length)} ` : ""}${taskWithheld.some((w) => w.standing) ? `${withheldWordsText(taskWithheld.filter((w) => w.standing))} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
@@ -1502,7 +1536,8 @@ function describePackage(
   return {
     package: pkg.name,
     ecosystem: pkg.ecosystem,
-    installed: pkg.installed,
+    // Round 18, E2: where the drift check read a different copy on disk, that copy is the installed one.
+    installed: [...new Set(pkg.installed.map((ver) => vulns.find((v) => v.installDriftOf === ver && v.package === pkg.name && v.ecosystem === pkg.ecosystem)?.currentVersion ?? ver))],
     direct: pkg.direct,
     dev_only: pkg.dev,
     requested: { from: pkg.requested_from, to: pkg.requested_to },
@@ -1723,6 +1758,13 @@ export function walkNotReadNote(discovery: Pick<TreeDiscovery, "walkTruncated" |
   return `NOT CHECKED: ${why}. A dependency in that part was checked nowhere, so this is not a complete result: pass project_path for the part of the project you need${discovery.walkStopped === "time_budget" ? " (or raise FOURDA_WALK_BUDGET_MS on a slow disk)" : ""}.`;
 }
 
+/** Round 18, N7: the lockfiles found and not read for a reason of the walk's own (not the walk's bounds, which are said apart). */
+function notScannedLockfiles(discovery: ReturnType<NonNullable<BriefingLiveIntel["getDiscovery"]>> | null): number {
+  if (!discovery) return 0;
+  const reasons = new Set(["gitignored_directory", "output_directory", "excluded_directory", "symlink_outside_root"]);
+  return discovery.skipped.filter((x) => reasons.has(x.reason)).length + (discovery.fixtures?.count ?? 0);
+}
+
 function lockfilesNotRead(liveIntel: BriefingLiveIntel | null): { notes: string[]; files: NonNullable<WhatShouldIKnowResult["lockfiles_not_read"]>; walkCut: boolean } {
   let problems: ReturnType<NonNullable<BriefingLiveIntel["getLockfileProblems"]>> = [];
   try {
@@ -1767,6 +1809,8 @@ function withReadGaps(verdict: { level: DelegationLevel; reason: string }, notes
 
 function assessDelegation(input: {
   notCovered: string[];
+  /** Round 18, N7: lockfiles found and not read (NOT_SCANNED_LOCKFILES). */
+  lockfilesNotScanned?: number;
   scanStatus: ScanStatus;
   advisories: Advisory[];
   newPackages: NewPackageFinding[];
@@ -1848,7 +1892,7 @@ function assessDelegation(input: {
       `the task adds ${sayNewPackage(p)}, which dependency_check does not clear (${p.verdict === "unknown" ? "it could not be checked or is not on the public registry" : "see new_packages"}): confirm the name and the version before it is written`,
   )];
   // No fix at all: neither a confirmed fixed_version nor an advisory fix still NOT CHECKED (fixed_version_note).
-  if (confirmed.some((v) => severe(v.severity) && !v.fixed_version && !(v as { fixed_version_note?: string }).fixed_version_note)) {
+  if (confirmed.some((v) => severe(v.severity) && !v.fixed_version && !(v as { fixed_version_note?: string }).fixed_version_note && !/^MAL-/i.test(String(v.id)))) {
     return { level: "human_only", reason: "A dependency this task touches has a high or critical vulnerability with no fixed release: replacing it or accepting the risk is a human call." };
   }
   if (decisionWindows.some((w) => w.urgency >= 4)) {
@@ -1877,8 +1921,9 @@ function assessDelegation(input: {
   if (reasons.length > 0) {
     return { level: "review_needed", reason: `Delegate, then review: ${reasons.join("; ")}.` };
   }
-  if ((input.projectFindings ?? 0) > 0) return { level: "safe_to_delegate", reason: PROJECT_FINDINGS_LISTED(input.projectFindings!) };
-  return { level: "safe_to_delegate", reason: `Vulnerability scan ready; nothing version-confirmed, no major-version jump and ${NO_DECISION_CONFLICT}.` };
+  const notScanned = (input.lockfilesNotScanned ?? 0) > 0 ? ` ${NOT_SCANNED_LOCKFILES(input.lockfilesNotScanned!)}` : "";
+  if ((input.projectFindings ?? 0) > 0) return { level: "safe_to_delegate", reason: `${PROJECT_FINDINGS_LISTED(input.projectFindings!)}${notScanned}` };
+  return { level: "safe_to_delegate", reason: `Vulnerability scan ready; nothing version-confirmed, no major-version jump and ${NO_DECISION_CONFLICT}.${notScanned}` };
 }
 
 function summarize(

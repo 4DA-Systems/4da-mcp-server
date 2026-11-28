@@ -122,6 +122,8 @@ export const INSTALLED_PLACEHOLDER = (installed: string[]) =>
 /** Round 16, C1(b): the safe reason's opening when project-wide findings are listed (none of them on a package the task touches). */
 export const PROJECT_FINDINGS_LISTED = (n: number) =>
   `Vulnerability scan ready; nothing version-confirmed for the packages this task touches; ${n} project-wide finding${n === 1 ? " is" : "s are"} listed below (advisories, scope "project"), no major-version jump and no recorded-decision conflict for this task.`;
+/** Round 18, N7: a "ready" scan that did not read every lockfile the walk found says how many it did not read. */
+export const NOT_SCANNED_LOCKFILES = (n: number) => `${n} lockfile${n === 1 ? "" : "s"} under ignored, excluded or test-fixture folders ${n === 1 ? "was" : "were"} not read, so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`;
 /** Round 16, C3: said only when decisionConflictsFor found no conflict over the declared, the read and the installed names. */
 export const NO_DECISION_CONFLICT = "no recorded-decision conflict for this task";
 export const OUTSIDE_COVERAGE ="This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.";
@@ -385,6 +387,8 @@ export function declarationFor(word: string, declared: readonly DeclaredPackage[
 // run) is a command this briefing could not read whole, which holds the answer by unreadableReason; its operand is
 // never reported as read, so no dismissal of it is a dismissal of a name the briefing read.
 export const SEEN_KINDS: Readonly<Record<TaskWordSeen, "read" | "caller">> = { command: "read", runner: "caller", manifest: "read", form: "read", file: "read", prose: "caller" };
+/** Round 18, N5: the reason for a dismissed or private-marked name this briefing would have checked (a well-known name on its bundled list). */
+export const DISMISSED_KNOWN = (name: string) => `${name} was not sent because you marked it private or not a package, but this briefing would have checked it (a well-known name): it is unchecked; make sure nothing installs it unchecked`;
 /** Round 15, A3: the reason for a dismissed name when the call declared a package one edit from it instead. */
 export const DISMISSED_INSTEAD = (word: string, instead: string) => `you said ${word} is not a package and declared ${instead} instead: the task names ${word}; say so to the user, and make sure nothing installs ${word}`;
 /** The reason a dismissal of a name the briefing read gives, per read kind (review_needed at least). */

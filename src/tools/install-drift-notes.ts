@@ -92,6 +92,16 @@ export function installDriftAdvisories(scan: VulnerabilityScanResult): DriftAdvi
     const count = entries.length;
     const pinExposed = entries.some((e) => lockfileAlsoAffected(e, scan.vulnerabilities));
     const clearsAny = entries.some((e) => !lockfileAlsoAffected(e, scan.vulnerabilities));
+    // Round 18, E3: for a copy that is malware a reinstall is not the whole fix: its install scripts may have run.
+    const malware = entries.some((e) => (e as { malware?: boolean }).malware === true || /^MAL-/i.test(String(e.vulnId)));
+    if (malware)
+      return {
+        title: `${first.package}: the installed ${first.currentVersion} in node_modules is recorded as malware; the lockfile pins ${first.installDriftOf}`,
+        signal_type: "security_alert" as const,
+        priority: "critical" as const,
+        action: `${driftAction(first)}. This copy is malware: a reinstall replaces it, but its install scripts may already have run, so a person must check the machine and the credentials it could reach`,
+        url: null,
+      };
     return {
       title: `${first.package}: the installed ${first.currentVersion} in node_modules has ${count} known vulnerabilit${count === 1 ? "y" : "ies"}; the lockfile pins ${first.installDriftOf}`,
       signal_type: "security_alert",
