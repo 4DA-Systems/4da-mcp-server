@@ -38,6 +38,7 @@ export const TEXT_RULES: readonly TextRule[] = [
   { constant: "DISMISSED_INSTEAD", found: (r) => /\byou said \S+ is not a package and declared \S+ instead/i.test(reason(r)), holds: (r) => level(r) !== "safe_to_delegate", when: "any level but safe_to_delegate" },
   { constant: "CREDENTIAL_REFUSAL", found: (r) => JSON.stringify(r?.task_packages?.not_read ?? []).includes("a value of a credential's shape is not a"), holds: (r) => level(r) !== "safe_to_delegate", when: "a refused argument: any level but safe_to_delegate" },
   { constant: "INSTALLED_MALWARE", found: (r) => /installed, which (?:is|are) recorded as malware: a person must deal with that before any task is delegated/.test(reason(r)), holds: (r) => level(r) === "human_only", when: "human_only only: an installed copy whose installed version is malware" },
+  { constant: "INSTALLED_PLACEHOLDER", found: (r) => /installed, npm's placeholders? for (?:a name|names) taken down as malware: a person must remove/.test(reason(r)), holds: (r) => level(r) === "human_only", when: "human_only only: an installed npm security placeholder" },
   {
     constant: "PROJECT_FINDINGS_LISTED",
     found: (r) => /nothing version-confirmed for the packages this task touches; \d+ project-wide finding/.test(reason(r)),

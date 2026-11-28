@@ -114,6 +114,11 @@ export const SOURCE_HELD = "not looked up: the task names a package source of it
  */
 export const INSTALLED_MALWARE = (installed: string[]) =>
   `This project has ${installed.length === 1 ? installed[0] : `${installed.slice(0, -1).join(", ")} and ${installed[installed.length - 1]}`} installed, which ${installed.length === 1 ? "is" : "are"} recorded as malware: a person must deal with that before any task is delegated.`;
+/** Round 16b: an installed npm security placeholder (`0.0.N-security`) makes every briefing of the project human_only. */
+export const INSTALLED_PLACEHOLDER = (installed: string[]) =>
+  installed.length === 1
+    ? `This project has ${installed[0]} installed, npm's placeholder for a name taken down as malware: a person must remove that dependency before any task is delegated.`
+    : `This project has ${installed.slice(0, -1).join(", ")} and ${installed[installed.length - 1]} installed, npm's placeholders for names taken down as malware: a person must remove those dependencies before any task is delegated.`;
 /** Round 16, C1(b): the safe reason's opening when project-wide findings are listed (none of them on a package the task touches). */
 export const PROJECT_FINDINGS_LISTED = (n: number) =>
   `Vulnerability scan ready; nothing version-confirmed for the packages this task touches; ${n} project-wide finding${n === 1 ? " is" : "s are"} listed below (advisories, scope "project"), no major-version jump and no recorded-decision conflict for this task.`;

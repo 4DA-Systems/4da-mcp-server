@@ -16,7 +16,7 @@ import { CREDENTIAL_SHAPES } from "./tools/briefing-task-screen.js";
 
 /** CREDENTIAL_SHAPES' alternatives, split at the top level. */
 function alternatives(src: string): string[] {
-  const body = src.replace(/^\\b\(\?:/, "").replace(/\)$/, "");
+  const body = src.replace(/^(?:\\b)?\(\?:/, "").replace(/\)$/, "");
   const out: string[] = [];
   let depth = 0;
   let cls = false;
@@ -44,10 +44,11 @@ function alternatives(src: string): string[] {
 }
 const ALTS = alternatives(CREDENTIAL_SHAPES.source);
 /** Two-segment shapes: a literal head, `[\w-]{a,}`, a dot, `[\w-]{b,}` (a JWT may have a third segment). */
-const TWO_SEGMENT = /^((?:\\.|[A-Za-z])+)\[\\w-\]\{(\d+),\}\\\.\[\\w-\]\{(\d+),\}(\(\?:\\\.\[\\w-\]\*\)\?)?$/;
-const SEGMENTED = ALTS.map((a) => TWO_SEGMENT.exec(a)).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ head: m[1].replace(/\\(.)/g, "$1"), a: Number(m[2]), b: Number(m[3]), third: Boolean(m[4]) }));
-// Round 16, C7: the leading \b of CREDENTIAL_SHAPES is kept, so the screen matches exactly what CREDENTIAL_SHAPES matches.
-const SINGLE = new RegExp(`\\b(?:${ALTS.filter((a) => !TWO_SEGMENT.test(a)).join("|")})`, "g");
+const TWO_SEGMENT = /^(\\b)?((?:\\\.|[A-Za-z])+)\[\\w-\]\{(\d+),\}\\\.\[\\w-\]\{(\d+),\}(\(\?:\\\.\[\\w-\]\*\)\?)?$/;
+const SEGMENTED = ALTS.map((a) => TWO_SEGMENT.exec(a)).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ bounded: Boolean(m[1]), head: m[2].replace(/\\(.)/g, "$1"), a: Number(m[3]), b: Number(m[4]), third: Boolean(m[5]) }));
+// Round 16b: each alternative carries its own boundary (BOUNDARY_SHAPES start with \b; the rest match anywhere), so the
+// screen matches exactly what CREDENTIAL_SHAPES matches. A two-segment shape may carry one too (`\b` before its head).
+const SINGLE = new RegExp(ALTS.filter((a) => !TWO_SEGMENT.test(a)).join("|"), "g");
 const WORDISH = /[\w-]/;
 const WORD = /\w/;
 
@@ -74,7 +75,7 @@ export function credentialSpans(text: string): Array<[number, number]> {
           for (let i = text.length - 1; i >= 0; i--) runEnd[i] = WORDISH.test(text[i]) ? runEnd[i + 1] : i;
         }
         // \b before the head (its first character is a word character): a start, or a non-word character before it.
-        if (at > 0 && WORD.test(text[at - 1])) {
+        if (s.bounded && at > 0 && WORD.test(text[at - 1])) {
           at = text.indexOf(s.head, at + 1);
           continue;
         }
