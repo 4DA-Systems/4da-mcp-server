@@ -105,8 +105,12 @@
  * a1123-hookfix-local-sources]. P3: a dependency entry that names an index, a registry or a source
  * by name is not resolved: it is judged as a public registry release of its name and version, and a
  * private name goes ahead only by its private record; each alternative of an entry is read on its
- * own, and only an alternative that is a literal path or git source is the project's own (it
- * exempts only itself) [test: a1125-w2-hook-round26b, a1123-hookfix-local-sources]. P3: in a manifest, a dependency value is judged when it is a
+ * own: an alternative that is a literal path or git source exempts only itself, and when any
+ * alternative or condition leaves a registry reading possible, that reading is judged, so a
+ * project requirement is the project's own only when its source entry is one table, with no
+ * marker, extra, group, python or platform condition, whose source is a literal path, a git
+ * source, workspace = true, or a URL read by the URL rule (pyOtherSourceNames, urlDependency)
+ * [test: a1125-w2-hook-round27, a1125-w2-hook-round26b, a1123-hookfix-local-sources]. P3: in a manifest, a dependency value is judged when it is a
  * registry spec in its ecosystem's grammar or a form that wraps one (for example a Yarn alias or
  * patch of a registry release), is the project's own when it is one of the forms on the
  * OWN_SOURCE_FORMS list or the like forms of the other manifest kinds, and is otherwise denied as
@@ -117,9 +121,10 @@
  * pyproject.toml, the pnpm key and patchedDependencies of package.json, and the keys of a Cargo
  * dependency entry), compared on the parsed tree leaf by leaf however it is written, is either on
  * INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS or CARGO_ENTRY_KEYS, or, when an edit adds or
- * changes it, denied as not read; and a key given twice
+ * changes it, denied as not read, an index table being no change only when each of its keys is on
+ * INDEX_TABLE_KEYS for its tool and it is at a public url or explicit by that tool's own key; and a key given twice
  * in one JSON object, TOML table or YAML catalog section is not read (resolverSettings,
- * jsonDuplicateKey) [test: a1125-w2-hook-round25]. P3: a requirements or constraints file that a
+ * jsonDuplicateKey) [test: a1125-w2-hook-round25, a1125-w2-hook-round27]. P3: a requirements or constraints file that a
  * command names, and one that a requirements file names on an include or constraint line, is read from disk at the
  * call, the latter relative to the file that names it, and its entries are judged as the call's;
  * one the hook cannot read, one past REQUIREMENTS_DEPTH levels or REQUIREMENTS_FILES files, one
@@ -133,14 +138,24 @@
  * changes or removes a key that is not on that file's CONFIG_INERT_KEYS, when the hook cannot read
  * either text, or, for a file that is code, when it changes the file at all (configFileChange)
  * [test: a1125-w2-hook-round25b]. P3: a package that a runner fetches in one of the
- * RUNNER_FETCH_FORMS, that is named with a version, range or tag or named on a fetch option, is
- * judged as an install of it whether or not P1 examines the call, and in a call P1 examines one in a
- * form the hook does not read is denied as not read (runnerFetches) [test: a1125-w2-hook-round26]. P3: a configuration write is read operand by operand
- * in its manager's own grammar, every key it writes judged against INERT_CONFIG_KEYS, and a
- * write whose operands the grammar does not account for, or a configuration file named by an
- * option on any command of the managers that take one, is denied as not read unless the file is
- * read and every key in it is inert (configWriteOf, npmConfigFileOption) [test:
- * a1125-w2-hook-round26]. P3: where no proceed, review, avoid or wait answer counts for a
+ * RUNNER_FETCH_FORMS, that is named with a version, a range, a dist-tag or the reading latest, or
+ * named on a fetch option, is judged as an install of that reading is, whether or not P1 examines
+ * the call; an option before the package, or before the command the runner runs, is read only when
+ * it is on that runner's RUNNER_OPTIONS table with its arity, an index or registry option among
+ * them is read by the source rule an install's options get (sourceVerdict), and a fetch in a form
+ * the hook does not read, or an option off the table, is denied as not read, whether or not P1
+ * examines the call (runnerFetches) [test: a1125-w2-hook-round27, a1125-w2-hook-round26]. P3: a configuration write is read operand by operand
+ * in its manager's own grammar, past the global options before its sub-command that are on
+ * MANAGER_GLOBAL_OPTIONS for that manager (for one manager its own option table with its
+ * abbreviations, NPM_OPTIONS), every key it writes judged against INERT_CONFIG_KEYS; a write whose
+ * operands the grammar does not account for, or that stands behind an option before the
+ * sub-command that is on none of those tables, is denied as not read; a configuration file named by
+ * the user or global configuration option on any command of the managers that take one, or by an
+ * abbreviation of it the manager accepts, is denied as not read unless the file is read and every
+ * key in it is inert, and so is an option that may abbreviate one and abbreviates no other; and an
+ * option on CONFIG_SOURCE_OPTIONS on any command of its manager, a configuration source named on the
+ * command, is denied as not read (configWriteOf, configSourceOption) [test:
+ * a1125-w2-hook-round27, a1125-w2-hook-round26]. P3: where no proceed, review, avoid or wait answer counts for a
  * reading, a private record lets the release through when it is the name's newest withheld line,
  * newer than the name's last answer for that reading, and it applies: a record of a name on the
  * user's own list applies in every folder; a record of a rule that names the package or its scope
@@ -218,23 +233,29 @@
  * a1125-w2-hook-round10]. L1: a command that lets the manager choose the versions without naming a
  * package (for example an audit fix, an update with no name, a tidy) installs what the manager
  * picks, and the advice line (P6) says to run vulnerability_scan after it [test:
- * a1125-w2-hook-round26, a1125-w2-hook-round18]. L2:
+ * a1125-w2-hook-round27, a1125-w2-hook-round26, a1125-w2-hook-round18]. L2:
  * the hook examines what P1 detects and nothing else, so an install started another way goes ahead
  * unchecked, for example by a script or a make target, through a tool or a manager that is not on
  * the MANAGERS list (for example pipenv, pdm, conda, gem, composer, dotnet or a binary installer),
  * by a file a shell command changes, or inside a container, and an artifact
  * already on disk, or fetched by a tool the hook does not read (for example curl or a browser),
  * installs from its local path as the project's own [test: a1125-w2-hook-contract,
- * a1125-w2-hook-round10]. L2: a command whose first word, after assignments and the prefixes a
- * command may stand behind, is a manager or a runner, and one of whose words is a variable, array,
+ * a1125-w2-hook-round10]. L2: a command, in a line split at its separators and at the brackets of a
+ * subshell or group, whose first word, after the assignments, keywords and prefixes the reader
+ * steps over with their options and operands (commandStart), and after cmd /c or an interpreter's
+ * options and its module option, is a manager or a runner, and one of whose words is a variable, array,
  * command-substitution or splat expansion, is denied as not read unless a literal verb that is no
- * install, fetch or configuration verb stands before that expansion (managerExpansion); an
- * expansion in any other place, for example in a program the hook does not read, is not seen
- * [test: a1125-w2-hook-round25, a1125-w2-hook-round26b]. L2: a runner given a bare name
- * and no fetch option runs the project's installed tool when there is one, and otherwise fetches
- * the newest release unjudged, and a manager on the MANAGERS list that a runner fetches to run is
- * not judged as a fetch, while the command it runs is read as any other [test:
- * a1125-w2-hook-round26, a651-hook-wrapped-commands]. L2: the option allow lists
+ * install, fetch, configuration or runner sub-command stands before that expansion; after a runner
+ * or a runner sub-command, an expansion anywhere in its words is denied, except after a sub-command
+ * that runs a program named on the line, where only one at or before that program's name is
+ * (managerExpansion); an expansion in any other place, for example in a program the hook does not
+ * read, is not seen [test: a1125-w2-hook-round27, a1125-w2-hook-round25, a1125-w2-hook-round26b]. L2: a runner given a bare name
+ * and no fetch option fetches the newest release unjudged, except that a JavaScript runner first
+ * runs the project's installed tool when there is one (the Python tool runner never does), and a
+ * manager on the MANAGERS list that a runner fetches to run is not judged as a fetch, nor is the
+ * manager release that a manifest's packageManager or devEngines.packageManager key names, which
+ * corepack fetches and runs, while the command a runner runs is read as any other [test:
+ * a1125-w2-hook-round27, a1125-w2-hook-round26, a651-hook-wrapped-commands]. L2: the option allow lists
  * (NAMED_OPTIONS) are lists, not proofs: what is tested is that none of their options changes the
  * named release in the tool versions tested [test: a1125-w2-hook-round14-options]. L2: on Windows, cmd.exe rewrites the arguments of
  * a .cmd or .bat program, so a manager's install, or a runner, whose arguments hold a character
@@ -301,7 +322,9 @@
  * project's own source (-r and -c are followed and read); pyproject.toml's [tool.uv] keys that change
  * nothing are managed, package, default-groups, the cache and concurrency settings, required-version,
  * workspace, conflicts, the Python download settings, native-tls, link-mode and compile-bytecode, and an
- * index that is explicit or at a public url; package.json's pnpm keys that change nothing are the
+ * index at a public url or explicit by its own tool's key (uv: explicit = true without default = true;
+ * Poetry: priority = "explicit"), when every key of the index table is one its tool reads there
+ * (INDEX_TABLE_KEYS; round 27, F7: uv ignores Poetry's priority key); package.json's pnpm keys that change nothing are the
  * build allow lists, allowedDeprecatedVersions, peerDependencyRules, updateConfig, requiredScripts and
  * auditConfig (every other top-level key is not a resolver's); a Cargo dependency entry may carry
  * version, path, git, branch, tag, rev, registry, registry-index, package, features,
@@ -311,8 +334,8 @@
  * no-color, progress-bar and disable-pip-version-check, Poetry's virtualenvs.* and cache-dir, Yarn's
  * enableTelemetry and nodeLinker, and Go's GOBIN, GOCACHE, GOMODCACHE and GOPATH. A
  * registry, index, release-age, resolution, tag or proxy setting is on none of them. pip-sync and
- * uv add -r: pip-sync is not read for its files yet (it is not a manager word); uv add -r reads its
- * files as pip install -r does (an unreadable file is held, as for pip).
+ * uv add -r: pip-sync reads its files at the call, as pip install -r does (round 25b); uv add -r
+ * reads its files the same way (an unreadable file is held, as for pip).
  *
  * (Round 24.) Besides the detector, a call is held when its text builds a command beside a manager's
  * name (BUILDS_COMMAND, where it builds one: xargs whose own command is a manager, an alias, Set-Alias,
@@ -378,6 +401,8 @@
  * own program runs an install, add, update, sync or ci, package named or not (ADVICE_VERBS: `npm
  * ci`, `pnpm install --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`, `poetry
  * install`, `cargo fetch`, `build` (`b`), `run` (`r`) and `test` (`t`), which resolve and download what the manifest asks for (`check` is not on the list), `go mod download`, npm / pnpm / Yarn / Bun `link`,
+ * and the updates the manager chooses: npm and pnpm `audit` (`npm audit fix`, `pnpm audit --fix`; a
+ * plain audit is advised too), npm, pnpm and Yarn `dedupe`, `go mod tidy`, `uv lock` and `poetry lock`,
  * also run by npx, bunx or pnpx, with or without a version on the manager (`npx pnpm@9 install`);
  * not text that only mentions one),
  * where a ledger exists and the guard is on or advising, the hook adds one line of advice at
@@ -590,7 +615,7 @@ function cargoFieldTypeError(fields) {
 /** Round 25 (S4): the keys a Cargo dependency entry may carry (cargo's manifest format); any other is held. */
 const CARGO_ENTRY_KEYS = new Set(["version", "path", "git", "branch", "tag", "rev", "registry", "registry-index", "package", "features", "default-features", "default_features", "optional", "workspace", "public", "artifact", "lib", "target"]);
 /** Poetry dependency keys that take the package from somewhere other than PyPI. */
-const POETRY_OTHER_SOURCE = ["path", "git", "url", "file", "develop"];
+const POETRY_OTHER_SOURCE = ["path", "git", "url", "file"];
 /** TOML keys that are never a dependency, wherever they stand (Poetry lists the interpreter as `python`). */
 const TOML_NOT_DEPENDENCIES = new Set(["version", "edition", "rust-version", "requires-python", "resolver", "python", "name"]);
 /** [tool.uv] arrays of requirement strings. */
@@ -1399,7 +1424,7 @@ function poetryDependencies(entries) {
 
 /** The names (PEP 503) a pyproject takes from a path, git, URL or another index: [tool.uv.sources] entries and such Poetry dependencies. */
 /** Round 26b (F10): the type a uv source or Poetry dependency field must have: s (string), b (true / false), t (table). */
-const PY_SOURCE_FIELD_TYPES = Object.freeze({ path: "s", git: "s", url: "s", index: "s", source: "s", branch: "s", tag: "s", rev: "s", subdirectory: "s", marker: "s", markers: "s", python: "s", platform: "s", version: "s", workspace: "b", editable: "b", develop: "b", optional: "b", package: "b", extras: "a", extra: "s", group: "s", "allow-prereleases": "b" });
+const PY_SOURCE_FIELD_TYPES = Object.freeze({ path: "s", git: "s", url: "s", index: "s", source: "s", branch: "s", tag: "s", rev: "s", subdirectory: "s", file: "s", marker: "s", markers: "s", python: "s", platform: "s", version: "s", workspace: "b", editable: "b", develop: "b", optional: "b", package: "b", extras: "a", extra: "s", group: "s", "allow-prereleases": "b" });
 /** F10: the first field of the wrong type in a uv source or Poetry alternative, described, or null. */
 function pyFieldTypeError(fields) {
   for (const [k, v] of Object.entries(fields)) {
@@ -1420,22 +1445,42 @@ function pyFieldTypeError(fields) {
  */
 function pyOtherSourceNames(entries) {
   const names = new Set();
-  const own = (f) => "path" in f || "git" in f || "workspace" in f || "url" in f;
+  // Round 27 (F1, F13): an alternative is own when it is a literal path, a git source, workspace = true,
+  // or a URL (then read by the URL rule), and carries no condition (marker, extra, group, python,
+  // platform): uv falls back to the registry where a condition does not hold. A list of alternatives
+  // is conditional by its form.
+  const CONDITIONS = ["marker", "markers", "extra", "group", "python", "platform"];
+  const own = (f) => !CONDITIONS.some((k) => k in f) && (typeof f.path?.s === "string" || typeof f.git?.s === "string" || f.workspace?.raw === "true" || typeof f.url?.s === "string");
+  // Each name's source, its fields gathered over every line that sets one (`[tool.uv.sources.x]`
+  // with `path` and `marker` on lines of their own is one source).
+  const sources = new Map();
   for (const { table, keys, value } of entries) {
     if (!keys || !table) continue;
     const path = [...table, ...keys];
     if (path[0] !== "tool" || path[1] !== "uv" || path[2] !== "sources" || path.length < 4) continue;
-    const alternatives = path.length === 4 ? (value.a ? value.a.map((x) => x.t ?? null) : [value.t ?? null]) : [{ [path.slice(4).join(".")]: value }];
-    if (alternatives.some((f) => f === null)) {
-      refuse(`${callData(path[3])}: a [tool.uv.sources] entry that is not a table, which this hook does not read`);
-      continue;
-    }
+    const one = sources.get(path[3]) ?? { list: false, fields: Object.create(null), bad: false };
+    sources.set(path[3], one);
+    if (path.length === 4 && value.a) {
+      one.list = true;
+      for (const x of value.a) if (!x.t) one.bad = true;
+    } else if (path.length === 4 && value.t) Object.assign(one.fields, value.t);
+    else if (path.length === 4) one.bad = true;
+    else one.fields[path.slice(4).join(".")] = value;
+    const alternatives = path.length === 4 && value.a ? value.a.map((x) => x.t).filter(Boolean) : [path.length === 4 ? (value.t ?? {}) : { [path.slice(4).join(".")]: value }];
     const typed = alternatives.map(pyFieldTypeError).find(Boolean);
     if (typed) {
       refuse(`${callData(path[3])}: ${typed}, which this hook does not read`);
+      one.typed = true;
+    }
+  }
+  for (const [name, one] of sources) {
+    if (one.typed) continue;
+    if (one.bad) {
+      refuse(`${callData(name)}: a [tool.uv.sources] entry that is not a table, which this hook does not read`);
       continue;
     }
-    if (alternatives.every(own)) names.add(nameKey("PyPI", path[3]));
+    // A list of alternatives is conditional by its form: never the name's only way to resolve.
+    if (!one.list && own(one.fields)) names.add(nameKey("PyPI", name));
   }
   return names;
 }
@@ -1922,10 +1967,16 @@ function npmWholeDependencies(text) {
     [isObject(doc.pnpm) ? doc.pnpm.packageExtensions : null, "pnpm.packageExtensions"],
     [doc.packageExtensions, "packageExtensions"],
   ]) {
+    // Round 27 (F11): a packageExtensions value, entry or dependency section that is not an object is not read.
+    if (holder !== undefined && holder !== null && !isObject(holder)) refuse(`package.json's ${prefix} is not an object, which this hook does not read`);
     if (!isObject(holder)) continue;
     for (const [selector, entry] of Object.entries(holder)) {
-      if (!isObject(entry)) continue;
+      if (!isObject(entry)) {
+        refuse(`package.json's ${prefix} entry ${callData(selector)} is not an object, which this hook does not read`);
+        continue;
+      }
       for (const sec of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+        if (entry[sec] !== undefined && !isObject(entry[sec])) refuse(`package.json's ${prefix} entry ${callData(selector)} has a ${sec} that is not an object, which this hook does not read`);
         if (!isObject(entry[sec])) continue;
         for (const [name, spec] of Object.entries(entry[sec])) {
           const d = npmValue(name, spec);
@@ -1949,9 +2000,17 @@ function npmWholeDependencies(text) {
     [doc.workspaces === undefined ? null : doc, ""],
   ]) {
     if (!isObject(holder)) continue;
+    // Round 27 (F11): a Bun catalog that is not an object is not read (in the workspaces field, where
+    // it can only be Bun's; at the top level an object is read, any other value is another tool's).
+    const strict = prefix === "workspaces.";
+    if (strict && holder.catalog !== undefined && !isObject(holder.catalog)) refuse("package.json's workspaces.catalog is not an object, which this hook does not read");
+    if (strict && holder.catalogs !== undefined && !isObject(holder.catalogs)) refuse("package.json's workspaces.catalogs is not an object, which this hook does not read");
     if (isObject(holder.catalog)) catalog(holder.catalog, `${prefix}catalog`);
     if (!isObject(holder.catalogs)) continue;
-    for (const [named, entries] of Object.entries(holder.catalogs)) if (isObject(entries)) catalog(entries, `${prefix}catalogs.${named}`);
+    for (const [named, entries] of Object.entries(holder.catalogs)) {
+      if (strict && !isObject(entries)) refuse(`package.json's workspaces.catalogs.${String(named).slice(0, 60)} is not an object, which this hook does not read`);
+      if (isObject(entries)) catalog(entries, `${prefix}catalogs.${named}`);
+    }
   }
   return out;
 }
@@ -2416,6 +2475,8 @@ const INERT_MANIFEST_KEYS = Object.freeze({
   "pyproject.toml": Object.freeze(["tool.poetry.name", "tool.poetry.version", "tool.poetry.description", "tool.poetry.authors", "tool.poetry.maintainers", "tool.poetry.license", "tool.poetry.readme", "tool.poetry.homepage", "tool.poetry.repository", "tool.poetry.documentation", "tool.poetry.keywords", "tool.poetry.classifiers", "tool.poetry.packages", "tool.poetry.include", "tool.poetry.exclude", "tool.poetry.scripts", "tool.poetry.urls", "tool.poetry.package-mode", "tool.poetry.extras", "tool.setuptools.packages", "tool.setuptools.package-dir", "tool.setuptools.py-modules", "tool.setuptools.include-package-data", "tool.setuptools.package-data", "tool.setuptools.exclude-package-data", "tool.setuptools.zip-safe", "tool.setuptools.platforms", "tool.setuptools.license-files", "tool.setuptools.script-files", "tool.setuptools_scm", "tool.hatch.version", "tool.hatch.build", "tool.hatch.envs.default.scripts", "tool.hatch.envs.default.env-vars", "tool.pdm.version", "tool.pdm.build", "tool.pdm.scripts", "tool.flit.module", "tool.flit.sdist", "tool.uv.managed", "tool.uv.package", "tool.uv.default-groups", "tool.uv.cache-dir", "tool.uv.cache-keys", "tool.uv.required-version", "tool.uv.workspace", "tool.uv.conflicts", "tool.uv.python-preference", "tool.uv.python-downloads", "tool.uv.native-tls", "tool.uv.link-mode", "tool.uv.compile-bytecode", "tool.uv.concurrent-downloads", "tool.uv.concurrent-builds", "tool.uv.concurrent-installs"]),
   "package.json": Object.freeze(["pnpm.onlyBuiltDependencies", "pnpm.neverBuiltDependencies", "pnpm.ignoredBuiltDependencies", "pnpm.allowedDeprecatedVersions", "pnpm.peerDependencyRules", "pnpm.updateConfig", "pnpm.requiredScripts", "pnpm.auditConfig"]),
 });
+/** Round 27 (F7): the keys each tool reads in one of its index tables ([[tool.uv.index]], [[tool.poetry.source]]). */
+const INDEX_TABLE_KEYS = Object.freeze({ "tool.uv.index": Object.freeze(["name", "url", "explicit", "default", "format", "authenticate", "ignore-error-codes", "publish-url", "cache-control"]), "tool.poetry.source": Object.freeze(["name", "url", "priority"]) });
 /** Round 26b (D2): the namespaces of the Python resolvers and build tools: any key under one that is no judged value and not inert is a setting. */
 const PY_RESOLVER_NAMESPACE = /^tool\.(?:poetry|uv|pdm|hatch|flit|setuptools)\./;
 /** D2: the keys under those namespaces read as dependency values (judged there). */
@@ -2431,7 +2492,13 @@ function resolverSettings(file, text) {
     // their leaves, so a setting reads the same however it is written.
     const all = tomlAssignments(text, []) ?? [];
     // An index that cannot serve a public name (explicit, or at a public url) is no resolver change.
-    const harmlessIndex = (f) => sourceKind(f?.url?.s) === "public" || (f?.explicit?.raw === "true" && f?.default?.raw !== "true") || f?.priority?.s === "explicit";
+    // Round 27 (F7): each tool's own key: uv's `explicit = true` (uv ignores Poetry's `priority`),
+    // Poetry's `priority = "explicit"`; a key the tool's table does not know: not harmless.
+    const harmlessIndex = (kind) => (f) => {
+      if (!f || Object.keys(f).some((k) => !INDEX_TABLE_KEYS[kind].includes(k))) return false;
+      if (sourceKind(f.url?.s) === "public") return true;
+      return kind === "tool.uv.index" ? f.explicit?.raw === "true" && f.default?.raw !== "true" : f.priority?.s === "explicit";
+    };
     const tablesOf = new Map();
     for (const e of all) if (e.table && e.keys && (e.table.join(".") === "tool.uv.index" || e.table.join(".") === "tool.poetry.source")) (tablesOf.get(e.table) ?? tablesOf.set(e.table, {}).get(e.table))[e.keys.join(".")] = e.value;
     const instanceOf = new Map();
@@ -2442,13 +2509,13 @@ function resolverSettings(file, text) {
         return;
       }
       if (!PY_RESOLVER_NAMESPACE.test(path) || isInert(path) || PY_VALUE_KEYS.some((re) => re.test(path))) return;
-      if ((path === "tool.uv.index" || path === "tool.poetry.source") && value.a && value.a.every((v) => v.t && harmlessIndex(v.t))) return;
+      if ((path === "tool.uv.index" || path === "tool.poetry.source") && value.a && value.a.every((v) => v.t && harmlessIndex(path)(v.t))) return;
       out.add(`${instance ? `#${instance} ` : ""}${path} = ${value.s !== undefined ? JSON.stringify(value.s) : (value.raw ?? JSON.stringify(value))}`);
     };
     for (const { table, keys, value } of all) {
       if (!keys) continue;
       const t = table ?? [];
-      if (tablesOf.has(table) && harmlessIndex(tablesOf.get(table))) continue;
+      if (tablesOf.has(table) && harmlessIndex(table.join("."))(tablesOf.get(table))) continue;
       emit([...t, ...keys].join("."), value, tablesOf.has(table) ? instanceOf.get(table) : 0);
     }
   } else if (file === "package.json") {
@@ -3558,7 +3625,50 @@ const INERT_CONFIG_KEYS = Object.freeze([
   "gobin", "gocache", "gomodcache", "gopath",
 ]);
 /** S6: a configuration write in a manager's words: { keys } (lower case; empty when the key cannot be read), or null. */
+/**
+ * Round 27 (E4): each manager's global options, with their arity, that may stand before its
+ * sub-command (npm: npm's own option table, NPM_OPTIONS, with npm's abbreviations; each other
+ * manager: flags take no value, values take the next word or =value). An option before the
+ * sub-command that is on none of them leaves the sub-command unread.
+ */
+const MANAGER_GLOBAL_OPTIONS = Object.freeze({
+  pnpm: Object.freeze({ flags: ["-r", "--recursive", "-w", "--workspace-root", "-s", "--silent", "--no-color", "--color", "--aggregate-output", "--stream", "-g", "--global", "--parallel", "--sequential"], values: ["-C", "--dir", "-F", "--filter", "--workspace-dir", "--loglevel", "--reporter"] }),
+  yarn: Object.freeze({ flags: ["-s", "--silent", "--verbose", "--no-progress", "--offline", "--json", "--no-default-rc"], values: ["--cwd"] }),
+  bun: Object.freeze({ flags: ["--silent", "--verbose", "--no-progress"], values: ["--cwd"] }),
+  pip: Object.freeze({ flags: ["-v", "-vv", "-vvv", "--verbose", "-q", "-qq", "-qqq", "--quiet", "--isolated", "--require-virtualenv", "--no-cache-dir", "--disable-pip-version-check", "--no-color", "--no-input", "--no-python-version-warning", "--debug"], values: ["--cache-dir", "--proxy", "--log", "--log-file", "--cert", "--client-cert", "--timeout", "--retries", "--exists-action", "--trusted-host", "--python", "--keyring-provider", "--use-feature", "--use-deprecated", "--progress-bar"] }),
+  poetry: Object.freeze({ flags: ["-q", "--quiet", "-v", "-vv", "-vvv", "--verbose", "-n", "--no-interaction", "--ansi", "--no-ansi", "--no-plugins", "--no-cache"], values: ["-C", "--directory", "-P", "--project"] }),
+  go: Object.freeze({ flags: [], values: ["-C"] }),
+});
+/** E4: where a manager's sub-command is, past the global options on its table; -1 when an option not on it stands first. */
+function globalHead(program, args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = String(args[i]);
+    if (a === "--") return -1;
+    if (!a.startsWith("-") || a === "-") return i;
+    if (program === "npm") {
+      const how = npmOption(a, args[i + 1]);
+      if (how === "unknown") return -1;
+      if (how === "value") i++;
+      continue;
+    }
+    const t = MANAGER_GLOBAL_OPTIONS[program];
+    if (!t) return -1;
+    const name = a.replace(/=.*$/s, "");
+    if (t.flags.includes(a)) continue;
+    if (t.values.includes(name)) {
+      if (!a.includes("=")) i++;
+      continue;
+    }
+    return -1;
+  }
+  return args.length;
+}
 function configWriteOf(program, args) {
+  // Round 27 (E4): the sub-command past the manager's global options on its table; an unknown option
+  // before a word that may be a configuration verb leaves the write unread.
+  const at = Object.hasOwn(CONFIG_WRITE_VERBS, program) ? globalHead(program, args) : 0;
+  if (at < 0) return args.some((a) => CONFIG_WRITE_VERBS[program].includes(String(a)) && !String(a).startsWith("-")) ? { keys: [] } : null;
+  if (at > 0) args = args.slice(at);
   // Round 26 (R1): every operand, in each manager's own grammar. { keys } lists each key written
   // (lower case); an empty list means the hook could not read which keys (held as not read).
   const keyOf = (k) => String(k ?? "").replace(/=.*$/s, "").replace(/^--/, "").toLowerCase();
@@ -3646,11 +3756,64 @@ function configWriteOf(program, args) {
  * Round 26 (R1): a configuration file an npm or pnpm command is pointed at (--userconfig,
  * --globalconfig): read, and held unless every key in it is inert. Null when the command names none.
  */
+/**
+ * Round 27 (E5): the options that name a configuration source on a manager's command (a file it
+ * reads, or a setting given as a value), held with the remedy "run without the option". npm and
+ * pnpm's --userconfig and --globalconfig are read instead (npmConfigFileOption).
+ */
+const CONFIG_SOURCE_OPTIONS = Object.freeze({
+  uv: Object.freeze(["--config-file"]),
+  cargo: Object.freeze(["--config", "-Z"]),
+  poetry: Object.freeze(["-C", "--directory", "-P", "--project"]),
+  yarn: Object.freeze(["--use-yarnrc"]),
+  pnpm: Object.freeze(["--config.<key>"]),
+  bun: Object.freeze(["--config", "-c"]),
+  go: Object.freeze(["-modfile"]),
+});
+/** The sub-commands whose words after the first operand belong to the program they run. */
+const RUNS_PROGRAM = new Set(["run", "exec", "x", "dlx", "test", "build", "create", "init"]);
+function configSourceOption(program, args) {
+  const npmLike = npmConfigFileOption(program, args);
+  if (npmLike) return npmLike;
+  const listed = Object.hasOwn(CONFIG_SOURCE_OPTIONS, program) ? CONFIG_SOURCE_OPTIONS[program] : null;
+  if (!listed) return null;
+  let positional = 0;
+  let sub = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = String(args[i]);
+    if (a === "--") break;
+    if (!a.startsWith("-") || a === "-") {
+      positional++;
+      if (sub === null) sub = a;
+      // Poetry's -C and -P are global options (before the sub-command); a runner's later words are its program's.
+      if (program === "poetry" || (positional >= 2 && RUNS_PROGRAM.has(sub)) || (positional >= 3 && sub === "tool")) break;
+      continue;
+    }
+    const name = program === "go" ? a.replace(/^--/, "-").replace(/=.*$/s, "") : a.replace(/=.*$/s, "");
+    const hit =
+      listed.includes(name) ||
+      (program === "pnpm" && /^--config\.[^=]+/.test(a)) ||
+      (program === "cargo" && /^-Z./.test(a));
+    if (hit) return { reason: `the option ${callData(name)}, a configuration source named on the command`, token: a };
+  }
+  return null;
+}
 function npmConfigFileOption(program, args) {
   if (program !== "npm" && program !== "pnpm") return null;
   for (let i = 0; i < args.length; i++) {
     const w = String(args[i]);
-    const m = /^(--userconfig|--globalconfig)(?:=(.*))?$/.exec(w);
+    if (w === "--") break;
+    // Round 27 (E5): npm reads an unambiguous abbreviation as the option (--userc= is --userconfig);
+    // an option that may be the abbreviation of one, and is no other option, is not read.
+    const long = /^--([^=]+)(?:=(.*))?$/s.exec(w);
+    let m = /^(--userconfig|--globalconfig)(?:=(.*))?$/.exec(w);
+    if (!m && program === "npm" && long && !long[1].startsWith("no-")) {
+      const full = npmOptionName(long[1]);
+      if (full === "userconfig" || full === "globalconfig") m = [w, `--${full}`, long[2]];
+      else if (full === null && long[1].length >= 2 && ["userconfig", "globalconfig"].some((k) => k.startsWith(long[1]))) {
+        return { reason: `the option ${callData(`--${long[1]}`)}, which npm may read as a configuration file option`, token: w };
+      }
+    }
     if (!m) continue;
     const file = m[2] ?? args[i + 1];
     const held = (why) => ({ reason: `the option ${m[1]} (${why})`, token: m[1] });
@@ -3700,6 +3863,8 @@ const PREFIXES = {
     switches: /^-[0prtxo]+$|^-[adEeIiLlnPs].+|^--(?:null|no-run-if-empty|verbose|interactive|exit|open-tty|show-limits)$|^--[a-z-]+=/,
   },
   corepack: {},
+  // Round 27 (E6): `ionice -c 3 npm i x` runs the command after it.
+  ionice: { values: /^-[cnpPu]$|^--(?:class|classdata|pid|pgid|uid)$/, switches: /^-t$|^--ignore$|^-[cn]d+$|^--(?:class|classdata)=/ },
   // `busybox sh -c ...`: busybox runs the applet named next.
   busybox: {},
   // `wsl npm i x@1`, `wsl -d Ubuntu -e bash -c '...'`: the command runs in the project's folder, in Linux.
@@ -4588,6 +4753,21 @@ const RUNNER_FETCH_FORMS = Object.freeze([
   ["pipx run / install / inject <spec> | --spec <spec>", "PyPI"],
   ["go run <module>@<version>", "Go"],
 ]);
+/** R2: what a runner on this simple command fetches: { installs, bad } (bad: a fetched spec the hook does not read). */
+/**
+ * Round 27 (E1): each runner's options before the package it fetches, with their arity: flags
+ * (take no value), values (take the next word, or =value), fetch (take a package spec), source (an
+ * index or registry: the command's source rule, sourceKind), held (a configuration source or a pip
+ * argument list: the command is not read). An option on none of these before the package, or before
+ * the command a runner runs, is not read.
+ */
+const RUNNER_OPTIONS = Object.freeze({
+  npm: Object.freeze({ flags: ["-y", "--yes", "--no", "--no-install", "-q", "--quiet", "-s", "--silent", "--bun", "--ws", "--workspaces", "--include-workspace-root", "--shell-mode", "--json"], values: ["--loglevel", "-w", "--workspace", "-c", "--call", "--node-options", "--scope", "--reporter", "--prefix", "--cache"], fetch: ["-p", "--package"], source: ["--registry"], held: ["--userconfig", "--globalconfig"] }),
+  uvx: Object.freeze({ flags: ["-q", "--quiet", "-v", "--verbose", "--isolated", "--no-cache", "-n", "--offline", "--refresh", "--upgrade", "-U", "--reinstall", "--native-tls", "--no-progress", "--no-python-downloads", "--managed-python", "--no-managed-python"], values: ["--color", "--python", "-p", "--python-preference", "--directory", "--project", "--refresh-package", "--cache-dir", "--with-editable", "--exclude-newer", "--prerelease", "--resolution"], fetch: ["--with", "--from"], source: ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], held: ["--config-file", "--with-requirements", "--constraints", "--overrides", "-c"] }),
+  uvrun: Object.freeze({ flags: ["-q", "--quiet", "-v", "--verbose", "--isolated", "--no-cache", "-n", "--offline", "--frozen", "--locked", "--no-sync", "--no-project", "--all-extras", "--no-dev", "--all-groups", "--no-default-groups", "--active", "--script", "-s", "--module", "-m", "--native-tls", "--no-progress", "--refresh", "--reinstall", "-U", "--upgrade", "--exact", "--inexact"], values: ["--color", "--python", "-p", "--directory", "--project", "--package", "--extra", "--group", "--only-group", "--no-group", "--env-file", "--cache-dir", "--with-editable", "--refresh-package", "--exclude-newer", "--prerelease", "--resolution"], fetch: ["--with"], source: ["-i", "--index-url", "--extra-index-url", "--index", "--default-index", "-f", "--find-links", "--no-index"], held: ["--config-file", "--with-requirements"] }),
+  pipx: Object.freeze({ flags: ["-q", "--quiet", "-v", "--verbose", "-f", "--force", "--include-deps", "-e", "--editable", "--no-cache", "--system-site-packages", "--include-apps", "--global"], values: ["--python", "--suffix", "--path"], fetch: ["--spec"], source: ["--index-url", "-i"], held: ["--pip-args"] }),
+  gorun: Object.freeze({ flags: ["-race", "-v", "-x", "-n", "-a", "-trimpath", "-msan", "-asan", "-cover", "-work", "-linkshared", "-buildvcs=false", "-buildvcs=true"], values: ["-tags", "-ldflags", "-gcflags", "-asmflags", "-exec", "-C", "-p", "-mod", "-buildmode", "-compiler", "-gccgoflags", "-installsuffix", "-pkgdir", "-toolexec", "-pgo", "-covermode", "-coverpkg", "-o"], fetch: [], source: [], held: ["-modfile", "-overlay"] }),
+});
 /** R2: the create-<name> package npm init <name> runs (`@s` is @s/create, `@s/x` is @s/create-x). */
 function createPackage(name) {
   if (name.startsWith("@")) {
@@ -4596,31 +4776,61 @@ function createPackage(name) {
   }
   return `create-${name}`;
 }
-/** R2: what a runner on this simple command fetches: { installs, bad } (bad: a fetched spec the hook does not read). */
+/** R2: what a runner on this simple command fetches: { installs, bad } (bad: a part the hook does not read). */
 function runnerFetches(words) {
   const none = { installs: [], bad: null };
   const at = commandStart(words);
   if (at < 0 || at >= words.length) return none;
   const program = programName(words[at]).replace(/@[^@]*$/, "");
   const args = words.slice(at + 1).map(String);
-  const pos = args.filter((a) => !a.startsWith("-"));
-  let eco = null;
+  // The runner, and where its own words start: the sub-command is found past the manager's global
+  // options on its table (an unknown option before it leaves the sub-command unread).
+  let table = null;
   let rest = null;
   let create = false;
-  const sub = program === "npm" ? npmCommand(pos[0]) : pos[0];
-  if (PACKAGE_RUNNERS.has(program)) [eco, rest] = ["npm", args];
-  else if (program === "npm" && sub === "exec") [eco, rest] = ["npm", args.slice(args.indexOf(pos[0]) + 1)];
-  else if ((program === "pnpm" || program === "yarn") && pos[0] === "dlx") [eco, rest] = ["npm", args.slice(args.indexOf("dlx") + 1)];
-  else if (program === "bun" && pos[0] === "x") [eco, rest] = ["npm", args.slice(args.indexOf("x") + 1)];
-  else if (["npm", "pnpm", "yarn", "bun"].includes(program) && (sub === "init" || sub === "create") && pos[1]) [eco, rest, create] = ["npm", args.slice(args.indexOf(pos[0]) + 1), true];
-  else if (program === "uvx") [eco, rest] = ["uvx", args];
-  else if (program === "uv" && pos[0] === "tool" && pos[1] === "run") [eco, rest] = ["uvx", args.slice(args.indexOf("run") + 1)];
-  else if (program === "uv" && pos[0] === "run") [eco, rest] = ["uvrun", args.slice(args.indexOf("run") + 1)];
-  else if (program === "pipx" && ["run", "install", "inject"].includes(pos[0])) [eco, rest] = [`pipx-${pos[0]}`, args.slice(args.indexOf(pos[0]) + 1)];
-  else if (program === "go" && pos[0] === "run") [eco, rest] = ["gorun", args.slice(args.indexOf("run") + 1)];
-  if (eco === null) return none;
-  // A Python runner given an index or find-links option: its packages follow the index rule of the command (sourceRule).
-  if (eco !== "npm" && eco !== "gorun" && rest.some((w) => /^(?:-i|--index-url|--extra-index-url|--index|--default-index|-f|--find-links|--no-index)(?:=|$)/.test(w))) return none;
+  let kind = null;
+  if (PACKAGE_RUNNERS.has(program)) [table, rest, kind] = ["npm", args, "npm"];
+  else if (["npm", "pnpm", "yarn", "bun"].includes(program) || program === "uv" || program === "pipx" || program === "go") {
+    // The sub-command past the manager's global options (MANAGER_GLOBAL_OPTIONS, npm's own table;
+    // uv and pipx: their runner table). An option on none of them before a word that may be a runner
+    // sub-command leaves the fetch unread.
+    let i = -1;
+    if (program === "uv" || program === "pipx") {
+      const t = RUNNER_OPTIONS[program === "uv" ? "uvx" : "pipx"];
+      for (let j = 0; j < args.length; j++) {
+        const a = args[j];
+        if (!a.startsWith("-")) {
+          i = j;
+          break;
+        }
+        const name = a.replace(/=.*$/s, "");
+        if (t.flags.includes(a)) continue;
+        if (t.values.includes(name)) {
+          if (!a.includes("=")) j++;
+          continue;
+        }
+        break;
+      }
+    } else i = globalHead(program, args);
+    if (i < 0 || i >= args.length) {
+      const subs = RUNNER_SUBCOMMANDS[program] ?? [];
+      const may = args.find((w) => !w.startsWith("-") && subs.includes(program === "npm" ? (npmCommand(w) ?? w) : w));
+      return may === undefined ? none : { installs: [], bad: `an option before ${callData(may)} that this hook does not read for ${program}` };
+    }
+    const sub = program === "npm" ? npmCommand(args[i]) : args[i];
+    const after = args.slice(i + 1);
+    if (program === "npm" && sub === "exec") [table, rest, kind] = ["npm", after, "npm"];
+    else if ((program === "pnpm" || program === "yarn") && sub === "dlx") [table, rest, kind] = ["npm", after, "npm"];
+    else if (program === "bun" && sub === "x") [table, rest, kind] = ["npm", after, "npm"];
+    else if (["npm", "pnpm", "yarn", "bun"].includes(program) && (sub === "init" || sub === "create") && after.some((w) => !w.startsWith("-"))) [table, rest, kind, create] = ["npm", after, "npm", true];
+    else if (program === "uv" && sub === "tool" && after[0] === "run") [table, rest, kind] = ["uvx", after.slice(1), "py"];
+    else if (program === "uv" && sub === "run") [table, rest, kind] = ["uvrun", after, "uvrun"];
+    else if (program === "pipx" && ["run", "install", "inject"].includes(sub)) [table, rest, kind] = ["pipx", after, `pipx-${sub}`];
+    else if (program === "go" && sub === "run") [table, rest, kind] = ["gorun", after, "gorun"];
+    else return none;
+  } else if (program === "uvx") [table, rest, kind] = ["uvx", args, "py"];
+  else return none;
+  const t = RUNNER_OPTIONS[table];
   const installs = [];
   let bad = null;
   const npmSpec = (w, bareIsLatest) => {
@@ -4631,12 +4841,15 @@ function runnerFetches(words) {
     const file = registryFile(w);
     if (file && file.ecosystem === "npm") return [file];
     const m = NPM_SPEC.exec(w);
-    if (m) return [{ ecosystem: "npm", name: m[1], spec: m[2] === "latest" ? LATEST : m[2] }];
+    // Round 27 (E2): a dist-tag is a spec, judged as an install of name@tag is (latest is the reading latest).
+    if (m) return [{ ecosystem: "npm", name: m[1], spec: m[2] === "latest" ? LATEST : m[2], ...(m[2] !== "latest" && isDistTag(m[2]) ? { tag: true } : {}) }];
     if (npmBareName(w)) return bareIsLatest ? [{ ecosystem: "npm", name: w, spec: LATEST }] : [];
     return null;
   };
   const pySpec = (w, bareIsLatest) => {
     const at2 = /^([A-Za-z0-9][A-Za-z0-9._-]*)@(.+)$/.exec(w);
+    // E2: `ruff@latest` is the reading latest; `ruff@1.2` is ruff==1.2.
+    if (at2 && !w.includes("://") && at2[2] === "latest") return [{ ecosystem: "PyPI", name: at2[1], spec: LATEST }];
     const word = at2 && !w.includes("://") ? `${at2[1]}==${at2[2]}` : w;
     const got = pyOperand(word);
     if (got.length > 0 && (bareIsLatest || got.some((g) => g.spec !== LATEST))) return got.filter((g) => bareIsLatest || g.spec !== LATEST);
@@ -4647,44 +4860,64 @@ function runnerFetches(words) {
     if (list === null) bad = bad ?? `${callData(w)}, a package a runner fetches, which this hook does not read as a version to check`;
     else installs.push(...list);
   };
-  const fetchValues = new Set(eco === "npm" ? ["-p", "--package"] : ["--with", "--from", "--spec", "-w"]);
+  const isPy = kind !== "npm" && kind !== "gorun";
   let first = null;
+  const sources = [];
   for (let i = 0; i < rest.length; i++) {
     const w = rest[i];
-    if (w === "--") break;
-    const eq = /^(--?[\w-]+)=(.*)$/s.exec(w);
-    const name = eq ? eq[1] : w;
-    if (fetchValues.has(name)) {
-      const v = eq ? eq[2] : rest[++i];
-      if (typeof v !== "string") continue;
-      for (const one of v.split(",").filter(Boolean)) take(eco === "npm" ? npmSpec(one, true) : pySpec(one, true), one);
-      continue;
-    }
-    if (w.startsWith("-")) {
-      // Options that take a value: their value is not the command.
-      if (/^(?:-c|--call|--python|-p|--directory|--project|--index|--index-url|--extra-index-url|-i|--default-index|--find-links|-f)$/.test(w) && !(eco === "npm" && w === "-p")) i++;
-      continue;
-    }
-    if (first === null) {
-      first = w;
-      if (eco === "uvrun" || eco === "pipx-inject") continue;
+    if (w === "--") {
+      if (kind === "npm") first = rest[i + 1] ?? null;
       break;
     }
+    if (!w.startsWith("-")) {
+      if (first === null) first = w;
+      if (kind === "pipx-inject") continue;
+      break;
+    }
+    const eq = /^(--?[\w-]+)=(.*)$/s.exec(w);
+    const name = eq ? eq[1] : w;
+    const value = () => (eq ? eq[2] : rest[++i]);
+    if (t.fetch.includes(name)) {
+      const v = value();
+      if (typeof v === "string") for (const one of v.split(",").filter(Boolean)) take(isPy ? pySpec(one, true) : npmSpec(one, true), one);
+      continue;
+    }
+    if (t.source.includes(name)) {
+      // Round 27 (E3): the command's source rule, the one an install's options get (sourceVerdict).
+      sources.push([name, name === "--no-index" ? null : String(value() ?? "")]);
+      continue;
+    }
+    if (t.held.includes(name)) {
+      bad = bad ?? `the option ${callData(name)}, a configuration source or argument list this hook does not read`;
+      if (!eq) i++;
+      continue;
+    }
+    if (t.values.includes(name)) {
+      value();
+      continue;
+    }
+    if (t.flags.includes(name) || t.flags.includes(w)) continue;
+    // E1: an option not on the runner's table: what follows it is not read.
+    bad = bad ?? `the option ${callData(w)}, which this hook does not read for this runner`;
+    break;
   }
-  if (first !== null) {
-    if (eco === "npm") take(create ? (() => {
+  if (first !== null && !bad) {
+    if (kind === "npm") take(create ? (() => {
       const m = NPM_SPEC.exec(first);
       const name = m ? m[1] : first;
       return npmSpec(m ? `${createPackage(name)}@${m[2]}` : createPackage(name), false);
     })() : npmSpec(first, false), first);
-    else if (eco === "uvx") take(pySpec(first, false), first);
-    else if (eco === "uvinstall" || eco === "pipx-install" || eco === "pipx-run") take(pySpec(first, eco !== "pipx-run"), first);
-    else if (eco === "gorun" && first.includes("@")) installs.push(...goSpecInstalls(first));
+    else if (kind === "py") take(pySpec(first, false), first);
+    else if (kind === "pipx-install" || kind === "pipx-run") take(pySpec(first, kind !== "pipx-run"), first);
+    else if (kind === "gorun" && first.includes("@")) installs.push(...goSpecInstalls(first));
   }
-  if (eco === "pipx-inject") {
+  if (kind === "pipx-inject" && !bad) {
     // pipx inject <venv> <spec> [<spec> ...]: every spec after the venv.
     for (const w of rest.filter((x) => !x.startsWith("-")).slice(1)) take(pySpec(w, true), w);
   }
+  const verdict = sourceVerdict(sources, REPLACING_BY_MODE[isPy ? "py" : "npm"]);
+  if (verdict === "held") bad = bad ?? `--no-index beside a --find-links location on a host that is not private by its shape`;
+  if (verdict === "unjudged") return { installs: [], bad };
   return { installs, bad };
 }
 
@@ -4958,10 +5191,27 @@ const VERBS = Object.freeze(
 
 function isManagerVerb(manager, token) {
   if ((CONFIG_WRITE_VERBS[manager] ?? []).includes(token) || (FETCH_VERBS[manager] ?? []).includes(token)) return true;
+  // Round 27 (E5): an option naming a configuration source is a verb of its manager wherever it stands.
+  if (configSourceToken(manager, token)) return true;
   if (manager === "npm") return token === "pkg" || (token.length <= 16 && [...NPM_DETECT_COMMANDS, "pack", "cache", "config", "set"].includes(npmCommand(token) ?? ""));
   return DETECT_VERBS.get(manager)?.has(token) ?? false;
 }
 
+/** Round 27 (E5): a detector token (lower case) that names a configuration source for this manager. */
+function configSourceToken(manager, token) {
+  if (!token.startsWith("-")) return false;
+  if (manager === "npm" || manager === "pnpm") {
+    const name = token.replace(/^--/, "");
+    if (token.startsWith("--") && name.length >= 2 && ["userconfig", "globalconfig"].some((k) => k.startsWith(name))) return true;
+    if (manager === "pnpm" && token.startsWith("--config.")) return true;
+  }
+  if (manager === "uv") return token === "--config-file";
+  if (manager === "cargo") return token === "--config" || /^-z/.test(token);
+  if (manager === "yarn") return token === "--use-yarnrc";
+  if (manager === "bun") return token === "--config";
+  if (manager === "go") return token === "-modfile" || token === "--modfile";
+  return false;
+}
 /** A detector token: a run of name characters (`npm@10.9.2` is `npm` and `10.9.2`), or a line end. */
 const DETECT_TOKEN = /[a-z0-9._+-]+|[\n\r]/g;
 /** R6: a module spelled as pip and more (`pip.__main__`, `pip._internal.cli.main`). */
@@ -5758,7 +6008,12 @@ function accountCommand(words, dialect, depth, exempt = true) {
   // Past the reader's own depth the command is not read (a runner chain of any length is held, never followed).
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // A command with no hit has nothing to account for; one whose program takes the words as data neither.
-  if (!detectsInWords(words) || (exempt && dataCommand(words))) return null;
+  if (exempt && dataCommand(words)) return null;
+  if (!detectsInWords(words)) {
+    // Round 27 (E1): a runner fetch is read whether or not the detector names the command.
+    const fetchBad = runnerFetches(words).bad;
+    return fetchBad ? notReadAt(fetchBad, words[Math.max(0, commandStart(words))]) : null;
+  }
   if (depth === 0 || accountTop === null) {
     let memo = null;
     accountTop = () => (memo ??= quietly(() => commandInstalls(words, depth, dialect)));
@@ -5809,7 +6064,7 @@ function accountCommand(words, dialect, depth, exempt = true) {
   const fetchBad = runnerFetches(words).bad;
   if (fetchBad) return notReadAt(fetchBad, words[start]);
   // Round 26 (R1): a configuration file named by an option on any npm or pnpm command.
-  const configFileOption = npmConfigFileOption(program, args);
+  const configFileOption = configSourceOption(program, args);
   if (configFileOption) return notReadAt(configFileOption.reason, configFileOption.token);
   // Round 25 (S6): a write of the manager's own configuration is held unless the key is inert.
   const configWrite = configWriteOf(program, args);
@@ -6521,7 +6776,7 @@ const NAMED_OPTIONS = {
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
 // THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
-export { RUNNER_FETCH_FORMS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
+export { RUNNER_FETCH_FORMS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {
@@ -6893,51 +7148,76 @@ function optionToken(option) {
 const UNUSUAL_BLANKS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00A0\u061C\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u3000\uFEFF]/g;
 const UNUSUAL_BLANK = new RegExp(UNUSUAL_BLANKS.source);
 /**
- * Round 26b (D3): one detector for an expansion in a manager's words. Each command of the line
- * (split at ; & | and line ends) whose first word, after assignments and the prefixes a command may
- * stand behind (sudo, env, time, nohup, command, exec, nice, timeout, then, do, if, ., &, python -m
- * and py -m, cmd /c), is a manager or a runner: when one of its words up to its end is an expansion
- * that could hold a verb or a package (`$x`, `${x}`, `"${a[@]}"`, `"$@"`, `$(...)`, a backtick, `@a`,
- * `@(...)`, `$env:X`, `%X%`), the command is not read, unless a literal verb that is no install,
- * fetch or configuration verb stands before the expansion (`npm run build -- $ARGS`). Returns the
- * command's text, or null.
+ * Round 26b (D3), round 27 (E6): one detector for an expansion in a manager's words. Each command of
+ * the line (split at ; & | and line ends, and at the brackets of a subshell or group) whose first
+ * word, after the assignments, keywords and prefixes the reader steps over (commandStart, with each
+ * prefix's options and operands: `timeout 5`, `sudo -u root`, `nice -n 5`), after cmd /c, and after an
+ * interpreter's options and -m (`py -3 -m pip`), is a manager or a runner: when one of its words is an
+ * expansion that could hold a verb or a package (`$x`, `${x}`, `"${a[@]}"`, `"$@"`, `$(...)`, a backtick,
+ * `@a`, `@(...)`, `$env:X`, `%X%`), the command is not read, unless a literal verb that is no install,
+ * fetch, configuration or runner sub-command stands before it (`npm run build -- $ARGS`); after a runner
+ * or a runner sub-command (`npm exec`, `pnpm dlx`, `uv tool run`) any expansion is not read, except
+ * after uv run and go run, where only one at or before the program word is. Returns the command's text, or null.
  */
 const EXPANSION = /\$|`|%[A-Za-z_]\w*%/;
 const SPLAT = /^["']?@(?:[A-Za-z_]\w*["']?$|\()/;
-const EXPANSION_PREFIXES = new Set(["sudo", "doas", "env", "time", "nohup", "command", "exec", "nice", "timeout", "then", "do", "if", "elif", "else", ".", "&", "!", "builtin", "stdbuf", "ionice"]);
+/** The runner sub-commands of a manager: the word after them (after their options) is the package fetched. */
+const RUNNER_SUBCOMMANDS = { npm: ["exec", "x", "init", "create", "innit"], pnpm: ["dlx", "exec", "create"], yarn: ["dlx", "create"], bun: ["x", "create", "init"], uv: ["tool", "run"], pipx: ["run", "install", "inject"], go: ["run"] };
 function managerExpansion(command, dialect = "bash") {
   const isExpansion = (w) => EXPANSION.test(w) || (dialect === "powershell" && SPLAT.test(w));
-  for (const raw of String(command).split(/[;&|\n]+/)) {
-    const words = raw.trim().split(/\s+/).filter(Boolean);
-    let i = 0;
-    for (;;) {
-      const w = (words[i] ?? "").replace(/^["']|["']$/g, "");
-      const name = programName(w);
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || EXPANSION_PREFIXES.has(name)) i++;
-      else if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?$/.test(name) && words[i + 1] === "-m") i += 2;
-      else if (name === "cmd" && /^\/{1,2}[ck]$/i.test(words[i + 1] ?? "")) i += 2;
-      else if (/^-/.test(w) && i > 0 && EXPANSION_PREFIXES.has(programName((words[i - 1] ?? "").replace(/^["']|["']$/g, "")))) i++;
-      else break;
-      if (i >= words.length) break;
+  // The commands of the line split at ; & | line ends, and the parentheses and braces of a subshell or group.
+  for (const raw of String(command).split(/[;&|\n\r]+|(?<![$@])[(){}]/)) {
+    const words = raw.trim().split(/\s+/).filter(Boolean).map((w) => w.replace(/^["']+|["']+$/g, "") || w);
+    // THE walk the reader uses (commandStart: assignments, keywords, PREFIXES with their arities);
+    // a prefix option it does not know: the first manager or runner word stands for the command.
+    let i = commandStart(words);
+    if (i < 0) i = words.findIndex((w) => managerWord(programName(w).replace(/@[^@]*$/, "")) !== null || PACKAGE_RUNNERS.has(programName(w)) || programName(w) === "uvx");
+    if (i < 0 || i >= words.length) continue;
+    let lead = programName(words[i]).replace(/@[^@]*$/, "");
+    // cmd /c and python -m pip (the interpreter's own options before -m): the program after them.
+    if (lead === "cmd" && /^\/{1,2}[ck]$/i.test(words[i + 1] ?? "")) {
+      i += 2;
+      lead = programName(words[i] ?? "").replace(/@[^@]*$/, "");
     }
-    const lead = programName((words[i] ?? "").replace(/^["']|["']$/g, "")).replace(/@[^@]*$/, "");
-    const manager = managerWord(lead) ?? (lead === "yarnpkg" ? "yarn" : null);
-    const runner = PACKAGE_RUNNERS.has(lead);
+    if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?$/.test(lead)) {
+      let j = i + 1;
+      while (j < words.length && words[j] !== "-m" && /^-/.test(words[j])) j += words[j] === "-X" || words[j] === "-W" ? 2 : 1;
+      if (words[j] !== "-m") continue;
+      i = j + 1;
+      lead = programName(words[i] ?? "");
+    }
+    if (isExpansion(words[i] ?? "")) continue;
+    const manager = managerWord(lead) ?? (lead === "yarnpkg" ? "yarn" : lead === "pipx" ? "pipx" : null);
+    const runner = PACKAGE_RUNNERS.has(lead) || lead === "uvx";
     if (!manager && !runner) continue;
+    // Up to the word the command is read by: a runner's package; a manager's verb, and past a runner
+    // sub-command its package (uv tool run: two words). An expansion there, or before it, is not read;
+    // after a verb that installs, fetches or configures, an expansion anywhere is not read.
+    let need = runner ? Infinity : 1;
+    let seen = 0;
     let verb = null;
+    let install = false;
     for (const w of words.slice(i + 1)) {
       if (isExpansion(w)) {
-        if (verb !== null && !runner && !isManagerVerb(manager, verb.toLowerCase())) break;
-        return words.slice(i).join(" ");
+        if (seen < need || install) return words.slice(i).join(" ");
+        break;
       }
-      if (verb === null && !w.startsWith("-")) {
-        verb = w.replace(/^["']|["']$/g, "");
-        if (!runner && !isManagerVerb(manager, verb.toLowerCase())) break;
+      if (w.startsWith("-")) continue;
+      seen++;
+      if (seen === 1 && manager) {
+        verb = w.toLowerCase();
+        if (isManagerVerb(manager, verb)) install = true;
+        else if ((manager === "uv" && verb === "run") || (manager === "go" && verb === "run")) need = 2;
+        else if ((RUNNER_SUBCOMMANDS[manager] ?? []).includes(manager === "npm" ? (npmCommand(verb) ?? verb) : verb)) install = true;
+        else break;
       }
+      if (seen >= need && !install) break;
     }
   }
   return null;
 }
+/** Round 27 (E1): a line that may hold a runner fetch (the runner's name, or a manager's runner sub-command). */
+const RUNNER_HINT = /(?:^|[^A-Za-z0-9_.-])(?:npx|bunx|pnpx|uvx|pipx|npm|pnpm|yarn|yarnpkg|bun|uv|go)(?:\.exe|\.cmd|\.bat|\.ps1)?(?![A-Za-z0-9_.-])/i;
 /** R5: what builds a command from other words. */
 const BUILDS_COMMAND = /\bxargs\b|\bset-alias\b|\bnew-alias\b|(?:^|[\s;&|(])alias\s|\bfunction\s|(?:^|[\s;&|(])fn\s|\binvoke-expression\b|\biex\b|&\s*['"\u2018-\u201d]|\bdoskey\b|[\w-]\s*\(\)\s*\{/i;
 /**
@@ -7043,6 +7323,25 @@ function accountCall(command, dialect) {
     if (expanded) {
       accountRemedy = "Write the manager's verb and each package with its version on the command line itself (npm install name@1.2.3), not in a variable, an array or a splat: the hook then reads it.";
       return `${callData(expanded)}, a package manager command with an expansion where a verb or a package could be`;
+    }
+    // Round 27 (E1): a runner fetch on a line the detector does not name: each simple command read
+    // for the package it fetches (an option not on the runner's table: not read).
+    if (RUNNER_HINT.test(command) && command.length <= MAX_ACCOUNT_CHARS) {
+      const commands = quietly(() => simpleCommands(command, dialect, null, null, MAX_ACCOUNT_CHARS));
+      for (const words of commands ?? []) {
+        const start = commandStart(words);
+        if (start < 0 || start >= words.length || dataCommand(words)) continue;
+        const program = programName(String(words[start]));
+        // A shell's -c string: read as a line of its own.
+        const c = SHELLS.has(program) ? words.slice(start + 1).findIndex((w) => /^-[a-z]*c[a-z]*$/.test(w)) : -1;
+        if (c >= 0 && typeof words[start + 2 + c] === "string") {
+          const inner = accountCall(words[start + 2 + c], "bash");
+          if (inner) return inner;
+          continue;
+        }
+        const bad = runnerFetches(words).bad;
+        if (bad) return notReadAt(bad, words[start]);
+      }
     }
     return null;
   }
@@ -8382,16 +8681,18 @@ const INSTALL_ADVICE = "The package manager decides the releases actually instal
  * fetch what a changed manifest asks for. npm's words are read through its own abbreviations.
  */
 const ADVICE_VERBS = new Map([
-  ["pnpm", new Set(["add", "install", "i", "up", "update", "upgrade", "link", "ln"])],
-  ["yarn", new Set(["add", "install", "up", "upgrade", "link"])],
+  ["pnpm", new Set(["add", "install", "i", "up", "update", "upgrade", "link", "ln", "audit", "dedupe"])],
+  ["yarn", new Set(["add", "install", "up", "upgrade", "link", "dedupe"])],
   ["bun", new Set(["add", "a", "install", "i", "update", "link"])],
   ["pip", new Set(["install"])],
-  ["uv", new Set(["add", "sync", "install"])],
-  ["poetry", new Set(["add", "install", "update", "sync"])],
+  ["uv", new Set(["add", "sync", "install", "lock"])],
+  ["poetry", new Set(["add", "install", "update", "sync", "lock"])],
   ["cargo", new Set(["add", "install", "update", "fetch", "build", "b", "run", "r", "test", "t"])],
-  ["go", new Set(["get", "install", "download"])],
+  ["go", new Set(["get", "install", "download", "tidy"])],
 ]);
-const NPM_ADVICE_COMMANDS = new Set(["install", "install-test", "ci", "install-ci-test", "update", "link"]);
+// Round 27 (F12): the updates the manager chooses (npm audit fix, pnpm audit --fix, dedupe, go mod
+// tidy, uv lock --upgrade, poetry lock) are advised too.
+const NPM_ADVICE_COMMANDS = new Set(["install", "install-test", "ci", "install-ci-test", "update", "link", "audit", "dedupe"]);
 // THE CONTRACT, P6: ADVICE_VERBS lists npm too (its words read through npm's own abbreviations).
 ADVICE_VERBS.set("npm", NPM_ADVICE_COMMANDS);
 /** L6: whether a simple command runs a manager with one of ADVICE_VERBS (a manager's own program, not text). */
