@@ -18,7 +18,7 @@ import { WORD_SCAN_CAP } from "../call-budget.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands, MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
-import { BEST_EFFORT_READING, BRIEFING_FAILED, PRIVATE_INSTALLED, SCAN_INCOMPLETE, DISMISSED_KNOWN, NOT_SCANNED_LOCKFILES, INSTALLED_MALWARE, INSTALLED_PLACEHOLDER, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { BEST_EFFORT_READING, BRIEFING_FAILED, SCAN_ALL_PRIVATE, SCAN_LOCKFILE_UNREADABLE, SCAN_NPMRC_UNREADABLE, UNLISTED_FOLDERS, PRIVATE_INSTALLED, SCAN_INCOMPLETE, DISMISSED_KNOWN, NOT_SCANNED_LOCKFILES, INSTALLED_MALWARE, INSTALLED_PLACEHOLDER, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -179,6 +179,14 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(next).toContain(`("${NOT_SCANNED_LOCKFILES(1)}";`);
     expect(next).toContain(`"${NOT_SCANNED_LOCKFILES({ ignored: 0, depth: 1, projectLimit: 0, outside: 0, unreadable: 0 })}"`);
     expect(next).toContain(`"${SCAN_INCOMPLETE}"`);
+    // Round 20.
+    expect(next).toContain(`("${UNLISTED_FOLDERS(1)}")`);
+    expect(next).toContain(`"${SCAN_ALL_PRIVATE(1)}"`);
+    expect(next).toContain(`"${SCAN_LOCKFILE_UNREADABLE(["package-lock.json"])}"`);
+    expect(SCAN_NPMRC_UNREADABLE(2)).toContain("checked none of the 2 installed dependencies");
+    expect(next).toContain("checked none of the N installed dependencies");
+    expect(text("src/project-tree.ts")).toContain("export const MAX_DEPTH = 8;");
+    expect(readme).toContain("20,000 directories, 8 levels and 256 projects");
     expect(next).toContain(`("${PRIVATE_INSTALLED(1)}")`);
     expect(next).toContain(`"${BRIEFING_FAILED}"`);
     expect(next).toContain("it does not promise to see every copy on disk");
