@@ -4,7 +4,7 @@
  * then lingered past the wall timeout gives its figures; a child that never finished says which stage it reached; the
  * child gets FOURDA_OFFLINE, its own FOURDA_MCP_HOME and an empty folder from the parent.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -30,7 +30,7 @@ describe("the child-CPU helper", () => {
     expect(() => runChildScript(script, { input: "", timeoutMs: 3000, cwd, home })).toThrow(/did not finish in the child within 3000 ms .*last stage reached: after-import/);
   }, 30_000);
   it("the child's environment and folder come from the parent", () => {
-    const script = `process.stdout.write("@@cpu [" + (process.env.FOURDA_OFFLINE === "true" ? 1 : 0) + "," + (process.env.FOURDA_MCP_HOME === ${JSON.stringify(home)} ? 1 : 0) + "," + (process.cwd().toLowerCase() === ${JSON.stringify(cwd.toLowerCase())} ? 1 : 0) + "]\\n", () => process.exit(0));`;
+    const script = `process.stdout.write("@@cpu [" + (process.env.FOURDA_OFFLINE === "true" ? 1 : 0) + "," + (process.env.FOURDA_MCP_HOME === ${JSON.stringify(home)} ? 1 : 0) + "," + ((await import("node:fs")).realpathSync(process.cwd()).toLowerCase() === ${JSON.stringify(realpathSync(cwd).toLowerCase())} ? 1 : 0) + "]\\n", () => process.exit(0));`;
     expect(runChildScript(script, { input: "", timeoutMs: 30_000, cwd, home })).toEqual([1, 1, 1]);
   }, 60_000);
 });
