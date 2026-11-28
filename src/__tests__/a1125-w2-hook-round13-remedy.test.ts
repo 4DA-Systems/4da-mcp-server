@@ -100,7 +100,6 @@ const LINES: [string, string][] = [
   ["Bash", "poetry add --optional requests==2.32.3 --zzz"],
   ["Bash", "poetry add 'requests[socks]==2.32.3' --zzz"],
   ["Bash", "poetry add requests@^2.31 --zzz"],
-  ["Bash", "poetry add -C sub requests==2.32.3 --zzz"],
   ["Bash", "cargo add --dev serde@1.0.200 --zzz"],
   ["Bash", "cargo add serde@1.0.200 --features derive --zzz"],
   ["Bash", "cargo add -p app serde@1.0.200 --zzz"],

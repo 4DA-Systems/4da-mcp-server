@@ -108,3 +108,9 @@ export const JS_MANAGERS: ReadonlySet<string>;
 export const PNPM_INERT_KEYS: ReadonlySet<string>;
 /** Round 31: the .npmrc credential keys, inert (they choose no registry). */
 export const CREDENTIAL_KEYS: readonly string[];
+/** The option tables the account reads each manager with (Round 32: none holds a CONFIG_SOURCE_OPTIONS entry). */
+export const ACCOUNT_TABLES: Readonly<Record<string, ReadonlyMap<string, number>>>;
+/** Round 32: the sub-command paths each manager reader reads ("*": every word after it). */
+export const SUBCOMMAND_PATHS: Readonly<Record<string, Readonly<Record<string, readonly string[] | "*">>>>;
+/** Round 32: the sub-commands that take no package changing what is installed, with their help line. */
+export const NO_PACKAGE_SUBCOMMANDS: Readonly<Record<string, Readonly<Record<string, string>>>>;

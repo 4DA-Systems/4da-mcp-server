@@ -84,9 +84,11 @@ describe("S3 (round 16): a source named by another name, or by a config name, is
   });
 });
 
+// Round 32: `poetry self` other than show changes Poetry's own environment: not read (it was judged as an add).
 describe("S4: poetry self add", () => {
-  it("poetry self add urllib3==2.5.0 is judged", () => {
-    heldThenReleased("poetry self add urllib3==2.5.0", { ecosystem: "PyPI", package: "urllib3", to: "2.5.0" });
+  it("poetry self add urllib3==2.5.0 is not read", () => {
+    const r = s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "poetry self add urllib3==2.5.0" } });
+    expect(r.text).toContain("a sub-command this hook does not read");
   });
 });
 

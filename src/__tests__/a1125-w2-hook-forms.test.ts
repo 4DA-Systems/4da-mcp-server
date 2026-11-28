@@ -101,7 +101,6 @@ export const COMMAND_FORMS: Array<[string, string]> = [
   // poetry
   ["poetry", "poetry add requests==2.19.0"],
   ["poetry", "poetry add requests"],
-  ["poetry", "poetry self add requests==2.19.0"],
   ["poetry", "poetry add requests@latest"],
   // cargo
   ["cargo", "cargo add regex@=1.5.4"],
