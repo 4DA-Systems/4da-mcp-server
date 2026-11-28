@@ -121,7 +121,9 @@ describe("G2: the file an edit makes is valid in its kind", () => {
   });
   it("a valid file with a comment or a date goes ahead", () => {
     expect(s.write(s.file("Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n'), '[package]\nname = "a" # the name\nversion = "0.1.0"\nedition = "2021"\n\n[package.metadata]\nreleased = 1979-05-27T07:32:00Z\nratio = 1.5\nflags = [\n  "a",\n  "b",\n]\n').decision).toBe("allow");
-    expect(s.write(s.file("go.mod", "module example.com/a\n\ngo 1.22\n"), "module example.com/a\n\ngo 1.22\n\n// a note\ntoolchain go1.24.4\n").decision).toBe("allow");
+    expect(s.write(s.file("go.mod", "module example.com/a\n\ngo 1.22\n\ntoolchain go1.24.4\n"), "module example.com/a\n\ngo 1.22\n\n// a note\ntoolchain go1.24.4\n").decision).toBe("allow");
+    // Round 35 (C4): a toolchain line the edit adds makes the go command fetch that release: held.
+    expect(s.write(s.file("go.mod", "module example.com/a\n\ngo 1.22\n"), "module example.com/a\n\ngo 1.22\n\n// a note\ntoolchain go1.24.4\n").decision).toBe("deny");
   });
 });
 

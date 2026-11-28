@@ -2,7 +2,7 @@
 // Round 34 (B1): generates src/__tests__/fixtures/a1125-npm-spellings.json from npm's own parser.
 // Run with the npm whose parser is the reference: `node scripts/gen-npm-option-spellings.cjs <npm folder>`
 // (for example D:/node.js/node_modules/npm). For every spelling of every npm option (the full name
-// and each prefix, with one and with two dashes) and every two-letter cluster, nopt with npm's own
+// and each prefix, with one and with two dashes, and its negated form) and every two-letter cluster, nopt with npm's own
 // definitions and shorthands says whether the word after it is consumed as its value.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -18,6 +18,8 @@ for (const name of Object.keys(types)) {
     spellings.add(`--${name.slice(0, n)}`);
     spellings.add(`-${name.slice(0, n)}`);
   }
+  // Round 35 (C1): the negated form of every option: nopt gives a value option its next word even then.
+  spellings.add(`--no-${name}`);
 }
 const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 for (const a of letters) for (const b of letters) spellings.add(`-${a}${b}`);

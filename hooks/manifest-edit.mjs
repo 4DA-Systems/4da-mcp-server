@@ -40,10 +40,11 @@
  * case, or a name on the UNREAD_MANIFESTS list, or a package manager's configuration file on the
  * CONFIG_FILES list (manifestKind, manifestBaseName, configFileOf) [test: a1125-w2-hook-contract,
  * a1125-w2-hook-round17, a1125-w2-hook-round25b]. P1: a Bash or PowerShell call is also examined
- * when its text holds a word that builds a command (BUILDS_COMMAND), for example an alias or a
- * function definition or a program that takes operands from its input, beside a word the detector
- * reads as a manager's name, and such a call is denied as not read (accountCall) [test:
- * a1125-w2-hook-round23, a1125-w2-hook-account]. P1: a call that is not examined goes ahead with
+ * when its text holds a word that builds a command (BUILDS_COMMAND) at a place where it builds one
+ * beside a word the detector reads as a manager's name: an alias or a function definition, for
+ * example, or a program that takes operands from its input only when its own command is a manager;
+ * such a call is denied as not read (accountCall) [test: a1125-w2-hook-round23,
+ * a1125-w2-hook-account, a1125-w2-hook-round35]. P1: a call that is not examined goes ahead with
  * no answer, apart from the ledger guard and the failure rule (P5), the advice (P6), a runner fetch
  * the hook sees (L3), an expansion in a manager's words (L2) and a configuration source named on a
  * command (P3) [test: a1125-w2-hook-contract, a1125-w2-hook-round29].
@@ -113,9 +114,16 @@
  * a1125-w2-hook-forms, a1125-w2-hook-round33]. P3: an option word before the verb or among the
  * words of an examined command is read only in an exact spelling on that manager's table: a long
  * option whose name is exactly on it (no abbreviation), with or without its value after =, a single
- * documented short letter alone, or an exact shorthand word the manager documents; an option written any other way (an
- * abbreviation, a single-dash long name, a cluster of letters where the manager's parser reads one
- * differently) makes the command not read [test: a1125-w2-hook-round34]. P3: a release the call takes from a source the hook reads as the
+ * documented short letter alone or with its value attached, a cluster of letters every one of which
+ * is a switch on the table where the manager's parser reads clusters letter by letter, or an exact
+ * shorthand word the manager documents; a negated long option is read only as a name on the table,
+ * or, where the manager's parser negates any switch, as the negation of a switch on it; an option
+ * written any other way (an abbreviation, a single-dash long name, a negated option that takes a
+ * value, a cluster holding a letter that takes a value, a cluster of letters where the manager's
+ * parser reads one differently) makes the command not read [test: a1125-w2-hook-round34,
+ * a1125-w2-hook-round35]. P3: an edit that adds or changes the toolchain directive of a Go module
+ * file, or raises its language version directive, makes the Go command fetch that toolchain
+ * release, and is denied as not read (wholeFileChanges) [test: a1125-w2-hook-round35]. P3: a release the call takes from a source the hook reads as the
  * project's own, for example a local path, git, or a host private by its shape, is not judged
  * (sourceVerdict, urlDependency) [test: a1125-w2-hook-round18, a1125-w2-hook-round19,
  * a1123-hookfix-local-sources]. P3: a dependency entry that names an index, a registry or a source
@@ -155,10 +163,13 @@
  * siblings too), one named by a command that changes its folder, and one holding an option line not on
  * REQUIREMENTS_INERT_OPTIONS, are denied as not read (requirementFileInstalls, includeRequirements),
  * and each such file is read strictly: one with a coding declaration other than UTF-8, or with any
- * character other than LF and CRLF at which a manager that reads it ends a line, is not read, and after a
+ * character other than LF and CRLF at which a manager that reads it ends a line, or with a comment
+ * line or a comment at a line's end that ends in a backslash, is not read, a backslash at a line's
+ * end joins it to the next unless it is a comment line, as the Python installer's own reader joins,
+ * and after a
  * requirement's specifier a line holds only a marker, hash options or a comment, or it is not read
- * (requirementsTextBad, requirementLine) [test: a1125-w2-hook-round25, a1125-w2-hook-round29,
- * a1125-w2-hook-round34]. P3: a write of a manager's own configuration by one of its
+ * (requirementsTextBad, requirementsLogicalLines, requirementLine) [test: a1125-w2-hook-round25,
+ * a1125-w2-hook-round29, a1125-w2-hook-round34, a1125-w2-hook-round35]. P3: a write of a manager's own configuration by one of its
  * CONFIG_WRITE_VERBS is denied as not read unless each key it writes is on INERT_CONFIG_KEYS, and a
  * release named on one of the FETCH_VERBS is judged as an install is (configWriteOf) [test:
  * a1125-w2-hook-round25]. P3: an edit of a file on the CONFIG_FILES list is read from the file it
@@ -477,7 +488,8 @@
  *   packages are judged on the ledger (a proceed or review for the release named, or a private
  *   record, lets it through), and a denial for a missing verdict says how a private name is released
  *   (FOURDA_PRIVATE_PACKAGES or the registry's configuration, so the server records it private).
- * A command that names no package (`npm ci`, `pip install -r r.txt`, `uv sync`) goes ahead; what the
+ * A command that names no package (`npm ci`, `uv sync`, `cargo fetch`) goes ahead (`pip install -r
+ * r.txt` names the packages its file lists, and they are read and judged); what the
  * manager then chooses is a limit. After a Bash or PowerShell command in which a package manager's
  * own program runs an install, add, update, sync or ci, package named or not (ADVICE_VERBS: `npm
  * ci`, `pnpm install --frozen-lockfile`, `yarn` alone, `pip install -r`, `uv sync`, `poetry
@@ -1709,7 +1721,7 @@ function includeRequirements(out, inc, base, depth, seen) {
   // Round 34 (B2): an included file is read as strictly as the file that names it.
   const badText = requirementsTextBad(text);
   if (badText) return refuse(`${callData(inc.file)}: ${badText}`);
-  for (const line of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
+  for (const line of requirementsLogicalLines(text)) {
     tick();
     const nested = requirementsInclude(line);
     if (nested) {
@@ -1729,7 +1741,7 @@ function includeRequirements(out, inc, base, depth, seen) {
 const REQUIREMENTS_INERT_OPTIONS = Object.freeze(["--hash", "-e", "--editable", "-r", "--requirement", "-c", "--constraint"]);
 function requirementOptions(text, base, depth = 1, seen = new Set()) {
   const out = new Set();
-  for (const raw of String(text).replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+  for (const raw of requirementsLogicalLines(String(text))) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
     if (!line.startsWith("-")) continue;
     const name = /^(-{1,2}[A-Za-z][\w-]*)/.exec(line)?.[1] ?? line;
@@ -1792,6 +1804,33 @@ function requirementFileArgs(args) {
 }
 
 /**
+ * Round 35 (C3): a requirements text's logical lines, joined as pip joins them (req_file.py
+ * join_lines, then ignore_comments, pip 25.0.1): a line that ends in a backslash continues on the
+ * next one unless it is a comment line (`#` after optional blanks), and a comment line closes the
+ * line it continues; comments are cut afterwards, line by line. A comment that ends in a backslash
+ * is a form pip and uv read differently: requirementsTextBad holds it, so it never reaches here.
+ */
+// pip's COMMENT_RE is (^|\s+)#.*$; one blank before the mark finds the same comments in linear time
+// (the blanks before it are left, and each reader trims the line).
+const REQ_COMMENT = /(^|\s)#.*$/;
+function requirementsLogicalLines(text) {
+  const out = [];
+  let joined = null;
+  for (const raw of String(text).split(/\r?\n/)) {
+    // pip matches COMMENT_RE at the start of the line only (re.match): a comment line.
+    const comment = /^\s*#/.test(raw);
+    if (!raw.endsWith("\\") || comment) {
+      const line = comment ? " " + raw : raw;
+      if (joined !== null) {
+        out.push(joined + line);
+        joined = null;
+      } else out.push(line);
+    } else joined = (joined ?? "") + raw.replace(/^\\+|\\+$/g, "");
+  }
+  if (joined !== null) out.push(joined);
+  return out.map((l) => l.replace(REQ_COMMENT, ""));
+}
+/**
  * Round 34 (B2): a requirements or constraints file is read strictly: it must carry no coding
  * declaration in its first two lines other than UTF-8 (pip honours one: under utf-7 `+AAo-` is a
  * line feed), and no character that pip's str.splitlines or uv ends a line at other than LF and
@@ -1803,6 +1842,8 @@ function requirementsTextBad(text) {
     const m = /^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)/.exec(line);
     if (m && !/^utf[-_]?8$/i.test(m[1])) return `a coding declaration (${callData(m[1])}) in a requirements file, which this hook reads as UTF-8 only`;
   }
+  // Round 35 (C3): a comment line, or a comment at the end of a line, that ends in a backslash.
+  for (const line of t.split(/\r?\n/)) if (REQ_COMMENT.test(line) && /\\\s*$/.test(line)) return "a requirements comment that ends in a backslash (pip and uv read the next line differently)";
   // eslint-disable-next-line no-control-regex -- the control characters are what this rule finds
   if (/\r(?!\n)|[\v\f\x1c\x1d\x1e\x85\u2028\u2029]/.test(t)) return "a requirements file with a line end other than LF or CRLF (pip and uv end a line there, this hook does not)";
   return null;
@@ -2564,7 +2605,7 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     // Round 29 (H4): the files of -r and -c are counted over the whole file read (siblings too), not per chain.
     const seen = new Set();
     // pip joins a line that ends in a backslash with the next (`requests\` + `==2.0.0`).
-    for (const line of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
+    for (const line of requirementsLogicalLines(text)) {
       tick();
       // Round 25 (S1): `-r <file>` and `-c <file>` are read from disk, their lines judged as this file's.
       const inc = requirementsInclude(line);
@@ -2614,6 +2655,30 @@ function versionChanges(file, before, after, disk) {
   const place = placeOnDisk(disk, after);
   const old = declaredVersions(file, typeof before === "string" ? before : "", disk, place);
   return diffVersions(old, declaredVersions(file, after, disk, place), specKey(file));
+}
+
+/** Whether go version `a` (1.22, 1.22.3, 1.23rc1) is above `b`; a form either does not parse as is above. */
+function goVersionAbove(a, b) {
+  const parse = (v) => /^(\d+)\.(\d+)(?:\.(\d+))?((?:rc|beta)\d+)?$/.exec(v);
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return a !== b;
+  for (let k = 1; k <= 3; k++) {
+    const d = Number(x[k] ?? -1) - Number(y[k] ?? -1);
+    if (d !== 0) return d > 0;
+  }
+  return (x[4] ?? "~") > (y[4] ?? "~");
+}
+
+/** Round 35 (C4): the `go` and `toolchain` directives of a go.mod text, normalised, one string each. */
+function goRuntimeLines(text) {
+  const out = [];
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.replace(/\/\/.*$/, "").replace(/"([^"\\]*)"/g, "$1").trim();
+    const m = /^(go|toolchain)\s+(\S+)$/.exec(line);
+    if (m) out.push(`${m[1]} ${m[2]}`);
+  }
+  return out;
 }
 
 /**
@@ -2964,6 +3029,19 @@ function wholeFileChanges(file, before, after) {
 function wholeFileChangesOf(file, before, after) {
   // Round 25b: a TOML file with a carriage return alone as a line end: the hook's line reading and the manager's may differ.
   if ((file === "Cargo.toml" || file === "pyproject.toml") && /\r(?!\n)/.test(after) && after !== before) refuse(`a ${file} with a carriage return alone as a line end, which this hook does not read`);
+  if (file === "go.mod") {
+    // Round 35 (C4): a `toolchain` or `go` line the edit adds or changes makes the go command fetch
+    // that toolchain release, as `go get toolchain@...` and GOTOOLCHAIN do (both held): held as not read.
+    const was = goRuntimeLines(typeof before === "string" ? before : "");
+    const oldGo = was.filter((l) => l.startsWith("go ")).map((l) => l.slice(3));
+    // A `toolchain` line that is new, or a `go` line above the one the old file held (lowering it
+    // fetches nothing; a new file's `go` line, as `go mod init` writes it, is the runtime's own
+    // constraint, L1).
+    const added = goRuntimeLines(after).find((l) =>
+      l.startsWith("toolchain ") ? !was.includes(l) : oldGo.length > 0 && oldGo.every((v) => goVersionAbove(l.slice(3), v)),
+    );
+    if (added) refuse(`${callData(added)}, a go.mod \`go\` or \`toolchain\` line this edit adds or changes (the go command fetches that toolchain release)`, "Check the toolchain release you need, then make this edit by hand.");
+  }
   // Round 25 (S3): a new or changed resolver setting that is no dependency value is held.
   {
     const was = resolverSettings(file, before);
@@ -4673,6 +4751,9 @@ function npmOption(a, next) {
   const plain = long.startsWith("no-") && NPM_OPTIONS.includes(long.slice(3)) ? long.slice(3) : long;
   const name = npmOptionName(plain);
   if (name === null) return "unknown";
+  // Round 35 (C1): nopt gives the next word to a value option even when negated (`--no-cpu x` is
+  // cpu=x): `--no-<name>` is read only for a boolean option.
+  if (plain !== long && NPM_VALUE_OPTIONS.has(name)) return "unknown";
   if (eq > 0) return "switch";
   if (plain !== long) return bool;
   if (name === "color") return next === "always" ? "value" : bool;
@@ -5784,6 +5865,8 @@ function readOptions(args, table, mode = "", stop = false) {
       if (eq < 0 && NPM_LONG_SHORTHANDS.has(name.slice(2))) continue;
       const resolved = npmOptionName(name.slice(negated ? 5 : 2));
       if (resolved === null || NPM_RESOLVING.has(resolved)) return done(a);
+      // Round 35 (C1): a negated value option takes the next word in nopt: not read.
+      if (negated && NPM_VALUE_OPTIONS.has(resolved)) return done(a);
       if (eq > 0 || negated || !NPM_VALUE_OPTIONS.has(resolved)) {
         // A switch: npm also takes a following `true` / `false` as its value.
         if (eq < 0 && (args[i + 1] === "true" || args[i + 1] === "false")) i++;
@@ -5811,7 +5894,9 @@ function readOptions(args, table, mode = "", stop = false) {
       if (!ok) return done(a);
       continue;
     }
-    if (table.has(name) || (name.startsWith("--no-") && table.get(`--${name.slice(5)}`) === 0)) {
+    // Round 35 (C1): a negation is read only as an exact name on the table, and for pnpm (nopt, which
+    // negates any switch) as the negation of a switch on its table; a negated value option is not read.
+    if (table.has(name) || (table === ACCOUNT_TABLES.pnpm && name.startsWith("--no-") && table.get(`--${name.slice(5)}`) === 0)) {
       if (eq > 0) add(name, a.slice(eq + 1));
       else if (table.get(name) === 1) {
         if (i + 1 >= args.length) return done(a);
@@ -5826,6 +5911,13 @@ function readOptions(args, table, mode = "", stop = false) {
       for (let k = 1; k < a.length; k++) {
         const opt = `-${a[k]}`;
         if (!table.has(opt)) {
+          ok = false;
+          break;
+        }
+        // Round 35 (C2): a value letter after the first (`-qr file`, `-qrfile`, `-qP x`): its value is
+        // dropped from judging in the manager's own reading, so the cluster is not read. A value letter
+        // first is a short value option with its value attached (`-rfile`), read as that option.
+        if (k > 1 && table.get(opt) !== 0) {
           ok = false;
           break;
         }

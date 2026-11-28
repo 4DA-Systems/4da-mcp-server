@@ -77,6 +77,8 @@ describe("the way through: the denial's own call (round 22, F3)", () => {
     const text = "module example.com/demo\r\n\r\ngo 1.22\r\n\r\nrequire golang.org/x/net v0.17.0\r\n";
     const file = s.file("go.mod", text);
     expect(s.write(file, text).decision).toBe("allow");
-    expect(s.edit(file, "go 1.22", "go 1.23").decision).toBe("allow");
+    // Round 35 (C4): raising the go line makes the go command fetch that toolchain release: held.
+    expect(s.edit(file, "go 1.22", "go 1.23").decision).toBe("deny");
+    expect(s.edit(file, "go 1.23", "go 1.21").decision).toBe("allow");
   });
 });
