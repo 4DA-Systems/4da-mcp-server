@@ -36,8 +36,9 @@
  * that manager accepts) [test: a1125-w2-hook-contract, a1125-w2-hook-account]. P1: an Edit,
  * MultiEdit, Write or NotebookEdit call is examined when its path names a manifest, that is a name
  * on the MANIFESTS list or one that MANIFEST_NAME_RULES matches, compared without regard to letter
- * case, or a name on the UNREAD_MANIFESTS list (manifestKind, manifestBaseName) [test:
- * a1125-w2-hook-contract, a1125-w2-hook-round17]. P1: a Bash or PowerShell call is also examined
+ * case, or a name on the UNREAD_MANIFESTS list, or a package manager's configuration file on the
+ * CONFIG_FILES list (manifestKind, manifestBaseName, configFileOf) [test: a1125-w2-hook-contract,
+ * a1125-w2-hook-round17, a1125-w2-hook-round25b]. P1: a Bash or PowerShell call is also examined
  * when its text holds a word that builds a command (BUILDS_COMMAND), for example an alias or a
  * function definition or a program that takes operands from its input, beside a word the detector
  * reads as a manager's name, and such a call is denied as not read (accountCall) [test:
@@ -126,7 +127,11 @@
  * [test: a1125-w2-hook-round25]. P3: a write of a manager's own configuration by one of its
  * CONFIG_WRITE_VERBS is denied as not read unless each key it writes is on INERT_CONFIG_KEYS, and a
  * release named on one of the FETCH_VERBS is judged as an install is (configWriteOf) [test:
- * a1125-w2-hook-round25]. P3: where no proceed, review, avoid or wait answer counts for a
+ * a1125-w2-hook-round25]. P3: an edit of a file on the CONFIG_FILES list is read from the file it
+ * makes and compared key by key with the file on disk, and it is denied as not read when it adds,
+ * changes or removes a key that is not on that file's CONFIG_INERT_KEYS, when the hook cannot read
+ * either text, or, for a file that is code, when it changes the file at all (configFileChange)
+ * [test: a1125-w2-hook-round25b]. P3: where no proceed, review, avoid or wait answer counts for a
  * reading, a private record lets the release through when it is the name's newest withheld line,
  * newer than the name's last answer for that reading, and it applies: a record of a name on the
  * user's own list applies in every folder; a record of a rule that names the package or its scope
@@ -190,7 +195,14 @@
  * project, the runtime's own constraints, and a release published after the verdict was recorded
  * or after the server last read the registry's version list, which it keeps for up to an hour
  * [test: a1125-w2-hook-round10, a1125-w2-hook-round19]. L1: vulnerability_scan reads the releases
- * actually installed, and the advice line (P6) says to run it [test: a1125-w2-hook-round16]. L2:
+ * actually installed, and the advice line (P6) says to run it [test: a1125-w2-hook-round16]. L1: a
+ * command that installs from the manifests and lockfiles as they are (for example a build, a sync, a
+ * fetch or a clean install) installs what they say, so a manifest or lockfile changed outside an
+ * examined edit, for example by a version-control checkout or a shell command the hook does not
+ * read, is installed unjudged; a lockfile edited directly, a configuration file of a name not on
+ * the CONFIG_FILES list (a global one at another path, an environment variable), and a file a
+ * shell command writes without a detector hit are not examined [test: a1125-w2-hook-round25b,
+ * a1125-w2-hook-round10]. L2:
  * the hook examines what P1 detects and nothing else, so an install started another way goes ahead
  * unchecked, for example by a script or a make target, through a tool or a manager that is not on
  * the MANAGERS list, by a file a shell command changes, or inside a container, and an artifact
@@ -247,6 +259,16 @@
  * always exits 0.
  *
  * WHAT GOES AHEAD
+ *
+ * (Round 25b.) An edit of a package manager's configuration file (CONFIG_FILES: .npmrc, read by npm,
+ * pnpm, Yarn 1 and Bun; .yarnrc for Yarn 1; .yarnrc.yml for Yarn 2+; bunfig.toml for Bun; .cargo/config.toml
+ * and .cargo/config for Cargo; pip.conf and pip.ini for pip; uv.toml for uv; poetry.toml for Poetry;
+ * .pnpmfile.cjs and .pnpmfile.mjs, code pnpm runs) is read key by key; keys whose change changes no
+ * release are the per-file CONFIG_INERT_KEYS (for .npmrc INERT_CONFIG_KEYS and the credentials
+ * _authToken, _auth, _password, username, email, always-auth, certfile, keyfile; a registry, scope,
+ * proxy, strict-ssl, ca or cafile key is never inert). pip-compile goes ahead: it installs nothing (it
+ * writes a requirements file, judged when an edit or an install names it); pip-sync installs what its
+ * files say and reads them at the call; bun pm cache names no release and goes ahead.
  *
  * (Round 25.) What changes where or which release resolves is read, not skipped. The inert lists, in
  * words: requirements option lines that change nothing are a --hash continuation and -e of the
@@ -2504,6 +2526,8 @@ function resolverSettings(file, text) {
 }
 
 function wholeFileChanges(file, before, after) {
+  // Round 25b: a TOML file with a carriage return alone as a line end: the hook's line reading and the manager's may differ.
+  if ((file === "Cargo.toml" || file === "pyproject.toml") && /\r(?!\n)/.test(after) && after !== before) refuse(`a ${file} with a carriage return alone as a line end, which this hook does not read`);
   // Round 25 (S3): a new or changed resolver setting that is no dependency value is held.
   {
     const was = resolverSettings(file, before);
@@ -3015,6 +3039,153 @@ const MANIFEST_NAME_RULES = Object.freeze([
 ]);
 /** THE CONTRACT, P1: manifests a package manager reads that this hook does not: an edit of one is denied as not read. */
 const UNREAD_MANIFESTS = Object.freeze(["package.yaml", "package.json5"]);
+
+/**
+ * Round 25b: the package managers' own configuration files, by name, with the format the hook reads
+ * them in and the managers that read each: an edit of one is examined like a manifest edit, and a
+ * key added, changed or removed that is not on its CONFIG_INERT_KEYS is held (S6's rule for files).
+ * `.pnpmfile` is code that rewrites dependencies: any change is held.
+ */
+const CONFIG_FILES = Object.freeze([
+  Object.freeze({ name: ".npmrc", format: "ini", managers: "npm, pnpm, Yarn 1, Bun" }),
+  Object.freeze({ name: ".yarnrc", format: "yarnrc", managers: "Yarn 1" }),
+  Object.freeze({ name: ".yarnrc.yml", format: "yaml", managers: "Yarn 2+" }),
+  Object.freeze({ name: "bunfig.toml", format: "toml", managers: "Bun" }),
+  Object.freeze({ name: "config.toml", folder: ".cargo", format: "toml", managers: "Cargo" }),
+  Object.freeze({ name: "config", folder: ".cargo", format: "toml", managers: "Cargo" }),
+  Object.freeze({ name: "pip.conf", format: "ini", managers: "pip" }),
+  Object.freeze({ name: "pip.ini", format: "ini", managers: "pip" }),
+  Object.freeze({ name: "uv.toml", format: "toml", managers: "uv" }),
+  Object.freeze({ name: "poetry.toml", format: "toml", managers: "Poetry" }),
+  Object.freeze({ name: ".pnpmfile.cjs", format: "code", managers: "pnpm" }),
+  Object.freeze({ name: ".pnpmfile.mjs", format: "code", managers: "pnpm" }),
+]);
+/**
+ * Round 25b: per config file, the keys (lower case; a trailing * is a prefix) whose change cannot
+ * change which release resolves: INERT_CONFIG_KEYS, and the credentials (an auth token, a password,
+ * always-auth), which choose no registry. A registry, scope, index, source, proxy, strict-ssl or CA
+ * setting, and any other key, is not on it.
+ */
+const CREDENTIAL_KEYS = ["_authtoken", "_auth", "_password", "username", "email", "always-auth", "certfile", "keyfile"];
+const CONFIG_INERT_KEYS = Object.freeze({
+  // .npmrc: INERT_CONFIG_KEYS and the credentials (configInert adds INERT_CONFIG_KEYS).
+  ".npmrc": Object.freeze([...CREDENTIAL_KEYS]),
+  ".yarnrc": Object.freeze(["yarn-offline-mirror-pruning", "email", "username", "lastupdatecheck", "disable-self-update-check", "save-exact", "save-prefix", "init-author-name", "init-license"]),
+  ".yarnrc.yml": Object.freeze(["enabletelemetry", "nodelinker", "enableglobalcache", "cachefolder", "compressionlevel", "enablecolors", "enableprogressbars", "enableinlinebuilds", "npmauthtoken", "npmalwaysauth", "npmauthident", "defaultsemverrangeprefix"]),
+  "bunfig.toml": Object.freeze(["install.exact", "install.cache.*", "install.globaldir", "install.globalbindir", "telemetry", "loglevel", "run.*", "test.*", "smol"]),
+  "config.toml": Object.freeze(["build.*", "term.*", "profile.*", "target.*", "registry.token", "registries.*.token", "http.timeout", "http.multiplexing", "cargo-new.*"]),
+  config: Object.freeze(["build.*", "term.*", "profile.*", "target.*", "registry.token", "registries.*.token", "http.timeout", "http.multiplexing", "cargo-new.*"]),
+  "pip.conf": Object.freeze(["global.cache-dir", "global.no-color", "global.progress-bar", "global.disable-pip-version-check", "global.timeout", "global.retries", "user.cache-dir"]),
+  "pip.ini": Object.freeze(["global.cache-dir", "global.no-color", "global.progress-bar", "global.disable-pip-version-check", "global.timeout", "global.retries", "user.cache-dir"]),
+  "uv.toml": Object.freeze(["cache-dir", "cache-keys", "native-tls", "link-mode", "compile-bytecode", "concurrent-downloads", "concurrent-builds", "concurrent-installs", "python-preference", "python-downloads", "managed"]),
+  "poetry.toml": Object.freeze(["virtualenvs.*", "cache-dir", "installer.parallel", "installer.max-workers", "http-basic.*", "pypi-token.*"]),
+});
+/** Round 25b: whether a key of a config file changes no release resolved. */
+function configInert(config, key) {
+  const k = String(key).toLowerCase();
+  // An npm credential is written per registry: `//host/path/:_authToken`.
+  const bare = config.name === ".npmrc" ? k.replace(/^\/\/[^:]*:/, "") : k;
+  const list = [...(CONFIG_INERT_KEYS[config.name] ?? []), ...(config.name === ".npmrc" ? INERT_CONFIG_KEYS : [])];
+  return list.some((x) => {
+    if (x.endsWith("*")) {
+      const re = new RegExp(`^${x.slice(0, -1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, "[^.]+")}`);
+      return re.test(bare);
+    }
+    if (x.includes("*")) return new RegExp(`^${x.split("*").map((y) => y.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^.]+")}$`).test(bare);
+    return bare === x;
+  });
+}
+/** Round 25b: a config file's keys as { key: value text }, or null when it cannot be read (a TOML error, a lone CR). */
+function configKeys(config, text) {
+  const out = new Map();
+  if (/\r(?!\n)/.test(text)) return null;
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (config.format === "ini") {
+    let section = "";
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+      const head = /^\[([^\]]+)\]$/.exec(line);
+      if (head) {
+        section = head[1].trim().toLowerCase();
+        continue;
+      }
+      const eq = line.indexOf("=");
+      if (eq <= 0) return null;
+      const key = line.slice(0, eq).trim().toLowerCase();
+      const full = config.name === ".npmrc" ? key : `${section || "global"}.${key}`;
+      out.set(full, line.slice(eq + 1).trim());
+    }
+    return out;
+  }
+  if (config.format === "yarnrc") {
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const m = /^("[^"]+"|\S+)\s+(.*)$/.exec(line);
+      if (!m) return null;
+      out.set(m[1].replace(/"/g, "").toLowerCase(), m[2].trim());
+    }
+    return out;
+  }
+  if (config.format === "yaml") {
+    let current = null;
+    for (const raw of lines) {
+      if (!raw.trim() || raw.trim().startsWith("#")) continue;
+      if (/^\S/.test(raw)) {
+        const m = /^("?[^":#]+"?)\s*:(.*)$/.exec(raw);
+        if (!m) return null;
+        current = m[1].replace(/"/g, "").trim().toLowerCase();
+        out.set(current, m[2].trim());
+      } else if (current === null) return null;
+      else out.set(current, `${out.get(current)}\n${raw.trimEnd()}`);
+    }
+    return out;
+  }
+  if (config.format === "toml") {
+    const entries = tomlAssignments(text, []);
+    if (!entries) return null;
+    for (const { table, keys, value } of entries) {
+      if (!keys) return null;
+      const path = [...(table ?? []), ...keys].join(".").toLowerCase();
+      out.set(path, value.s !== undefined ? JSON.stringify(value.s) : (value.raw ?? JSON.stringify(value)));
+    }
+    return out;
+  }
+  return null;
+}
+/** Round 25b: the pip-sync options that change no release it installs. */
+const PIP_SYNC_OPTIONS = new Set(["-n", "--dry-run", "-q", "--quiet", "-v", "--verbose", "-a", "--ask", "--force"]);
+/** Round 25b: the remedy for a held config file change. */
+const CONFIG_REMEDY =
+  "This changes how later installs resolve (a registry, a scope, an index, a source, a proxy or a TLS setting). A private registry or scope is the user's to set up: they make this edit themselves, or set FOURDA_PRIVATE_PACKAGES (their own package names) or FOURDA_PUBLIC_MIRRORS (a mirror of the public registry) in the 4da server's environment. Settings that change no resolution (INERT_CONFIG_KEYS, credentials) go ahead. FOURDA_GUARD is the user's setting, not yours to change.";
+/** Round 25b: an edit of a config file: held (refuse) when it adds, changes or removes a key that is not inert. */
+function configFileChange(config, before, after) {
+  const name = config.folder ? `${config.folder}/${config.name}` : config.name;
+  if (config.format === "code") {
+    if (before !== after) refuse(`a change of ${name}, code that ${config.managers} runs to rewrite dependencies`, CONFIG_REMEDY);
+    return;
+  }
+  const was = configKeys(config, before ?? "");
+  const now = configKeys(config, after);
+  if (was === null || now === null) {
+    if (before !== after) refuse(`${name}, a configuration file this hook could not read`, CONFIG_REMEDY);
+    return;
+  }
+  for (const key of new Set([...was.keys(), ...now.keys()])) {
+    if (was.get(key) === now.get(key) || configInert(config, key)) continue;
+    refuse(`the key ${callData(key)} ${now.has(key) ? (was.has(key) ? "changed" : "added") : "removed"} in ${name}, which ${config.managers} read`, CONFIG_REMEDY);
+    return;
+  }
+}
+
+/** The config file a path names (a .cargo config only in a .cargo folder), or null. */
+function configFileOf(filePath) {
+  const parts = pathParts(String(filePath).replace(/^[A-Za-z]:(?![\\/])/, ""));
+  const name = manifestBaseName(filePath).toLowerCase();
+  const folder = (parts[parts.length - 2] ?? "").toLowerCase();
+  return CONFIG_FILES.find((c) => c.name === name && (!c.folder || c.folder === folder)) ?? null;
+}
 
 function manifestKind(filePath) {
   // The name compared case-insensitively on every platform (Round 11: on a case-sensitive file
@@ -4456,6 +4627,8 @@ function commandInstalls(words, depth = 0, dialect = "bash") {
     return [...upgrades, ...all.slice(1).flatMap(pyOperand), ...fromFiles];
   }
   if (program === "pip-compile") return upgradePackages(args);
+  // Round 25b: `pip-sync <files>` installs exactly what its requirements files say: each read at the call (S2).
+  if (program === "pip-sync") return args.filter((a) => !String(a).startsWith("-")).flatMap((f) => requirementFileInstalls(f, callCwd).installs);
   // `uvx pip-compile ...`: uv runs the pip-tools command named first.
   if (program === "uvx" && args[0] === "pip-compile") return upgradePackages(args.slice(1));
   if (program === "uvx") return toolRunInstalls(args, depth, dialect);
@@ -4640,6 +4813,8 @@ function detectIn(text, seen) {
       seen.length = 0;
       continue;
     }
+    // Round 25b: pip-sync installs what its files say: it is its own verb.
+    if (token === "pip-sync") return true;
     for (const s of seen) if (isManagerVerb(s, token)) return true;
     const manager = managerWord(token);
     if (manager && !seen.includes(manager) && seen.length < 16) seen.push(manager);
@@ -5253,7 +5428,7 @@ for (const [k, v] of Object.entries(DATA_SPECS)) if (!(k in SINK_SPECS) && /grep
 /** A file the hook reads as a manifest or lockfile: a shell write to it is not text. */
 const LOCKFILES = new Set(["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock", "cargo.lock", "poetry.lock", "uv.lock", "pdm.lock", "go.sum", "pipfile.lock"]);
 // Round 23 (W6): a manifest the hook does not read (UNREAD_MANIFESTS: package.yaml, package.json5) is a manifest sink too.
-const manifestFile = (target) => manifestKind(String(target)) !== null || LOCKFILES.has(basename(String(target)).toLowerCase()) || UNREAD_MANIFESTS.includes(manifestBaseName(String(target)).toLowerCase());
+const manifestFile = (target) => manifestKind(String(target)) !== null || configFileOf(String(target)) !== null || LOCKFILES.has(basename(String(target)).toLowerCase()) || UNREAD_MANIFESTS.includes(manifestBaseName(String(target)).toLowerCase());
 
 /** Whether `args` hold only options `spec` lists (and, with `fileOperands`, no operand naming a manifest or lockfile). */
 function optionsAllowed(args, spec) {
@@ -5509,6 +5684,18 @@ function accountCommand(words, dialect, depth, exempt = true) {
   if (/^(?:python|py|pythonw)(?:\d+(?:\.\d+)*)?w?$/.test(program)) return accountPython(program, args, reader);
   if (PACKAGE_MANAGERS.has(program)) return accountJs(program, args, dialect, depth, reader);
   if (program === "pip") return accountPip(args, ACCOUNT_TABLES.pip, reader);
+  if (program === "pip-sync") {
+    // Round 25b: its options on a short list (output and a dry run); its files read at the call.
+    for (const a of args) {
+      if (String(a).startsWith("-")) {
+        if (!PIP_SYNC_OPTIONS.has(String(a))) return notReadAt(`the option ${a}`, a);
+        continue;
+      }
+      const got = requirementFileInstalls(String(a), callCwd);
+      if (got.bad) return notReadAt(got.bad, String(a));
+    }
+    return judgedByReader([], reader, "PyPI");
+  }
   if (program === "uv") return accountUv(args, dialect, depth, reader);
   if (program === "poetry") return accountPoetry(args, dialect, depth, reader);
   if (program === "cargo") return accountCargo(args, reader);
@@ -6151,7 +6338,7 @@ const NAMED_OPTIONS = {
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
 // THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
-export { INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, MANAGER_THEN_EXPANSION, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
+export { INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, MANAGER_THEN_EXPANSION, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {
@@ -7560,8 +7747,27 @@ function introducedBy(input) {
     unreadInstalls = true;
     return { what: "edit", changes: [] };
   }
+  // Round 25b: a NotebookEdit of a config file is held, as of a manifest.
+  if (toolName === "NotebookEdit" && typeof toolInput.notebook_path === "string" && configFileOf(toolInput.notebook_path)) {
+    refuse(`a NotebookEdit of ${callData(manifestBaseName(toolInput.notebook_path))}, a package manager's configuration file`, CONFIG_REMEDY);
+    return { what: "edit", changes: [] };
+  }
   if (toolName !== "Edit" && toolName !== "MultiEdit" && toolName !== "Write") return null;
   if (typeof toolInput.file_path !== "string") return null;
+  // Round 25b: an edit of a package manager's configuration file, read as a manifest edit is.
+  const config = configFileOf(toolInput.file_path);
+  if (config) {
+    const disk = readManifest(toolInput.file_path);
+    let after = null;
+    if (toolName === "Write") after = typeof toolInput.content === "string" ? toolInput.content : null;
+    else if (disk !== null) {
+      after = disk;
+      for (const e of editsOf(toolName, toolInput) ?? []) after = after === null ? null : (applyEdit(after, e.old_string, e.new_string, e.replace_all) ?? applyEdit(foldQuotes(after), foldQuotes(e.old_string), foldQuotes(e.new_string), e.replace_all));
+    }
+    if (after === null) refuse(`${callData(manifestBaseName(toolInput.file_path))}, a configuration file the hook could not read at that path with this edit applied`, CONFIG_REMEDY);
+    else configFileChange(config, toolName === "Write" ? (disk ?? "") : disk, after);
+    return { what: "edit", changes: [] };
+  }
   // Round 16 (J7): pnpm reads package.yaml and package.json5 as a project's manifest; this hook does not.
   const last = manifestBaseName(toolInput.file_path).toLowerCase();
   if (UNREAD_MANIFESTS.includes(last)) {
@@ -7685,7 +7891,7 @@ let mainStartedAt = null;
 function mayInstall(input) {
   if (input.tool_name !== "Bash" && input.tool_name !== "PowerShell") {
     const file = input.tool_input?.file_path;
-    return typeof file === "string" && manifestKind(file) !== null;
+    return typeof file === "string" && (manifestKind(file) !== null || configFileOf(file) !== null);
   }
   const command = String(input.tool_input?.command ?? "");
   return detectsInstall(command) || namesInstall(command, input.tool_name === "PowerShell" ? "powershell" : "bash");
@@ -8130,7 +8336,7 @@ function rawHold(raw, parsed, env = process.env) {
       const path = ti && typeof ti === "object" ? (typeof ti.file_path === "string" ? ti.file_path : typeof ti.notebook_path === "string" ? ti.notebook_path : null) : null;
       if (path === null) return rawDeny(RAW_HOLD_EDIT);
       try {
-        if (manifestKind(path) !== null || namesLedgerText(path, ledgerFolderMarks(env))) return rawDeny(RAW_HOLD_EDIT);
+        if (manifestKind(path) !== null || configFileOf(path) !== null || namesLedgerText(path, ledgerFolderMarks(env))) return rawDeny(RAW_HOLD_EDIT);
       } catch {
         return rawDeny(RAW_HOLD_EDIT);
       }
