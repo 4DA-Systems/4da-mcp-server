@@ -92,3 +92,13 @@ export const CONFIG_FILES: ReadonlyArray<{ readonly name: string; readonly folde
 export const CONFIG_INERT_KEYS: Readonly<Record<string, readonly string[]>>;
 /** Round 26 (R2): the forms in which a runner fetches a package it names, with the ecosystem. */
 export const RUNNER_FETCH_FORMS: ReadonlyArray<readonly [string, string]>;
+/** Round 27 (E1): each runner's options before the package it fetches, with their arity. */
+export const RUNNER_OPTIONS: Readonly<Record<string, { readonly flags: readonly string[]; readonly values: readonly string[]; readonly fetch: readonly string[]; readonly source: readonly string[]; readonly held: readonly string[] }>>;
+/** Round 27 (E4): each manager's global options before its sub-command, with their arity (npm reads NPM_OPTIONS). */
+export const MANAGER_GLOBAL_OPTIONS: Readonly<Record<string, { readonly flags: readonly string[]; readonly values: readonly string[] }>>;
+/** Round 27 (E5): the options that name a configuration source on a manager's command. */
+export const CONFIG_SOURCE_OPTIONS: Readonly<Record<string, readonly string[]>>;
+/** Round 27 (F7): the keys each tool reads in one of its index tables. */
+export const INDEX_TABLE_KEYS: Readonly<Record<string, readonly string[]>>;
+/** Round 27 (E4): npm option names (abbreviations read against them). */
+export const NPM_OPTIONS: readonly string[];
