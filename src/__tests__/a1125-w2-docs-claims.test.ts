@@ -18,7 +18,7 @@ import { WORD_SCAN_CAP } from "../call-budget.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands, MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
-import { BEST_EFFORT_READING, DISMISSED_KNOWN, NOT_SCANNED_LOCKFILES, INSTALLED_MALWARE, INSTALLED_PLACEHOLDER, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { BEST_EFFORT_READING, BRIEFING_FAILED, PRIVATE_INSTALLED, SCAN_INCOMPLETE, DISMISSED_KNOWN, NOT_SCANNED_LOCKFILES, INSTALLED_MALWARE, INSTALLED_PLACEHOLDER, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -166,7 +166,7 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
 
   it("round 16: the fixed texts the CHANGELOG quotes are the code's", () => {
     expect(INSTALLED_MALWARE(["crossenv@1.0.1"])).toBe("This project has crossenv@1.0.1 installed, which is recorded as malware: a person must deal with that before any task is delegated.");
-    expect(next).toContain(`("${INSTALLED_MALWARE(["crossenv@1.0.1"])}")`);
+    expect(next).toContain(`("${INSTALLED_MALWARE(["crossenv@1.0.1 (in packages/web)"])}";`);
     expect(PROJECT_FINDINGS_LISTED(1)).toContain('1 project-wide finding is listed below (advisories, scope "project")');
     expect(next).toContain(`opens "${PROJECT_FINDINGS_LISTED(1)}"`);
     expect(NO_DECISION_CONFLICT).toBe("no recorded-decision conflict for this task");
@@ -176,7 +176,12 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(next).not.toContain("an operand of a runner command, an entry of a snippet");
     // Round 18: the narrowed sentences.
     expect(next).toContain(`"${DISMISSED_KNOWN("lodash")}"`);
-    expect(next).toContain(`("${NOT_SCANNED_LOCKFILES(1)}")`);
+    expect(next).toContain(`("${NOT_SCANNED_LOCKFILES(1)}";`);
+    expect(next).toContain(`"${NOT_SCANNED_LOCKFILES({ ignored: 0, depth: 1, projectLimit: 0, outside: 0, unreadable: 0 })}"`);
+    expect(next).toContain(`"${SCAN_INCOMPLETE}"`);
+    expect(next).toContain(`("${PRIVATE_INSTALLED(1)}")`);
+    expect(next).toContain(`"${BRIEFING_FAILED}"`);
+    expect(next).toContain("it does not promise to see every copy on disk");
     expect(next).toContain(`the answer says so: "${SCAN_STILL_READS}"`);
     for (const doc of [readme, next]) {
       expect(doc).not.toContain("percent-escapes decoded");
@@ -188,7 +193,7 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(text("src/tools/what-should-i-know.ts")).toContain("the installed copy is the vulnerable one, so make sure the task replaces it");
     expect(next).toContain("the installed copy is the vulnerable one, so make sure the task replaces it");
     // Rounds 16b / 16c: the placeholder text, and no sentence left saying a glued token is not matched.
-    expect(next).toContain(`("${INSTALLED_PLACEHOLDER(["lodahs@0.0.1-security"])}")`);
+    expect(next).toContain(`"${INSTALLED_PLACEHOLDER(["lodahs@0.0.1-security"])}"`);
     for (const doc of [readme, next]) expect(doc).not.toMatch(/glued to the letters before it[^.]*is not matched/);
   });
 
