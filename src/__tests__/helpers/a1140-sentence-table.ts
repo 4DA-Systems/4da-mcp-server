@@ -15,6 +15,8 @@
  * - "not-human": not said with human_only. "no-malware-copy": not said of a copy INSTALLED_MALWARE names.
  * - "human-real-vuln": human_only, with a high or critical task vulnerability without a fix that is no malicious-package record.
  * - "not-scanned": said where lockfiles_not_scanned is above 0.
+ * - "withheld-said": said whenever a word of the task was withheld (task_packages.not_read); with safe_to_delegate only
+ *   when no withheld word stands where a package stands (one that does holds the level: its own sentence is not-safe).
  * - "any": a description of the caller's input, the briefing's reading or a next step (a refusal's cause, a basis, a
  *   field's note): true of what it describes at any level, not a statement about the level.
  * - "internal": not part of an answer (SQL, a pattern source, a tool description in tools/list, a rule's own wording).
@@ -24,7 +26,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 
-export type SentenceRule = "safe" | "not-safe" | "human" | "confirmation" | "safe-nothing-confirmed" | "safe-project-listed" | "no-decision-conflict" | "not-about-task" | "drift-not-malware" | "not-human" | "no-malware-copy" | "human-real-vuln" | "not-scanned" | "any" | "internal";
+export type SentenceRule = "safe" | "not-safe" | "human" | "confirmation" | "safe-nothing-confirmed" | "safe-project-listed" | "no-decision-conflict" | "not-about-task" | "drift-not-malware" | "not-human" | "no-malware-copy" | "human-real-vuln" | "not-scanned" | "withheld-said" | "any" | "internal";
 
 export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["it is a package manager this briefing does not read", "any"],
@@ -54,6 +56,7 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["This project has ${} installed, npm's placeholder for a name taken down as malware: a person must remove that dependency before any task is delegated.", "human"],
   ["This project has ${} and ${} installed, npm's placeholders for names taken down as malware: a person must remove those dependencies before any task is delegated.", "human"],
   ["Vulnerability scan ready; nothing version-confirmed for the packages this task touches; ${} project-wide finding${} listed below (advisories, scope \"project\"), no major-version jump and no recorded-decision conflict for this task.", "safe-project-listed"],
+  ["what_should_i_know failed before it finished, so nothing about this task was checked: this is no assessment, and the task is not safe to delegate on it.", "any"],
   ["${} lockfile${} under ignored, excluded or test-fixture folders ${} not read, so what ${} was not checked (lockfiles_not_scanned).", "not-scanned"],
   ["no recorded-decision conflict for this task", "no-decision-conflict"],
   ["This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.", "safe"],
@@ -229,7 +232,7 @@ export const SENTENCES: ReadonlyArray<readonly [string, SentenceRule]> = [
   ["The task holds more than ${} names that may be packages, more than one call can declare: split the task into smaller ones.", "not-safe"],
   ["State `version` for each package you declared public: the version or range you will write, or \"latest\" for the newest release (checked so far: ${}${}).", "not-safe"],
   ["Call what_should_i_know again with the same arguments: ${} of the packages you declared (${}) were not checked within this call's time, and are checked first and cached by now.", "any"],
-  ["NOT CHECKED: ${} word${} in the task ${} not looked up (${}): nothing about ${} was sent.", "not-safe"],
+  ["NOT CHECKED: ${} word${} in the task ${} not looked up (${}): nothing about ${} was sent.", "withheld-said"],
   ["the directory walk stopped at its directory bound, so the directories it had not reached were not read and their lockfiles were not counted", "any"],
   ["NOT CHECKED: ${}. A dependency in that part was checked nowhere, so this is not a complete result: pass project_path for the part of the project you need${}.", "any"],
   ["NOT CHECKED: whether the directory walk read the whole project is not known, so this is not a complete result.", "any"],

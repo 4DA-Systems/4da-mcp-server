@@ -122,6 +122,8 @@ export const INSTALLED_PLACEHOLDER = (installed: string[]) =>
 /** Round 16, C1(b): the safe reason's opening when project-wide findings are listed (none of them on a package the task touches). */
 export const PROJECT_FINDINGS_LISTED = (n: number) =>
   `Vulnerability scan ready; nothing version-confirmed for the packages this task touches; ${n} project-wide finding${n === 1 ? " is" : "s are"} listed below (advisories, scope "project"), no major-version jump and no recorded-decision conflict for this task.`;
+/** Round 18b: the error text of a briefing that failed before it finished (index.ts): no level is given. */
+export const BRIEFING_FAILED = "what_should_i_know failed before it finished, so nothing about this task was checked: this is no assessment, and the task is not safe to delegate on it.";
 /** Round 18, N7: a "ready" scan that did not read every lockfile the walk found says how many it did not read. */
 export const NOT_SCANNED_LOCKFILES = (n: number) => `${n} lockfile${n === 1 ? "" : "s"} under ignored, excluded or test-fixture folders ${n === 1 ? "was" : "were"} not read, so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`;
 /** Round 16, C3: said only when decisionConflictsFor found no conflict over the declared, the read and the installed names. */

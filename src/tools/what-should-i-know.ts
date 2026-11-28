@@ -1383,7 +1383,7 @@ async function executeBriefing(
       scan: scanBlock,
       ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
       ...(lockfilesNotScanned > 0 ? { lockfiles_not_scanned: lockfilesNotScanned } : {}),
-      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${waiting.length > 0 ? `${confirmationSummary(waiting.length)} ` : ""}${taskWithheld.some((w) => w.standing) ? `${withheldWordsText(taskWithheld.filter((w) => w.standing))} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
+      summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${waiting.length > 0 ? `${confirmationSummary(waiting.length)} ` : ""}${taskWithheld.length > 0 ? `${withheldWordsText(taskWithheld)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
       ...(wisdomNote ? { wisdom_recall_note: wisdomNote } : {}),
       ...(db ? {} : { stored_data_note: STORED_DATA_ABSENT_NOTE }),
@@ -1762,7 +1762,7 @@ export function walkNotReadNote(discovery: Pick<TreeDiscovery, "walkTruncated" |
 function notScannedLockfiles(discovery: ReturnType<NonNullable<BriefingLiveIntel["getDiscovery"]>> | null): number {
   if (!discovery) return 0;
   const reasons = new Set(["gitignored_directory", "output_directory", "excluded_directory", "symlink_outside_root"]);
-  return discovery.skipped.filter((x) => reasons.has(x.reason)).length + (discovery.fixtures?.count ?? 0);
+  return (discovery.skipped ?? []).filter((x) => reasons.has(x.reason)).length + (discovery.fixtures?.count ?? 0);
 }
 
 function lockfilesNotRead(liveIntel: BriefingLiveIntel | null): { notes: string[]; files: NonNullable<WhatShouldIKnowResult["lockfiles_not_read"]>; walkCut: boolean } {

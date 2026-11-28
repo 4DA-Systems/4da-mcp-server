@@ -75,11 +75,21 @@ describe("N4: no sentence where it is false", () => {
   it.each([
     ["a 1,999-character word", `Refactor the config loader ${"q".repeat(1999)} module.`],
     ["a word with a shell expansion", "Refactor the $(cat list) loader."],
-  ])("%s: a safe answer's summary does not say NOT CHECKED words", async (_l, task) => {
+  ])("%s: the caller is told the word was withheld (field and sentence) at any level, and its table rule holds", async (_l, task) => {
     h.npmProject({ zod: "3.24.1" }, {}, { zod: { version: "3.24.1" } });
     const r = await brief({ task, packages: [] });
-    if (r.delegation_assessment.level === "safe_to_delegate") expect(r.summary).not.toMatch(/NOT CHECKED: \d+ words? in the task/);
+    // The summary names each withheld word whenever one is withheld (here or not, as the reading went).
+    expect(/NOT CHECKED: \d+ words? in the task/.test(String(r.summary))).toBe(r.task_packages.not_read.length > 0);
     expect(brokenTextRules(r, { task, packages: [] })).toEqual([]);
+  });
+  it("a scan result without the walk's skipped list: no crash, lockfiles_not_scanned absent", async () => {
+    h.npmProject({ zod: "3.24.1" }, {}, { zod: { version: "3.24.1" } });
+    const live = await h.live();
+    const discovery = live.getDiscovery?.();
+    const patched = Object.assign(Object.create(live), { getDiscovery: () => (discovery ? { ...discovery, skipped: undefined } : { skipped: undefined }) });
+    const r = (await executeWhatShouldIKnow(null, { task: "Fix the typo in the README.", packages: [], project_path: h.dir } as never, patched)) as Record<string, any>;
+    expect(r.delegation_assessment.level).toBeDefined();
+    expect(r.lockfiles_not_scanned).toBeUndefined();
   });
   it("a dismissed name on the bundled malicious list: human_only without the nothing-confirmed sentence", async () => {
     h.npmProject({ zod: "3.24.1" }, {}, { zod: { version: "3.24.1" } });

@@ -104,6 +104,7 @@ function sentenceRules(): TextRule[] {
     (r) => level(r) === "human_only" && ((r?.task_dependencies ?? []) as Answer[]).some((d) => (d.vulnerabilities ?? []).some((v: Answer) => /critical|high/.test(String(v.severity)) && !v.fixed_version && !/^MAL-/i.test(String(v.id)))),
     "human_only, with a high or critical task vulnerability without a fix that is no malicious-package record",
   ];
+  HOLDS["withheld-said"] = [(r) => ((r?.task_packages?.not_read ?? []) as Answer[]).length > 0, "a word of the task was withheld (task_packages.not_read); its own standing sentence holds the level"];
   HOLDS["not-scanned"] = [(r) => Number(r?.lockfiles_not_scanned ?? 0) > 0, "lockfiles_not_scanned above 0"];
   const extra: TextRule[] = [
     { constant: "Delegate, then review", found: (r) => /Delegate, then review: /.test(reason(r)), holds: (r) => level(r) !== "human_only" && level(r) !== "safe_to_delegate", when: "not with human_only or safe_to_delegate" },

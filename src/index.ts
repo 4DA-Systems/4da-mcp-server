@@ -38,6 +38,7 @@ import "./node-gate.js";
 import { screenJsonRpc, screenText, screenToolResult, screenWireText } from "./output-screen.js";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { StdioGate } from "./stdio-gate.js";
+import { BRIEFING_FAILED } from "./tools/briefing-confirm.js";
 import type { Server } from "@modelcontextprotocol/server";
 import { FourDAServer, ownHandler } from "./mcp-server.js";
 import { parseCliArgs } from "./cli-args.js";
@@ -502,7 +503,8 @@ export function buildServer(): Server {
           {
             type: "text" as const,
             // One shape for every tool error: `{"error": "..."}`, compact, as the argument check writes it.
-            text: JSON.stringify({ error: errorMessage }),
+            // Round 18b: a briefing that failed is said to be no assessment, never read as a level.
+            text: JSON.stringify({ error: name === "what_should_i_know" ? `${BRIEFING_FAILED} ${errorMessage}` : errorMessage }),
           },
         ],
         isError: true,
