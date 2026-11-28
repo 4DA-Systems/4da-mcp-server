@@ -141,8 +141,9 @@ describe("L2, L3, L5: the other limits as written", () => {
   it("a private index serving public packages: not judged", () => {
     expect(run("npm i --registry https://npm.mirror.corp.example lodash@4.17.20").decision).toBe("allow");
   });
-  it("uv run --with pkg (fetch-and-run, decision pending): goes ahead", () => {
-    expect(run("uv run --with requests==2.5.0 python -c 1").decision).toBe("allow");
+  // Round 26 (R2): what a runner fetches with a version is judged.
+  it("uv run --with pkg: the fetched release is judged", () => {
+    expect(run("uv run --with requests==2.5.0 python -c 1").decision).toBe("deny");
   });
   it("L4: cd to the data folder's parent in the same call, then a write by a relative name: goes ahead (stated)", () => {
     expect(run("cd .. && echo x > notes.txt").decision).toBe("allow");

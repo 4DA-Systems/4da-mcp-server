@@ -73,7 +73,7 @@ describe("commands run through a shell or a runner are read", () => {
     "bash -s < script.sh",
     'bash -c "npm install lodash@$V"',
     "npx create-react-app my-app",
-    "npx -y @4da/mcp-server@6.5.0 --doctor",
+    // (round 26, R2: `npx -y @4da/mcp-server@6.5.0` fetches that release: judged, a1125-w2-hook-round26)
     "npx pnpm install",
     "pnpm up",
     "pnpm update lodash",

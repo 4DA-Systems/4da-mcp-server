@@ -156,7 +156,7 @@ describe("a tool installed from the registry is the same question as an add: hel
 });
 
 describe("pipenv, pdm, rye, pixi, hatch and conda installs are not read (a stated limit): they go ahead", () => {
-  it.each(["pipenv install requests", "pipenv install", "pdm add requests", "pdm install", "rye add requests", "rye sync", "pixi add requests", "pixi install", "hatch env create", "conda install requests", "pipx inject v requests"])("%s", (command) => {
+  it.each(["pipenv install requests", "pipenv install", "pdm add requests", "pdm install", "rye add requests", "rye sync", "pixi add requests", "pixi install", "hatch env create", "conda install requests"])("%s", (command) => {
     expect(run(command).decision).toBe("allow");
   });
 });

@@ -278,7 +278,7 @@ describe("P6: a PostToolUse answer carries no permission decision (each kind of 
 });
 
 describe("L2 and L4: what P1 does not detect goes ahead unchecked", () => {
-  it.each(["bash ./install.sh", "make deps", "pipx install black==24.1.0", "docker run node npm install lodash@4.17.20", "echo bnBtIGluc3RhbGwgbG9kYXNoQDQuMTcuMjA= | base64 -d | sh"])("%s: goes ahead", (command) => {
+  it.each(["bash ./install.sh", "make deps", "gem install rails -v 7.0.0", "docker run node npm install lodash@4.17.20", "echo bnBtIGluc3RhbGwgbG9kYXNoQDQuMTcuMjA= | base64 -d | sh"])("%s: goes ahead", (command) => {
     expect(run(command).decision).toBe("allow");
   });
 });

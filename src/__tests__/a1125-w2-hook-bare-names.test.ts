@@ -183,7 +183,7 @@ const ORDINARY = [
   "pip install -i https://pypi.internal.example/simple x", "pip list", "pip show requests", "pip uninstall -y requests", "uv sync", "uv lock",
   "uv pip sync requirements.txt", "uv run pytest", "poetry install", "poetry lock", "cargo build", "cargo add --path ../x", "cargo add x --git https://example.com/x",
   "cargo update", "go get ./...", "go mod tidy", "go mod download", "go build ./...", "go get -u ./...", "go get github.com/pkg/errors@none",
-  "npx cowsay hi", "pnpm dlx create-vite", "bunx tsc", "uvx ruff", "pipx install black", "echo npm install lodash", "git commit -m 'npm install lodash'",
+  "npx cowsay hi", "pnpm dlx create-vite", "bunx tsc", "uvx ruff", "echo npm install lodash", "git commit -m 'npm install lodash'",
 ];
 
 describe(`${ORDINARY.length} ordinary commands go ahead with an empty ledger`, () => {

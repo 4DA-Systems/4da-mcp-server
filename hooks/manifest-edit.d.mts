@@ -92,3 +92,5 @@ export const MANAGER_THEN_EXPANSION: RegExp;
 export const CONFIG_FILES: ReadonlyArray<{ readonly name: string; readonly folder?: string; readonly format: string; readonly managers: string }>;
 /** Round 25b: per configuration file, the keys whose change changes no release resolved. */
 export const CONFIG_INERT_KEYS: Readonly<Record<string, readonly string[]>>;
+/** Round 26 (R2): the forms in which a runner fetches a package it names, with the ecosystem. */
+export const RUNNER_FETCH_FORMS: ReadonlyArray<readonly [string, string]>;
