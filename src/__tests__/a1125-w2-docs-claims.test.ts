@@ -18,7 +18,7 @@ import { WORD_SCAN_CAP } from "../call-budget.js";
 import { NODE_SERVER_FLOOR } from "../http-transport-floor.js";
 import { canonicalCommands, MANAGER_NAMES } from "../tools/briefing-canonical.js";
 import { STAYS_REVIEW, RAW_SOURCE, SOURCE_SPELLINGS, unreadableReason } from "../tools/briefing-command-check.js";
-import { BEST_EFFORT_READING, INSTALLED_MALWARE, INSTALLED_PLACEHOLDER, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
+import { BEST_EFFORT_READING, DISMISSED_KNOWN, NOT_SCANNED_LOCKFILES, INSTALLED_MALWARE, INSTALLED_PLACEHOLDER, NO_DECISION_CONFLICT, OUTSIDE_COVERAGE, PROJECT_FINDINGS_LISTED, TASK_FOLDED, MAX_DECLARED, MAX_TO_CONFIRM, readDeclarations, RESTS_ON_DECLARATION, SCAN_STILL_READS, SOURCE_HELD } from "../tools/briefing-confirm.js";
 import { MAX_READ_PACKAGES } from "../tools/briefing-new-packages.js";
 import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
@@ -174,6 +174,14 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(next).toContain(`"${CREDENTIAL_REFUSAL("package name")}"`);
     expect(CREDENTIAL_REFUSAL("ecosystem")).toContain("not an ecosystem");
     expect(next).not.toContain("an operand of a runner command, an entry of a snippet");
+    // Round 18: the narrowed sentences.
+    expect(next).toContain(`"${DISMISSED_KNOWN("lodash")}"`);
+    expect(next).toContain(`("${NOT_SCANNED_LOCKFILES(1)}")`);
+    expect(next).toContain(`the answer says so: "${SCAN_STILL_READS}"`);
+    for (const doc of [readme, next]) {
+      expect(doc).not.toContain("percent-escapes decoded");
+      expect(doc).not.toContain("anywhere in the full scan");
+    }
     // Round 17: the id refusal and the installed-copy text the CHANGELOG quotes.
     expect(text("src/stdio-gate.ts")).toContain('"Invalid Request: the request id has a credential\'s shape, so it is not echoed and the request was not run; send it again with another id."');
     expect(next).toContain(`"Invalid Request: the request id has a credential's shape, so it is not echoed and the request was not run; send it again with another id."`);
