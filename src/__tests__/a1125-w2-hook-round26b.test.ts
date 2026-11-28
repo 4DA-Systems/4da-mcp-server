@@ -55,7 +55,9 @@ describe("D1: a source named by name is not resolved: the dependency is judged",
     expect(s.write(join(s.project, "Cargo.toml"), C('[dependencies]\nregex = { path = "../regex" }')).decision).toBe("allow");
     expect(s.write(join(s.project, "Cargo.toml"), C('[dependencies]\nregex = { path = "../regex", version = "=1.5.4" }')).text).toContain("answered avoid");
     const t ='[tool.uv.sources]\nrequests = { git = "https://github.com/psf/requests" }\n';
-    expect(s.write(s.file("pyproject.toml", P("").replace('"requests==2.19.0"', "") + t), P(t)).decision).toBe("allow");
+    // Round 31 (K1): own for uv, but the avoid on record for requests 2.19.0 still denies; with no verdict it goes ahead.
+    expect(s.write(s.file("pyproject.toml", P("").replace('"requests==2.19.0"', "") + t), P(t)).text).toContain("answered avoid");
+    expect(s.write(s.file("pyproject.toml", P("").replace('"requests==2.19.0"', "") + t), P(t).replace('"requests==2.19.0"', '"requests==2.31.0"')).decision).toBe("allow");
   });
 });
 

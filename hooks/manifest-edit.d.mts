@@ -106,3 +106,5 @@ export const NPM_OPTIONS: readonly string[];
 export const JS_MANAGERS: ReadonlySet<string>;
 /** Round 29 (H3): the pnpm-workspace.yaml settings that put no registry release in the lockfile. */
 export const PNPM_INERT_KEYS: ReadonlySet<string>;
+/** Round 31: the .npmrc credential keys, inert (they choose no registry). */
+export const CREDENTIAL_KEYS: readonly string[];

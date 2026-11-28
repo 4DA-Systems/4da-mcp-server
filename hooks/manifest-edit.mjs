@@ -116,9 +116,12 @@
  * one that also names a version that bounds something is judged for that version, and an
  * alternative with a condition exempts the name only when no alternative and no requirement gives
  * a registry version, so a project requirement is the project's own only when its source entry is
- * one table, with no marker, extra, group, python or platform condition, whose source is a literal
- * path, a git source, workspace = true, or a URL read by the URL rule (pyOtherSourceNames,
- * urlDependency) [test: a1125-w2-hook-round28, a1125-w2-hook-round27, a1125-w2-hook-round26b,
+ * one table (written as a table or an inline table), with no marker, extra, group, python or
+ * platform condition, whose source is a literal path, a git source, workspace = true, or a URL read
+ * by the URL rule (pyOtherSourceNames, urlDependency); such a requirement is still looked up in the
+ * ledger by its registry reading, and an avoid or wait answer that counts for that reading denies
+ * the call, while with a proceed or review answer, or none, it stays the project's own [test:
+ * a1125-w2-hook-round31, a1125-w2-hook-round28, a1125-w2-hook-round27, a1125-w2-hook-round26b,
  * a1123-hookfix-local-sources]. P3: in a manifest, a dependency value is judged when it is a
  * registry spec in its ecosystem's grammar or a form that wraps one (for example a Yarn alias or
  * patch of a registry release), is the project's own when it is one of the forms on the
@@ -243,7 +246,11 @@
  * a1125-w2-hook-round10]. L1: a command that lets the manager choose the versions without naming a
  * package (for example an audit fix, an update with no name, a tidy) installs what the manager
  * picks, and the advice line (P6) says to run vulnerability_scan after it [test:
- * a1125-w2-hook-round27, a1125-w2-hook-round26, a1125-w2-hook-round18]. L2:
+ * a1125-w2-hook-round27, a1125-w2-hook-round26, a1125-w2-hook-round18]. L1: a requirement that a
+ * tool-specific source table (one only its own tool reads) maps to a path, git or workspace source is the
+ * project's own for that tool; another installer (for example pip, or another PEP 517 front end) resolves the same
+ * requirement from the index, unjudged unless a verdict on record says avoid or wait [test:
+ * a1125-w2-hook-round31]. L2:
  * the hook examines what P1 detects and nothing else (apart from the holds P1 lists), so an install
  * started another way goes ahead
  * unchecked, for example by a script or a make target, through a tool or a manager that is not on
@@ -255,8 +262,8 @@
  * subshell or group, whose first word, after the assignments, keywords and prefixes the reader
  * steps over with their options and operands (commandStart), and after cmd /c or an interpreter's
  * options and its module option, is a manager or a runner, and one of whose words is a variable, array,
- * command-substitution or splat expansion, is denied as not read unless a literal verb that is no
- * install, fetch or configuration verb stands before that expansion, and an expansion before a
+ * command-substitution or splat expansion, is denied as not read unless a literal verb that is on
+ * none of VERBS, FETCH_VERBS and CONFIG_WRITE_VERBS stands before that expansion, and an expansion before a
  * manager's verb, the value of an option included, is denied as not read on any line the hook
  * reads; the words of a program that a manager's run command runs, and an expansion in any other
  * place, for example in a program the hook does not read, are outside this sentence
@@ -329,9 +336,9 @@
  * pnpm, Yarn 1 and Bun; .yarnrc for Yarn 1; .yarnrc.yml for Yarn 2+; bunfig.toml for Bun; .cargo/config.toml
  * and .cargo/config for Cargo; pip.conf and pip.ini for pip; uv.toml for uv; poetry.toml for Poetry;
  * .pnpmfile.cjs and .pnpmfile.mjs, code pnpm runs) is read key by key; keys whose change changes no
- * release are the per-file CONFIG_INERT_KEYS (for .npmrc INERT_CONFIG_KEYS and the credentials
- * _authToken, _auth, _password, username, email, always-auth, certfile, keyfile; a registry, scope,
- * proxy, strict-ssl, ca or cafile key is never inert). pip-compile goes ahead: it installs nothing (it
+ * release are the per-file CONFIG_INERT_KEYS (for .npmrc, INERT_CONFIG_KEYS and the credentials on
+ * CREDENTIAL_KEYS; round 31: the lists are the constants, not restated here; a registry, scope,
+ * proxy, strict-ssl, ca or cafile key is on none of them). pip-compile goes ahead: it installs nothing (it
  * writes a requirements file, judged when an edit or an install names it); pip-sync installs what its
  * files say and reads them at the call; bun pm cache names no release and goes ahead.
  *
@@ -372,11 +379,8 @@
  * auditConfig (every other top-level key is not a resolver's); a Cargo dependency entry may carry
  * version, path, git, branch, tag, rev, registry, registry-index, package, features,
  * default-features, optional, workspace, public, artifact, lib and target; the configuration keys a
- * write may set are the npm init defaults, fund, loglevel, progress, color, cache and prefix folders,
- * update-notifier, editor, the npm version-tag settings, save-exact and save-prefix, pip's cache-dir,
- * no-color, progress-bar and disable-pip-version-check, Poetry's virtualenvs.* and cache-dir, Yarn's
- * enableTelemetry and nodeLinker, and Go's GOBIN, GOCACHE, GOMODCACHE and GOPATH. A
- * registry, index, release-age, resolution, tag or proxy setting is on none of them. pip-sync and
+ * write may set are those on INERT_CONFIG_KEYS (round 31: the constant is the list, not restated
+ * here). A registry, index, release-age, resolution, tag or proxy setting is on none of them. pip-sync and
  * uv add -r: pip-sync reads its files at the call, as pip install -r does (round 25b); uv add -r
  * reads its files the same way (an unreadable file is held, as for pip).
  *
@@ -1446,7 +1450,9 @@ function pyprojectDependencies(entries, local = new Set()) {
   // Round 28 (G3): a requirement beside the project's own uv source stays the project's own whatever its
   // version: uv installs it from the source and no command resolves that version from the index
   // (unlike Cargo, whose package and publish resolve a version beside a path from the registry).
-  return out.filter((d) => !others.has(nameKey("PyPI", d.name))).concat(fromUrls);
+  // Round 31 (K1): a requirement a uv source maps to the project's own source is kept, marked: it is
+  // judged only against an avoid or wait verdict on record (pip and other front ends read the index).
+  return out.map((d) => (others.has(nameKey("PyPI", d.name)) ? { ...d, section: `${d.section ?? ""}${OWN_MAPPED}` } : d)).concat(fromUrls);
 }
 
 /**
@@ -1539,7 +1545,26 @@ function pyOtherSourceNames(entries) {
   // Each name's source, its fields gathered over every line that sets one (`[tool.uv.sources.x]`
   // with `path` and `marker` on lines of their own is one source).
   const sources = new Map();
-  for (const { table, keys, value } of entries) {
+  // Round 31 (K1): one rule for both spellings: an inline table above the source entries
+  // (`[tool.uv]` with `sources = { x = { path = ".." } }`, `[tool]` with `uv = { sources = .. }`) is
+  // read as the table form is, its keys put on the path.
+  const flat = [];
+  const SOURCES_PATH = ["tool", "uv", "sources"];
+  for (const e of entries) {
+    if (!e.keys || !e.table) continue;
+    const path = [...e.table, ...e.keys];
+    if (path.length < 4 && e.value?.t && path.every((part, i) => part === SOURCES_PATH[i])) {
+      const expand = (prefix, v) => {
+        for (const [k, inner] of Object.entries(v.t)) {
+          const next = [...prefix, ...k.split(".")];
+          if (next.length < 4 && inner.t && next.every((part, i) => part === SOURCES_PATH[i])) expand(next, inner);
+          else if (next.length >= 4) flat.push({ table: [], keys: next, value: inner });
+        }
+      };
+      expand(path, e.value);
+    } else flat.push(e);
+  }
+  for (const { table, keys, value } of flat) {
     if (!keys || !table) continue;
     const path = [...table, ...keys];
     if (path[0] !== "tool" || path[1] !== "uv" || path[2] !== "sources" || path.length < 4) continue;
@@ -2174,6 +2199,10 @@ function npmDeclared(name, value) {
   if (v === "latest" || (!v.startsWith("npm:") && !v.startsWith("patch:") && !v.startsWith("$") && !NPM_OTHER_FORM.test(v) && npmUnbounded(v))) return { name, spec: "latest" };
   // J2: a range with at least one numbered bound, in npm's grammar (`>=* <2` is `<2`).
   if (VERSION_SHAPED.test(v) || (/\d/.test(v) && /^[<>=~^\dvxX*.\s|-]+$/.test(v) && versionReadable("npm", v))) return { name, spec: value };
+  // Round 31 (K2): an OWN_SOURCE_FORMS form (a local tarball `lodash-4.17.20.tgz`, `owner/repo`) is
+  // read before the dist-tag test: npm reads it as that source, not as a tag.
+  // (A URL is read by the one URL rule below, whatever it ends in.)
+  if (!v.startsWith("npm:") && !v.startsWith("patch:") && !/^https?:\/\//i.test(v) && NPM_OTHER_FORM.test(v)) return null;
   // A dist-tag other than latest: held, "name the version" (the edit path marks it a tag).
   if (isDistTag(v)) return { name, spec: v };
   // Anything else that is no other form (`<*`, `>*`: they match nothing) is held as not read.
@@ -2420,7 +2449,8 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     } else {
       const onDiskEntries = whole ? null : disk()?.assignments();
       const local = onDiskEntries ? pyOtherSourceNames(onDiskEntries) : new Set();
-      for (const d of pyprojectDependencies(entries, local)) put(out, nameKey("PyPI", d.name), section(d.section), d.spec);
+      // Round 31 (K1): a snippet keeps the own-source mark (the section itself is not known there).
+      for (const d of pyprojectDependencies(entries, local)) put(out, nameKey("PyPI", d.name), whole ? d.section : String(d.section ?? "").includes(OWN_MAPPED) ? OWN_MAPPED : null, d.spec);
       // Round 25 (S3): setuptools reads dynamic dependencies from requirements files: read them as such.
       if (whole) {
         for (const { table, keys, value } of entries) {
@@ -2474,6 +2504,12 @@ const keyName = (key) => key.split("\0")[0];
  * (fourth blind check of the a1125 hook lane: `"lodash@<4": 3.10.1` let `catalog: lodash 3.10.1` pass).
  */
 const NARROW = "\u0002";
+/**
+ * Round 31 (K1): the section mark of a requirement that a tool-specific source table maps to the
+ * project's own source ([tool.uv.sources]): it stays the project's own unless a verdict on record for
+ * its registry reading says avoid or wait (another installer resolves it from the index).
+ */
+const OWN_MAPPED = "\u0003";
 
 /** Changed or added dependency versions between two snippets of one manifest. */
 function versionChanges(file, before, after, disk) {
@@ -2534,7 +2570,7 @@ function diffVersions(old, now, same = (spec) => spec) {
       if (own.has(same(spec)) || seen.has(`${name}\0${same(spec)}`)) continue;
       seen.add(`${name}\0${same(spec)}`);
       const from = prev.length === 1 ? prev[0] : prev.length === 0 && anywhere.size === 1 ? [...anywhere][0] : null;
-      changes.push({ name, from, to: spec });
+      changes.push({ name, from, to: spec, ...(key.includes(OWN_MAPPED) ? { ownMapped: true } : {}) });
     }
   }
   return changes;
@@ -3162,7 +3198,7 @@ function repeatable(changes) {
       continue;
     }
     const from = c.from == null ? null : specText(c.from) || null;
-    out.push({ name: c.name, from, to });
+    out.push({ name: c.name, from, to, ...(c.ownMapped ? { ownMapped: true } : {}) });
   }
   return out;
 }
@@ -7037,7 +7073,7 @@ const NAMED_OPTIONS = {
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
 // THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
-export { RUNNER_FETCH_FORMS, JS_MANAGERS, PNPM_INERT_KEYS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
+export { RUNNER_FETCH_FORMS, CREDENTIAL_KEYS, JS_MANAGERS, PNPM_INERT_KEYS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {
@@ -8246,6 +8282,12 @@ function denialFor(introduced, ledger, dir, what) {
     if (overBudget()) break;
     const verdict = judge(index, c);
     if (verdict === "allow") continue;
+    // Round 31 (K1): a requirement mapped to the project's own source by a tool-specific table: only
+    // an avoid or wait verdict on record for its registry reading holds it.
+    if (c.ownMapped) {
+      if (verdict.deny) held.push({ c, entry: verdict.deny });
+      continue;
+    }
     if (verdict.deny) held.push({ c, entry: verdict.deny });
     else if (verdict.unreadable) unreadable.push({ c, entry: verdict.unreadable });
     else if (verdict.localSource) local.push({ c, entry: verdict.localSource });
@@ -8627,7 +8669,7 @@ function introducedBy(input) {
   if (!kind) return null;
   const changes = repeatable(introducedByEdit(kind, toolName, toolInput, toolInput.file_path));
   // Round 15 (H2): a declared dist-tag other than latest is held as a tag ("name the version").
-  return { what: "edit", changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from, ...(typeof c.to === "string" && c.to !== LATEST && isDistTag(c.to) ? { tag: true } : {}), ...(typeof c.to === "string" && URL_SPEC.test(c.to) ? { url: true } : {}) })) };
+  return { what: "edit", changes: changes.map((c) => ({ ecosystem: ECOSYSTEM[kind], name: c.name, spec: c.to, from: c.from, ...(c.ownMapped ? { ownMapped: true } : {}), ...(typeof c.to === "string" && c.to !== LATEST && isDistTag(c.to) ? { tag: true } : {}), ...(typeof c.to === "string" && URL_SPEC.test(c.to) ? { url: true } : {}) })) };
 }
 /** M2: a dependency spec that is a URL the one URL rule kept (urlDependency). */
 const URL_SPEC = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -8940,7 +8982,7 @@ function postToolUse(input) {
     let before = after;
     for (const e of [...edits].reverse()) before = before === null ? null : applyEdit(before, e.new_string, e.old_string, e.replace_all);
     if (before !== null) {
-      const whole = repeatable(wholeFileChanges(file, before, after));
+      const whole = repeatable(wholeFileChanges(file, before, after)).filter((c) => !c.ownMapped);
       if (whole.length > 0) return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: adviceFor(file, whole) } });
     }
   }
@@ -8957,7 +8999,7 @@ function postToolUse(input) {
       }
     }
   }
-  changes = repeatable(changes);
+  changes = repeatable(changes).filter((c) => !c.ownMapped);
   // Write replaces the whole file and its payload carries no "before": stay quiet
   // rather than report every dependency as changed.
   if (changes.length === 0) return "";

@@ -212,8 +212,10 @@ describe("F1: a conditional own source leaves the registry reading judged", () =
   ])("%j: judged", (tables) => {
     expect(s.write(join(s.project, "pyproject.toml"), P(tables)).text).toContain("answered avoid");
   });
-  it.each(['[tool.uv.sources]\nrequests = { path = "./r" }\n', '[tool.uv.sources]\nrequests = { workspace = true }\n', '[tool.uv.sources.requests]\ngit = "https://github.com/psf/requests"\n'])("%j: the project's own", (tables) => {
-    expect(s.write(join(s.project, "pyproject.toml"), P(tables)).decision).toBe("allow");
+  it.each(['[tool.uv.sources]\nrequests = { path = "./r" }\n', '[tool.uv.sources]\nrequests = { workspace = true }\n', '[tool.uv.sources.requests]\ngit = "https://github.com/psf/requests"\n'])("%j: the project's own, but an avoid on record still denies (round 31, K1)", (tables) => {
+    expect(s.write(join(s.project, "pyproject.toml"), P(tables)).text).toContain("answered avoid");
+    // The same source with a requirement no verdict names: the project's own.
+    expect(s.write(join(s.project, "pyproject.toml"), P(tables).replace('"requests==2.19.0"', '"requests==2.31.0"')).decision).toBe("allow");
   });
 });
 
