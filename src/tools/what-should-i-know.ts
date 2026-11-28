@@ -44,7 +44,8 @@
  * Outside the scan (not read): a malware copy in node_modules that no lockfile lists, a copy on disk that is not such a
  * direct dependency, a go.sum line that go.mod does not require, and a `-c` constraints file.
  * JSON-RPC batches: on a revision without batches (2025-06-18 and later) every batch is refused as such
- * (batchRefusedMessage); a served batch (2025-03-26 and earlier) holding a credential-shaped id is refused whole. The readers are briefing-command-check.ts (commands and forms),
+ * (batchRefusedMessage); in a served batch (2025-03-26 and earlier) a credential-shaped id is refused whole over HTTP,
+ * while over stdio only that element is refused (id null) and the others are served. The readers are briefing-command-check.ts (commands and forms),
  * briefing-snippets.ts (manifest snippets), briefing-new-packages.ts and briefing-requested-versions.ts (prose), each
  * with its own notes; the level is assembled in this file.
  *
@@ -71,6 +72,9 @@ import {
   NO_DECISION_CONFLICT,
   NOT_SCANNED_LOCKFILES,
   SCAN_INCOMPLETE,
+  SCAN_ALL_PRIVATE,
+  SCAN_NPMRC_UNREADABLE,
+  SCAN_LOCKFILE_UNREADABLE,
   PRIVATE_INSTALLED,
   TASK_FOLDED,
   BEST_EFFORT_READING,
@@ -328,6 +332,8 @@ export interface WhatShouldIKnowResult {
    */
   /** Round 18, N7: how many lockfiles the walk found and the scan did not read (git-ignored, excluded, fixture folders). */
   lockfiles_not_scanned?: number;
+  /** Round 20: folders the walk could not list: any lockfile in them was not read. */
+  folders_not_listed?: number;
   /** Round 19, M5: installed dependencies the project's configuration makes private: withheld from the scan, not checked. */
   private_installed?: number;
   lockfiles_not_read?: Array<{ path: string; reason: "merge_conflict" | "unreadable" | "partial" | "refused"; error: string }>;
@@ -1227,7 +1233,8 @@ async function executeBriefing(
   // Round 18, N7: lockfiles the walk found and the scan did not read (git-ignored, output or excluded folders, links out
   // of the root, test fixtures), by the scan's own list: a "ready" scan says so.
   const notScanned = notScannedLockfiles(liveIntel?.getDiscovery?.() ?? null);
-  const lockfilesNotScanned = notScanned.ignored + notScanned.depth + notScanned.projectLimit + notScanned.outside + notScanned.unreadable;
+  // Round 20: lockfiles only; folders that could not be listed are counted apart (folders_not_listed).
+  const lockfilesNotScanned = notScanned.ignored + notScanned.depth + notScanned.projectLimit + notScanned.outside;
   const notRead = lockfilesNotRead(liveIntel);
 
   const finalize = (relevantWisdom: WisdomEntry[], wisdomMode: WisdomRecallMode, wisdomNote?: string): WhatShouldIKnowResult => {
@@ -1244,6 +1251,7 @@ async function executeBriefing(
       projectFindings: projectFindingCount,
       touchedInstalledReasons,
       privateInstalled: scan?.privateExcluded?.count ?? 0,
+      scanCause: scanStatus === "unavailable" ? scanUnavailableCause(scan) : null,
       nonMalwareDrift: (scan?.vulnerabilities ?? []).some((v) => v.installDriftOf && !((v as { malware?: boolean }).malware === true || /^MAL-/i.test(String(v.vulnId ?? "")))),
       taskDependencies,
       decisionWindows,
@@ -1395,6 +1403,7 @@ async function executeBriefing(
       scan: scanBlock,
       ...(notRead.files.length > 0 ? { lockfiles_not_read: notRead.files } : {}),
       ...(lockfilesNotScanned > 0 ? { lockfiles_not_scanned: lockfilesNotScanned } : {}),
+      ...(notScanned.unreadable > 0 ? { folders_not_listed: notScanned.unreadable } : {}),
       ...((scan?.privateExcluded?.count ?? 0) > 0 ? { private_installed: scan!.privateExcluded!.count } : {}),
       summary: `${notRead.notes.length > 0 ? `${notRead.notes.join(" ")} ` : ""}${waiting.length > 0 ? `${confirmationSummary(waiting.length)} ` : ""}${taskWithheld.length > 0 ? `${withheldWordsText(taskWithheld)} ` : ""}${uncheckedPackages.length > 0 ? `${notCheckedPackages(uncheckedPackages)}. ` : ""}${privateTask.length > 0 ? `${privateAdvisoryText(privateTask)}. ` : ""}${summarize(taskDependencies, advisories, decisionConflicts, relevantWisdom, scanStatus, delegation.level, notCovered, newPackages, requestedVersions, notRead.walkCut)}${db ? "" : ` ${STORED_DATA_ABSENT_NOTE}`}`,
       wisdom_recall_mode: wisdomMode,
@@ -1807,6 +1816,20 @@ function notScannedLockfiles(discovery: ReturnType<NonNullable<BriefingLiveIntel
   return counts;
 }
 
+/** Round 20: why a scan that ran has nothing to answer with, from its own record of what it withheld; null when not that. */
+function scanUnavailableCause(scan: VulnerabilityScanResult | null): string | null {
+  const withheld = scan?.privateExcluded;
+  if (!scan || !withheld || withheld.count === 0 || scan.totalScanned > 0 || scan.offline) return null;
+  const files = withheld.unreadable?.files ?? [];
+  const npmrc = files.filter((f) => /(?:^|[\\/])\.npmrc$/.test(f));
+  const lockfiles = files.filter((f) => !npmrc.includes(f));
+  const causes = [
+    ...(npmrc.length > 0 ? [SCAN_NPMRC_UNREADABLE(withheld.count)] : []),
+    ...(lockfiles.length > 0 ? [SCAN_LOCKFILE_UNREADABLE(lockfiles)] : []),
+  ];
+  return causes.length > 0 ? causes.join("; ") : SCAN_ALL_PRIVATE(withheld.count);
+}
+
 /** Round 19, Q2: lockfiles found and not read, by reason. */
 type NotScanned = { ignored: number; depth: number; projectLimit: number; outside: number; unreadable: number };
 const unreadTotal = (u: NotScanned) => u.ignored + u.depth + u.projectLimit + u.outside + u.unreadable;
@@ -1872,6 +1895,8 @@ function assessDelegation(input: {
   projectFindings?: number;
   /** Round 19, M5: installed dependencies the project's configuration makes private, withheld from the scan. */
   privateInstalled?: number;
+  /** Round 20: why a scan that ran answered nothing (scanUnavailableCause). */
+  scanCause?: string | null;
   /** Round 17, C2: confirmed vulnerabilities of the installed copy of a package the call declares or the briefing read. */
   touchedInstalledReasons?: string[];
   /** Round 17, C1(b): whether some drift row on disk is a vulnerable copy that is not malware. */
@@ -1950,7 +1975,7 @@ function assessDelegation(input: {
     if (unconfirmedTask.some((a) => severe(a.priority))) {
       return { level: "human_only", reason: "An advisory names a package this task touches and the vulnerability scan is not available to confirm or rule it out." };
     }
-    const scanNote = `${SCAN_UNAVAILABLE_REASON}${scanStatus === "disabled" ? " (live intelligence is disabled)" : ""}.`;
+    const scanNote = `${SCAN_UNAVAILABLE_REASON}${scanStatus === "disabled" ? " (live intelligence is disabled)" : input.scanCause ? `: ${input.scanCause}` : ""}.`;
     // A finding on a package the task adds stands on its own; the rest of the task is still unreviewed.
     if (nameReasons.length > 0) return { level: "review_needed", reason: `Review before delegating: ${nameReasons.join("; ")}. ${scanNote}` };
     return { level: "unknown", reason: scanNote };

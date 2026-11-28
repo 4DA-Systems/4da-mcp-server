@@ -105,6 +105,8 @@ function sentenceRules(): TextRule[] {
     "human_only, with a high or critical task vulnerability without a fix that is no malicious-package record",
   ];
   HOLDS["withheld-said"] = [(r) => ((r?.task_packages?.not_read ?? []) as Answer[]).length > 0, "a word of the task was withheld (task_packages.not_read); its own standing sentence holds the level"];
+  HOLDS["unlisted-folders"] = [(r) => Number(r?.folders_not_listed ?? 0) > 0, "folders_not_listed above 0"];
+  HOLDS["scan-private"] = [(r) => level(r) !== "safe_to_delegate" && Number(r?.private_installed ?? 0) > 0, "not safe_to_delegate, with private_installed above 0"];
   HOLDS["private-installed"] = [(r) => Number(r?.private_installed ?? 0) > 0, "private_installed above 0"];
   HOLDS["not-scanned"] = [(r) => Number(r?.lockfiles_not_scanned ?? 0) > 0, "lockfiles_not_scanned above 0"];
   const extra: TextRule[] = [

@@ -216,8 +216,11 @@ const MAX_LISTED_NOT_COVERED = 25;
  * Measured on langchain (108 lockfiles, up to 3 levels down; 2026-10-10):
  * the walk plus every project scan takes about 2 s. Depth 4 covers it with a
  * level to spare; 256 projects is 2.4x its count.
+ * Round 20: depth 8. A monorepo with an example app at depth 5 left 10% of ordinary briefings incomplete; the walk
+ * visits the same folders at any depth (it is bounded by MAX_WALK_DIRS), so on a 5,060-folder tree depth 4 cost 719 ms
+ * of CPU and depth 8 625 ms (61 projects instead of 21; MAX_PROJECTS still bounds them).
  */
-export const MAX_DEPTH = 4;
+export const MAX_DEPTH = 8;
 export const MAX_PROJECTS = 256;
 /** Directories visited in total, scanned or not: the hard cap on the walk itself. */
 const MAX_WALK_DIRS = 20_000;

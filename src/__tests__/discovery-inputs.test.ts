@@ -53,7 +53,7 @@ describe("project-tree bounds are wider and never silent", () => {
 
   it("past the project limit, every skipped lockfile is counted and named, and the note says so", () => {
     // The production limits, and the behaviour at a test-sized limit (the root plus 5 projects).
-    expect([MAX_DEPTH, MAX_PROJECTS]).toEqual([4, 256]);
+    expect([MAX_DEPTH, MAX_PROJECTS]).toEqual([8, 256]);
     for (let i = 0; i < 10; i++) write(`templates/t${String(i).padStart(3, "0")}/poetry.lock`, POETRY("x", "1.0.0"));
     const { entries, discovery } = scanProjectTree(dir, { maxDepth: MAX_DEPTH, maxProjects: 6 });
     expect(entries.length).toBe(6);
@@ -63,11 +63,13 @@ describe("project-tree bounds are wider and never silent", () => {
   });
 
   it("a lockfile deeper than the depth bound is reported, not dropped silently", () => {
-    write("a/b/c/d/e/package-lock.json", "{}");
+    // Round 20: the bound is MAX_DEPTH (8): a lockfile one level past it.
+    const deep = `${Array.from({ length: MAX_DEPTH + 1 }, (_, i) => String.fromCharCode(97 + i)).join("/")}/package-lock.json`;
+    write(deep, "{}");
     const { entries, discovery } = scanProjectTree(dir);
     expect(rels(entries)).toEqual(["."]);
-    expect(discovery.skipped).toEqual([{ path: "a/b/c/d/e/package-lock.json", reason: "depth" }]);
-    expect(discoveryNote(discovery)).toMatch(/deeper than 4 levels/);
+    expect(discovery.skipped).toEqual([{ path: deep, reason: "depth" }]);
+    expect(discoveryNote(discovery)).toMatch(new RegExp(`deeper than ${MAX_DEPTH} levels`));
   });
 
   it("a `dir/*/` gitignore rule ignores the subdirectories, not the files beside them (langchain docs/api_reference)", () => {
@@ -78,7 +80,8 @@ describe("project-tree bounds are wider and never silent", () => {
   });
 
   it("vulnerability_scan carries the gap in both formats", () => {
-    write("a/b/c/d/e/package-lock.json", "{}");
+    const deep = `${Array.from({ length: MAX_DEPTH + 1 }, (_, i) => String.fromCharCode(97 + i)).join("/")}/package-lock.json`;
+    write(deep, "{}");
     const { discovery } = scanProjectTree(dir);
     const scan: VulnerabilityScanResult = {
       scannedAt: "2026-10-10T00:00:00Z", projectPath: dir, ecosystemsScanned: ["npm"], totalScanned: 3, totalVulnerable: 0,
@@ -93,7 +96,7 @@ describe("project-tree bounds are wider and never silent", () => {
     expect(detailed.coverage).toMatchObject({
       complete: false,
       lockfiles_not_scanned: 1,
-      skipped_lockfiles: [{ path: "a/b/c/d/e/package-lock.json", reason: "depth" }],
+      skipped_lockfiles: [{ path: deep, reason: "depth" }],
       unresolved_manifests: [{ manifest: "samples/wasm/Cargo.toml", declared_ranges: 12, fix: "cargo generate-lockfile in samples/wasm" }],
     });
     expect(detailed.coverage!.note).toMatch(/12 dependencies in 1 manifest with no lockfile \(samples\/wasm\/Cargo\.toml\) are declared ranges, not installed versions, and were not checked/);
