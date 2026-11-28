@@ -115,9 +115,10 @@ describe("extras over 200 characters", () => {
 });
 
 describe("two TOML spellings of a pyproject requirement (no longer limits since round 7 of the a1125 hook lane)", () => {
-  it("a line-ending backslash in a multi-line basic string is held as not read; project as a root inline table is read", () => {
+  // Round 29: the reader decodes the line-ending backslash (tomlString): the requirement is read and judged.
+  it("a line-ending backslash in a multi-line basic string is read; project as a root inline table is read", () => {
     expect(write("pyproject.toml", pyproject(`["requests==2.31.0"]`)).decision).toBe("no verdict");
-    expect(write("pyproject.toml", pyproject(`["""requests==\\\n    2.31.0"""]`)).decision).toBe("not read");
+    expect(write("pyproject.toml", pyproject(`["""requests==\\\n    2.31.0"""]`)).decision).toBe("no verdict");
     expect(write("pyproject.toml", `project = { name = "a", version = "1", dependencies = ["requests==2.31.0"] }\n`).decision).toBe("no verdict");
   });
 });

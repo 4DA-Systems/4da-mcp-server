@@ -44,8 +44,9 @@
  * function definition or a program that takes operands from its input, beside a word the detector
  * reads as a manager's name, and such a call is denied as not read (accountCall) [test:
  * a1125-w2-hook-round23, a1125-w2-hook-account]. P1: a call that is not examined goes ahead with
- * no answer, apart from the ledger guard and the failure rule (P5) and the advice (P6) [test:
- * a1125-w2-hook-contract].
+ * no answer, apart from the ledger guard and the failure rule (P5), the advice (P6), a runner fetch
+ * the hook sees (L3), an expansion in a manager's words (L2) and a configuration source named on a
+ * command (P3) [test: a1125-w2-hook-contract, a1125-w2-hook-round29].
  *
  * P2 (fail closed): an examined command goes ahead only when each simple command in it that holds a
  * detector hit is read, as the text of a data program (P4) or whole, its program, prefixes,
@@ -69,9 +70,11 @@
  * hook cannot read in these ways is denied as not read [test: a1125-w2-hook-round17,
  * a1125-w2-hook-round23]. P2: the file an examined edit makes is read with the hook's strict
  * reading of its kind (JSON for the JavaScript manifest, with no comment, trailing comma or single quote
- * that a manager may accept; TOML; the Go module grammar), and an edit that changes the file into
- * one that reading does not accept is denied as not read (manifestSyntaxError) [test:
- * a1125-w2-hook-round28].
+ * that a manager may accept; TOML, its escapes and multi-line strings decoded; the Go module
+ * grammar), a reading at least as strict as the kind's own for the forms the notes list, and an
+ * edit whose file that reading does not accept is denied as not read, whatever the file was before
+ * (manifestSyntaxError); a file before the edit that is not strict JSON is read leniently, only for
+ * what it declared [test: a1125-w2-hook-round28, a1125-w2-hook-round29].
  *
  * P3 (verdicts): for each release an examined call names in a form the hook reads, the call is
  * denied unless the ledger holds a proceed or review answer that counts for that reading, or a
@@ -125,25 +128,30 @@
  * reads, each setting a resolver reads that is no dependency value (for example the option lines of
  * a requirements file, every key under the poetry, uv, pdm, hatch, flit and setuptools tables of
  * pyproject.toml, the pnpm key and patchedDependencies of package.json, and the keys of a Cargo
- * dependency entry), compared on the parsed tree leaf by leaf however it is written, is either on
- * INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS or CARGO_ENTRY_KEYS, or, when an edit adds or
+ * dependency entry, and every top-level key of pnpm-workspace.yaml), compared on the parsed tree leaf by
+ * leaf however it is written (a key escaped or quoted is the key it decodes to: no reader tests the
+ * raw text for a key before parsing), is either on INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS,
+ * CARGO_ENTRY_KEYS or PNPM_INERT_KEYS, or, when an edit adds or
  * changes it, denied as not read, an index table being no change only when each of its keys is on
  * INDEX_TABLE_KEYS for its tool and it is at a public url or explicit by that tool's own key; and a key given twice
  * in one JSON object, TOML table or YAML catalog section is not read (resolverSettings,
- * jsonDuplicateKey) [test: a1125-w2-hook-round25, a1125-w2-hook-round27]. P3: a requirements or constraints file that a
+ * jsonDuplicateKey) [test: a1125-w2-hook-round25, a1125-w2-hook-round27, a1125-w2-hook-round29]. P3: a requirements or constraints file that a
  * command names, and one that a requirements file names on an include or constraint line, is read from disk at the
  * call, the latter relative to the file that names it, and its entries are judged as the call's;
- * one the hook cannot read, one past REQUIREMENTS_DEPTH levels or REQUIREMENTS_FILES files, one
- * named by a command that changes its folder, and one holding an option line not on
+ * one the hook cannot read, one past REQUIREMENTS_DEPTH levels, one past REQUIREMENTS_FILES files
+ * in all for each file a command or an edit names (every include it reaches counted, siblings
+ * too), one named by a command that changes its folder, and one holding an option line not on
  * REQUIREMENTS_INERT_OPTIONS, are denied as not read (requirementFileInstalls, includeRequirements)
- * [test: a1125-w2-hook-round25]. P3: a write of a manager's own configuration by one of its
+ * [test: a1125-w2-hook-round25, a1125-w2-hook-round29]. P3: a write of a manager's own configuration by one of its
  * CONFIG_WRITE_VERBS is denied as not read unless each key it writes is on INERT_CONFIG_KEYS, and a
  * release named on one of the FETCH_VERBS is judged as an install is (configWriteOf) [test:
  * a1125-w2-hook-round25]. P3: an edit of a file on the CONFIG_FILES list is read from the file it
- * makes and compared key by key with the file on disk, and it is denied as not read when it adds,
- * changes or removes a key that is not on that file's CONFIG_INERT_KEYS, when the hook cannot read
- * either text, or, for a file that is code, when it changes the file at all (configFileChange)
- * [test: a1125-w2-hook-round25b]. P3: a configuration write is read operand by operand
+ * makes with a strict reader of its format, a line the reader cannot classify with certainty making
+ * the file one it cannot read (configKeys: the notes list each format's lines), and compared key by
+ * key with the file on disk, and it is denied as not read when it adds, changes or removes a key
+ * that is not on that file's CONFIG_INERT_KEYS, when the hook cannot read either text, or, for a
+ * file that is code, when it changes the file at all (configFileChange) [test:
+ * a1125-w2-hook-round25b, a1125-w2-hook-round29]. P3: a configuration write is read operand by operand
  * in its manager's own grammar, past the global options before its sub-command that are on
  * MANAGER_GLOBAL_OPTIONS for that manager (for one manager its own option table with its
  * abbreviations, NPM_OPTIONS), every key it writes judged against INERT_CONFIG_KEYS; a write whose
@@ -162,7 +170,8 @@
  * otherwise only when the command changes no folder, names no directory option and installs
  * nothing globally, names only managers that read the configuration holding the rule
  * (CONFIG_READERS; an edit, which names no manager, only for a rule in the configuration file
- * those managers share), and the nearest folder at or above the call's folder that holds the
+ * those managers share), and the nearest folder at or above the call's folder (for an edit, the
+ * folder of the file it edits) that holds the
  * ecosystem's manifest is the folder of the file that holds the rule; a record made because the
  * ecosystem's default registry is a host the server does not know as public, and any other
  * record, applies nowhere [test: a1125-w2-hook-round22, a1125-w2-hook-round20, a651-hook-withheld].
@@ -174,9 +183,11 @@
  * the installs it mentions are not judged [test: a1125-w2-hook-round13, a1125-w2-hook-account,
  * a1125-w2-hook-contract].
  *
- * P5 (the ledger guard): in the blocking mode, a call that names the check ledger file, or the data
- * folder that holds it, or whose text holds check-ledger anywhere except where it is followed by a
- * JavaScript or TypeScript source extension (optionally after .d. or .test.), and a command whose
+ * P5 (the ledger guard): in the blocking mode, an Edit, MultiEdit, Write or NotebookEdit whose path
+ * is the check ledger file or in the data folder that holds it (the path is checked, not the text
+ * the call writes), a Bash or PowerShell command that names that file or folder, or whose text holds
+ * check-ledger anywhere except where it is followed by a JavaScript or TypeScript source extension
+ * (optionally after .d. or .test.), and a command whose
  * text holds, without regard to letter case, the data folder's base name of any length, the name of
  * the data folder's setting or the ledger file's base name, with no ASCII letter, digit,
  * underscore, dot or hyphen directly before it and, after it, the end of the text or a character
@@ -233,7 +244,8 @@
  * package (for example an audit fix, an update with no name, a tidy) installs what the manager
  * picks, and the advice line (P6) says to run vulnerability_scan after it [test:
  * a1125-w2-hook-round27, a1125-w2-hook-round26, a1125-w2-hook-round18]. L2:
- * the hook examines what P1 detects and nothing else, so an install started another way goes ahead
+ * the hook examines what P1 detects and nothing else (apart from the holds P1 lists), so an install
+ * started another way goes ahead
  * unchecked, for example by a script or a make target, through a tool or a manager that is not on
  * the MANAGERS list (for example pipenv, pdm, conda, gem, composer, dotnet or a binary installer),
  * by a file a shell command changes, or inside a container, and an artifact
@@ -323,6 +335,29 @@
  * writes a requirements file, judged when an edit or an install names it); pip-sync installs what its
  * files say and reads them at the call; bun pm cache names no release and goes ahead.
  *
+ * (Round 29.) The strict readings. Config files (configKeys), each line classified or the file not
+ * read: in every format a lone CR, a form feed, NBSP, U+3000, any other unusual blank, and a byte
+ * order mark past the start make the file not read. ini (.npmrc, pip.conf, pip.ini): blank, a comment
+ * (# or ; first), a [section], or key=value with no leading blank, no trailing backslash and no # or ;
+ * inside an unquoted value; pip's extra-index-url, find-links, trusted-host, no-binary and
+ * only-binary take continuation lines indented by spaces. .yarnrc: `key value` lines with no leading
+ * blank. .yarnrc.yml: the plain-line grammar of pnpm-workspace.yaml (no anchor, alias, tag, flow
+ * collection or second document), indentation by spaces only, an indented line only under a `key:`
+ * line with no value. TOML config files and the TOML manifests: the strict walk (tomlValid): every
+ * line a [table] or [[table]] header, a key = value, a comment or blank; a value a string (basic
+ * strings' escapes and multi-line strings decoded), a number with at most one dot, true or false,
+ * a date and time (a space between them allowed), an array with commas, or an inline table; the
+ * forms it does not refuse that TOML does: a key used as a table and as a value, and a number's
+ * own grammar (`1__2`, a leading zero). package.json: JSON.parse, an object at the top, keys
+ * decoded before they are compared (jsonDuplicateKey too); a file before the edit that is not
+ * strict JSON is read with its comments and trailing commas taken out, for what it declared. go.mod
+ * and go.work: each line a known directive with its arguments, a block opened with `(` (with or
+ * without a blank before it) or one on one line, `)` closing it, and balanced double quotes.
+ * Raw-text pre-checks removed (round 29, H1): resolverSettings no longer skips package.json when the
+ * text lacks a literal "pnpm" or "patchedDependencies"; the TOML escape and multi-line refusals are
+ * gone (the reader decodes them). Kept, as best-effort L3 checks that only add holds: projectMention
+ * and workspaceRoot test raw text for a name or a workspace marker.
+ *
  * (Round 25.) What changes where or which release resolves is read, not skipped. The inert lists, in
  * words: requirements option lines that change nothing are a --hash continuation and -e of the
  * project's own source (-r and -c are followed and read); pyproject.toml's [tool.uv] keys that change
@@ -409,7 +444,7 @@
  * install`, `cargo fetch`, `build` (`b`), `run` (`r`) and `test` (`t`), which resolve and download what the manifest asks for (`check` is not on the list), `go mod download`, npm / pnpm / Yarn / Bun `link`,
  * and the updates the manager chooses: npm and pnpm `audit` (`npm audit fix`, `pnpm audit --fix`; a
  * plain audit is advised too), npm, pnpm and Yarn `dedupe`, `go mod tidy`, `go work sync`, `uv lock`, `uv pip
- * compile`, `poetry lock` and `cargo generate-lockfile`,
+()=>" * compile`, `uv tool upgrade`, `poetry lock`, `cargo generate-lockfile`,\n * pnpm `fetch` and `import` and `yarn upgrade-interactive` (round 29, H9: each manager\x27s own command list,\n * uv 0.6.8 `uv --help` and `uv tool --help`, pnpm 10.34.6 `pnpm help`),"
  * also run by npx, bunx or pnpx, with or without a version on the manager (`npx pnpm@9 install`);
  * not text that only mentions one),
  * where a ledger exists and the guard is on or advising, the hook adds one line of advice at
@@ -839,16 +874,50 @@ const TOML_BREAK = new Set([" ", "\t", "\r", "\n", "#", '"', "'", "[", "]", "{",
 
 /** A TOML string starting at `i` (quote `q`, `triple` for a multi-line one) as { value, end }, or null when it never closes. */
 function tomlString(text, i, q, triple) {
+  // Round 29: a basic string's escapes are decoded as TOML decodes them (\b \t \n \f \r \" \\ \uXXXX
+  // \UXXXXXXXX, and in a multi-line basic string a line-ending backslash); any other escape is a
+  // TOML error (null). A literal string has none. A multi-line string drops a newline right after
+  // its opening quotes.
+  const escape = (j) => {
+    const e = text[j + 1];
+    const simple = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\" };
+    if (e !== undefined && Object.hasOwn(simple, e)) return { v: simple[e], next: j + 2 };
+    const hex = e === "u" ? 4 : e === "U" ? 8 : 0;
+    if (!hex) return null;
+    const h = text.slice(j + 2, j + 2 + hex);
+    if (!new RegExp(`^[0-9A-Fa-f]{${hex}}$`).test(h)) return null;
+    const cp = parseInt(h, 16);
+    if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return null;
+    return { v: String.fromCodePoint(cp), next: j + 2 + hex };
+  };
   if (triple) {
-    for (let j = i + 3; j < text.length; j++) {
+    let j = i + 3;
+    if (text[j] === "\n") j++;
+    else if (text[j] === "\r" && text[j + 1] === "\n") j += 2;
+    let value = "";
+    while (j < text.length) {
       tick();
-      if (q === '"' && text[j] === "\\") j++;
-      else if (text.startsWith(q.repeat(3), j)) {
+      if (text.startsWith(q.repeat(3), j)) {
         // Up to two quotes of the content may stand right before the closing three.
-        let close = j;
-        while (text[close + 3] === q && close - j < 2) close++;
-        return { value: text.slice(i + 3, close), end: close + 3 };
+        let extra = 0;
+        while (text[j + 3 + extra] === q && extra < 2) extra++;
+        return { value: value + q.repeat(extra), end: j + 3 + extra };
       }
+      if (q === '"' && text[j] === "\\") {
+        // A line-ending backslash: the newline and the blanks after it are dropped.
+        const rest = /^\\[ \t]*\r?\n[ \t\r\n]*/.exec(text.slice(j, j + 4096));
+        if (rest) {
+          j += rest[0].length;
+          continue;
+        }
+        const e = escape(j);
+        if (!e) return null;
+        value += e.v;
+        j = e.next;
+        continue;
+      }
+      value += text[j];
+      j++;
     }
     return null;
   }
@@ -859,10 +928,10 @@ function tomlString(text, i, q, triple) {
     if (c === "\n") return null;
     if (c === q) return { value, end: j + 1 };
     if (q === '"' && c === "\\") {
-      const e = text[j + 1];
-      // `\"` and `\\` are read; any other escape is kept as written, which no package name or version holds.
-      value += e === '"' || e === "\\" ? e : c + (e ?? "");
-      j++;
+      const e = escape(j);
+      if (!e) return null;
+      value += e.v;
+      j = e.next - 1;
     } else value += c;
   }
   return null;
@@ -1709,7 +1778,8 @@ const PNPM_EXTENSION_SECTIONS = new Set(["dependencies", "optionalDependencies",
  * reason. Any other key (configDependencies, which installs packages, is judged; linkWorkspacePackages,
  * autoInstallPeers, resolvePeersFromWorkspaceRoot, injectWorkspacePackages, sharedWorkspaceLockfile,
  * dedupe*, catalogMode, minimumReleaseAge, resolutionMode, registry, supportedArchitectures,
- * nodeVersion, updateConfig, the lockfile settings and every unknown key) is held when changed.
+ * nodeVersion, updateConfig, patchedDependencies (round 29: held here as in package.json), the lockfile
+ * settings and every unknown key) is held when changed.
  */
 const PNPM_INERT_LIST = [
   ["packages", "which folders are workspace packages"],
@@ -1739,7 +1809,6 @@ const PNPM_INERT_LIST = [
   ["networkConcurrency", "how many requests run at once"],
   ["peerDependencyRules", "which peer warnings are shown"],
   ["allowedDeprecatedVersions", "which deprecation warnings are shown"],
-  ["patchedDependencies", "a patch applied to a release already installed"],
   ["allowUnusedPatches", "whether an unused patch fails"],
   ["ignorePatchFailures", "whether a failing patch fails"],
   ["auditConfig", "what pnpm audit reports"],
@@ -1889,6 +1958,14 @@ function overrideTarget(key) {
  * text (strings and escapes skipped). Bun keeps the first of two keys and JSON.parse the last, so a
  * manifest with one is not read.
  */
+/** H1: a JSON string token decoded (its text as written when it does not decode). */
+function jsonKeyText(token) {
+  try {
+    return String(JSON.parse(token));
+  } catch {
+    return token.slice(1, -1);
+  }
+}
 function jsonDuplicateKey(text) {
   const stack = [];
   let pendingKey = null;
@@ -1909,7 +1986,8 @@ function jsonDuplicateKey(text) {
         j = q + 1;
       }
       const top = stack[stack.length - 1];
-      if (top && top.obj && top.expectKey) pendingKey = text.slice(i + 1, j);
+      // Round 29 (H1): the key as JSON decodes it (`"\u0061"` and `"a"` are one key).
+      if (top && top.obj && top.expectKey) pendingKey = jsonKeyText(text.slice(i, j + 1));
       i = j;
       continue;
     }
@@ -2046,7 +2124,8 @@ function npmWholeDependencies(text) {
  * or every comparator in it (split at blanks and commas) is a wildcard (`*`, `x`, `X`, `x.x`, `*.*`,
  * `=*`, `^*`, `~*`, `>=*`, `v*`...).
  */
-const WILDCARD_COMPARATOR = /^(?:>=|==|=|\^|~>?|v)?[xX*](?:\.[xX*]){0,2}$/;
+// Round 29: `>=0`, `>=0.0`, `>=0.0.0` bound nothing either (every release is at least 0).
+const WILDCARD_COMPARATOR = /^(?:(?:>=|==|=|\^|~>?|v)?[xX*](?:\.[xX*]){0,2}|>=v?0(?:\.0){0,2})$/;
 function boundsNothing(v) {
   return String(v)
     .split("||")
@@ -2204,6 +2283,8 @@ function goDirectives(text, block = null) {
       block = null;
       continue;
     }
+    // Round 29 (H8): an empty require block on one line, as go reads it.
+    if (/^[a-z]+\s*\(\s*\)$/.test(line)) continue;
     const open = /^([a-z]+)\s*\($/.exec(line);
     if (open) {
       block = open[1];
@@ -2271,12 +2352,42 @@ function snippetTable(disk, place) {
  * names (pnpm catalogs keep their section either way), and `place` is where it starts in the file
  * on disk (-1 when unknown), which says what section, table or block it sits in.
  */
+/**
+ * Round 29: a JSON text with JSONC's comments and trailing commas taken out (outside strings), the
+ * lenient reading of a file that is not strict JSON: used only to read what such a file declared,
+ * so an edit that repairs it is read as a change from those entries (the strict rule judges the
+ * file the edit makes, manifestSyntaxError).
+ */
+function jsoncAsJson(text) {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      const nl = text.indexOf("\n", i);
+      i = (nl < 0 ? text.length : nl) - 1;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end < 0 ? text.length : end + 1;
+    } else if (ch === ",") {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j])) j++;
+      if (text[j] !== "}" && text[j] !== "]") out += ch;
+    } else out += ch;
+  }
+  return out;
+}
 function declaredVersions(file, text, disk = () => null, place = -1, whole = false) {
   const out = new Map();
   if (typeof text !== "string" || !text) return out;
   const section = (s) => (whole ? s : null);
   if (file === "package.json") {
-    const deps = whole ? npmWholeDependencies(text) : null;
+    // Round 29: a whole file that is not strict JSON is read leniently (JSONC) for what it declared.
+    const deps = whole ? (npmWholeDependencies(text) ?? npmWholeDependencies(jsoncAsJson(text))) : null;
     if (deps) {
       for (const d of deps) put(out, d.name, d.section, d.spec);
       return out;
@@ -2285,8 +2396,10 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
     const sections = jsonSections(text);
     for (const m of text.matchAll(/"(@?[a-z0-9][\w.\-/]*)"\s*:\s*"([^"\n]{1,300})"/gi)) {
       tick();
+      // Round 29: the section first, so a value outside every dependency section (`"description"`) is never read as a version.
+      if (!npmDependency(sections(m.index), at(m.index), m[1], disk)) continue;
       const d = npmDeclared(m[1], m[2]);
-      if (d && npmDependency(sections(m.index), at(m.index), m[1], disk)) put(out, d.name, null, d.spec);
+      if (d) put(out, d.name, null, d.spec);
     }
   } else if (file === "Cargo.toml" || file === "pyproject.toml") {
     // A text with a string that never closes is not read: silence, never a guess.
@@ -2313,13 +2426,15 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
       }
     }
   } else if (file === "requirements.txt") {
+    // Round 29 (H4): the files of -r and -c are counted over the whole file read (siblings too), not per chain.
+    const seen = new Set();
     // pip joins a line that ends in a backslash with the next (`requests\` + `==2.0.0`).
     for (const line of text.replace(/\\\r?\n/g, "").split("\n")) {
       tick();
       // Round 25 (S1): `-r <file>` and `-c <file>` are read from disk, their lines judged as this file's.
       const inc = requirementsInclude(line);
       if (inc) {
-        if (whole) includeRequirements(out, inc, manifestFolder, 1, new Set());
+        if (whole) includeRequirements(out, inc, manifestFolder, 1, seen);
         continue;
       }
       const r = requirementLine(line);
@@ -2533,7 +2648,7 @@ function resolverSettings(file, text) {
       emit([...t, ...keys].join("."), value, tablesOf.has(table) ? instanceOf.get(table) : 0);
     }
   } else if (file === "package.json") {
-    if (!text.includes('"pnpm"') && !text.includes('"patchedDependencies"')) return out;
+    // Round 29 (H1): no raw-text test for a key before parsing: an escaped key is the same key.
     let doc = null;
     try {
       doc = JSON.parse(text.replace(/^\uFEFF/, ""));
@@ -2582,10 +2697,12 @@ function manifestSyntaxError(file, text) {
         else if (/[()]/.test(line)) return "go.mod";
         continue;
       }
-      const [word, ...rest] = line.split(/\s+/);
-      if (!GO_DIRECTIVES.has(word)) return "go.mod";
-      if (rest.join(" ") === "(") block = true;
-      else if (rest.length === 0 || /[()]/.test(rest.join(" "))) return "go.mod";
+      // Round 29 (H8): a block opened with no blank before its bracket, and an empty block, as go reads them.
+      const m = /^([a-z]+)\s*(\(\s*\)|\()?\s*(.*)$/.exec(line);
+      if (!m || !GO_DIRECTIVES.has(m[1])) return "go.mod";
+      if (m[2] === "(" && m[3] === "") block = true;
+      else if (m[2] !== undefined && m[2] !== "(" && m[3] === "") continue;
+      else if (m[2] !== undefined || m[3] === "" || /[()]/.test(m[3])) return "go.mod";
     }
     return block ? "go.mod" : null;
   }
@@ -2619,9 +2736,15 @@ function tomlValid(text) {
     }
     if (k(i) === "bare") {
       if (!BARE_VALUE.test(toks[i].v)) return false;
+      const first = toks[i].v;
       i++;
-      // A float (1.5) or a date-time with a space (1979-05-27 07:32:00) runs over tokens.
-      while ((k(i) === "." && k(i + 1) === "bare") || (k(i) === "bare" && BARE_VALUE.test(toks[i].v))) i += k(i) === "." ? 2 : 1;
+      // Round 29 (H8): a float (1.5, one dot), or a local date and a time apart by a space
+      // (1979-05-27 07:32:00), or a date-time's fraction of a second; any other run of bare words is not TOML.
+      if (k(i) === "." && k(i + 1) === "bare" && /^[+-]?\d[\d_]*$/.test(first) && /^\d[\d_]*(?:[eE][+-]?\d+)?$/.test(toks[i + 1].v)) i += 2;
+      else if (k(i) === "bare" && /^\d{4}-\d{2}-\d{2}$/.test(first) && /^\d{2}:\d{2}/.test(toks[i].v)) {
+        i++;
+        if (k(i) === "." && k(i + 1) === "bare" && /^\d/.test(toks[i + 1].v)) i += 2;
+      } else if (k(i) === "." && k(i + 1) === "bare" && /^\d{4}-\d{2}-\d{2}T/.test(first)) i += 2;
       return true;
     }
     if (++depth > MAX_NESTING) return false;
@@ -2736,28 +2859,7 @@ function wholeFileChangesOf(file, before, after) {
       break;
     }
   }
-  if (file === "Cargo.toml" || file === "pyproject.toml") {
-    // A TOML escape (`"smallve\u0063"`, `["dependencie\u0073"]`, `"1.6.\u0030"`, a line-ending
-    // backslash in `"""`) is not decoded here: a new or changed line that holds a backslash in a
-    // basic string or quoted key is held as not read; an unchanged one never is (fifth independent
-    // check, G3b). Literal strings in single quotes have no escapes and are read as they are.
-    const was = tomlEscapeLines(before);
-    if ([...tomlEscapeLines(after)].some((line) => !was.has(line))) {
-      refuse(
-        `a ${file} line with a backslash escape in a double-quoted string or key, which this hook does not decode`,
-        "Write each dependency's name and version without escapes, and any other value that needs a backslash as a literal string in single quotes ('C:\\path', '\\d+'), which has no escapes: the hook then reads the file, and the versions it sets are judged as in any other edit.",
-      );
-    }
-    // A multi-line string (`"""` or `'''`) opened on a new or changed line in a dependency
-    // context (`package = """\nserde"""`) is not read either (sixth independent check, R8-5).
-    const opened = tomlMultilineOpens(before);
-    if ([...tomlMultilineOpens(after)].some((line) => !opened.has(line))) {
-      refuse(
-        `a ${file} line in a dependency table or a dependency key that opens a multi-line string (""" or '''), which this hook does not read`,
-        `Write each dependency's name and version as a one-line string ("1.2.3" or '1.2.3'), with no multi-line string in a dependency table or key: the hook then reads the file, and the versions it sets are judged as in any other edit.`,
-      );
-    }
-  }
+  // Round 29: TOML escapes and multi-line strings are decoded by the reader (tomlString): no line is held for them.
   if (file === "requirements.txt") {
     // Round 25 (S1): a new option line that may change where or which release pip resolves is held.
     const was = requirementOptions(before, manifestFolder);
@@ -2771,80 +2873,6 @@ function wholeFileChangesOf(file, before, after) {
   return diffVersions(versionsOf(before), versionsOf(after), specKey(file));
 }
 
-/**
- * The lines of a TOML text (trimmed) that hold a backslash inside a basic string or a quoted key
- * (`"..."` or `"""..."""`), read in one pass: comments and literal strings ('...', '''...''')
- * hold no escape.
- */
-function tomlEscapeLines(text) {
-  const out = new Set();
-  if (typeof text !== "string" || !text.includes("\\")) return out;
-  const lines = text.split("\n");
-  let state = ""; // "" | '"' | '"""' | "'" | "'''"
-  for (const raw of lines) {
-    tick();
-    const line = raw.replace(/\r$/, "");
-    let escaped = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (state === "") {
-        if (ch === "#") break;
-        if (line.startsWith('"""', i)) (state = '"""'), (i += 2);
-        else if (line.startsWith("'''", i)) (state = "'''"), (i += 2);
-        else if (ch === '"' || ch === "'") state = ch;
-      } else if (state === '"' || state === '"""') {
-        if (ch === "\\") {
-          escaped = true;
-          i++;
-        } else if (state === '"' && ch === '"') state = "";
-        else if (state === '"""' && line.startsWith('"""', i)) (state = ""), (i += 2);
-      } else if (state === "'" && ch === "'") state = "";
-      else if (state === "'''" && line.startsWith("'''", i)) (state = ""), (i += 2);
-    }
-    // A one-line string never runs past its line.
-    if (state === '"' || state === "'") state = "";
-    if (escaped) out.add(line.trim());
-  }
-  return out;
-}
-
-/** A TOML section or key that holds dependencies (Cargo's tables, PEP 621 / 735, Poetry, uv, build-system). */
-const TOML_DEPENDENCY_CONTEXT = /dependenc|requires|requirements|constraint|override|\bpatch\b|\breplace\b|\.sources\b/i;
-
-/**
- * The lines of a TOML text (trimmed) that open a multi-line string (`"""` or `'''`) in a dependency
- * context: a section whose header, or a key on that line, matches TOML_DEPENDENCY_CONTEXT. One
- * pass; comments and one-line strings are skipped as in tomlEscapeLines.
- */
-function tomlMultilineOpens(text) {
-  const out = new Set();
-  if (typeof text !== "string" || (!text.includes('"""') && !text.includes("'''"))) return out;
-  let state = "";
-  let section = "";
-  for (const raw of text.split("\n")) {
-    tick();
-    const line = raw.replace(/\r$/, "");
-    if (state === "" && /^\s*\[/.test(line)) section = line.trim().slice(0, 256);
-    let opens = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (state === "") {
-        if (ch === "#") break;
-        if (line.startsWith('"""', i)) (state = '"""'), (i += 2), (opens = true);
-        else if (line.startsWith("'''", i)) (state = "'''"), (i += 2), (opens = true);
-        else if (ch === '"' || ch === "'") state = ch;
-      } else if (state === '"' || state === '"""') {
-        if (ch === "\\") i++;
-        else if (state === '"' && ch === '"') state = "";
-        else if (state === '"""' && line.startsWith('"""', i)) (state = ""), (i += 2);
-      } else if (state === "'" && ch === "'") state = "";
-      else if (state === "'''" && line.startsWith("'''", i)) (state = ""), (i += 2);
-    }
-    if (state === '"' || state === "'") state = "";
-    if (opens && (TOML_DEPENDENCY_CONTEXT.test(section) || TOML_DEPENDENCY_CONTEXT.test(line.slice(0, Math.max(0, line.indexOf("="))).slice(0, 256)))) out.add(line.trim());
-  }
-  return out;
-}
 
 const ECOSYSTEM = {
   "package.json": "npm",
@@ -3267,66 +3295,100 @@ function configInert(config, key) {
     return bare === x;
   });
 }
-/** Round 25b: a config file's keys as { key: value text }, or null when it cannot be read (a TOML error, a lone CR). */
+/**
+ * Round 25b, round 29 (H0): a config file's keys as { key: value text }, or null when it cannot be
+ * read with certainty. Each format has a strict reader: a line it cannot classify makes the file not
+ * read. Every format: a lone CR line end, and a blank other than space, tab, CR and LF (a form feed,
+ * NBSP, U+3000, a byte order mark past the start), are not read.
+ * ini (.npmrc, pip.conf, pip.ini): a line is blank, a comment (# or ; first), a [section] header or
+ * key=value (key = value), with no leading blank, no `\` continuation and no # or ; inside the value;
+ * pip's documented multi-line keys (extra-index-url, find-links, trusted-host, no-binary,
+ * only-binary) take continuation lines indented by spaces.
+ * yarnrc (Yarn 1): `key value` lines, no leading blank.
+ * yaml (.yarnrc.yml): the plain-line grammar of pnpm-workspace.yaml (no anchor, alias, tag, flow or
+ * second document), indentation by spaces only, an indented line only inside a block a `key:` line
+ * opened.
+ * toml: the strict TOML walk (tomlValid).
+ */
+const PIP_MULTILINE_KEYS = new Set(["extra-index-url", "find-links", "trusted-host", "no-binary", "only-binary"]);
 function configKeys(config, text) {
   const out = new Map();
   if (/\r(?!\n)/.test(text)) return null;
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const body = text.replace(/^﻿/, "");
+  if (UNUSUAL_BLANK.test(body.replace(/\t/g, " "))) return null;
+  const lines = body.split(/\r?\n/);
   if (config.format === "ini") {
     let section = "";
+    let last = null;
     for (const raw of lines) {
       const line = raw.trim();
-      if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+      if (!line) continue;
+      if (/^\s/.test(raw)) {
+        // pip's continuation lines, for its multi-line keys only, indented by spaces.
+        if (config.name !== ".npmrc" && last !== null && PIP_MULTILINE_KEYS.has(last.split(".").pop()) && /^ +\S/.test(raw) && !/[#;\\]/.test(line)) {
+          out.set(last, `${out.get(last)}\n${line}`);
+          continue;
+        }
+        return null;
+      }
+      if (line.startsWith("#") || line.startsWith(";")) {
+        last = null;
+        continue;
+      }
       const head = /^\[([^\]]+)\]$/.exec(line);
       if (head) {
         section = head[1].trim().toLowerCase();
+        last = null;
         continue;
       }
       const eq = line.indexOf("=");
-      if (eq <= 0) return null;
+      if (eq <= 0 || line.endsWith("\\")) return null;
+      const value = line.slice(eq + 1).trim();
+      if (/[#;]/.test(value) && !/^"[^"]*"$/.test(value)) return null;
       const key = line.slice(0, eq).trim().toLowerCase();
+      if (!/^[@\w./:-]+$/.test(key.replace(/\[\]$/, ""))) return null;
       const full = config.name === ".npmrc" ? key : `${section || "global"}.${key}`;
-      out.set(full, line.slice(eq + 1).trim());
+      out.set(full, value);
+      last = full;
     }
     return out;
   }
   if (config.format === "yarnrc") {
     for (const raw of lines) {
       const line = raw.trim();
-      if (!line || line.startsWith("#")) continue;
-      const m = /^("[^"]+"|\S+)\s+(.*)$/.exec(line);
-      if (!m) return null;
+      if (!line || (line.startsWith("#") && raw.startsWith("#"))) continue;
+      if (/^\s/.test(raw)) return null;
+      const m = /^("[^"]+"|[^\s"#]+)\s+(.*)$/.exec(line);
+      if (!m || m[2].endsWith("\\")) return null;
       out.set(m[1].replace(/"/g, "").toLowerCase(), m[2].trim());
     }
     return out;
   }
   if (config.format === "yaml") {
+    if (pnpmUnplainLine(body) !== null) return null;
     let current = null;
+    let open = false;
     for (const raw of lines) {
       if (!raw.trim() || raw.trim().startsWith("#")) continue;
-      if (/^\S/.test(raw)) {
-        const m = /^("?[^":#]+"?)\s*:(.*)$/.exec(raw);
+      const lead = /^[ \t]*/.exec(raw)[0];
+      if (lead.includes("\t")) return null;
+      if (raw.trim() === "---") return null;
+      if (lead === "") {
+        const m = /^("[^"]+"|'[^']+'|[^\s"':#][^:#]*?)\s*:(?:\s(.*)|)$/.exec(raw.trimEnd());
         if (!m) return null;
-        current = m[1].replace(/"/g, "").trim().toLowerCase();
-        out.set(current, m[2].trim());
-      } else if (current === null) return null;
+        current = m[1].replace(/^["']|["']$/g, "").trim().toLowerCase();
+        const value = (m[2] ?? "").trim();
+        out.set(current, value);
+        open = value === "";
+      } else if (current === null || !open) return null;
       else out.set(current, `${out.get(current)}\n${raw.trimEnd()}`);
     }
     return out;
   }
   if (config.format === "toml") {
-    // Round 26b (F12): a strict reading: outside an open array or inline table every line is a
-    // [table] or [[table]] header, a key = value line, a comment or blank; anything else is not read.
-    let depth = 0;
-    for (const raw of lines) {
-      const line = raw.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""').replace(/#.*$/, "").trim();
-      if (depth === 0 && line && !/^\[\[?[^\][]+\]\]?$/.test(line) && !/^[A-Za-z0-9_."-][A-Za-z0-9_." -]*=/.test(line)) return null;
-      for (const ch of line) depth += ch === "[" || ch === "{" ? 1 : ch === "]" || ch === "}" ? -1 : 0;
-      if (/^\[\[?[^\][]+\]\]?$/.test(line)) depth = 0;
-      if (depth < 0) return null;
-    }
-    if (depth !== 0) return null;
-    const entries = tomlAssignments(text, []);
+    // Round 26b (F12), round 29 (H0): the strict TOML walk; any other line is not read.
+    if (!tomlValid(body)) return null;
+    const entries = tomlAssignments(body, []);
     if (!entries) return null;
     for (const { table, keys, value } of entries) {
       if (!keys) return null;
@@ -3594,8 +3656,12 @@ export function simpleCommands(line, dialect, redirects = null, dropped = null, 
       // (`& "C:\Program Files\nodejs\npm.cmd" i x@1` went ahead unread in the 6.5.1 candidate).
       // Round 15 (H8b): in bash a backslash is special inside double quotes only before $ ` " \ or a
       // newline (or the closing quote it would escape); `\n` there is two literal characters.
-      if (dialect === "powershell" ? /[$`]/.test(inner) : /[$`]|\\[$`"\\\n]|\\$/.test(inner)) return null;
-      word = (word ?? "") + inner;
+      // Round 29: in bash a plain variable inside double quotes (`"$X"`, `"${X}"`, `"$@"`) is kept as an
+      // opaque NUL in the word: a data program's text stays text, and no reader takes such a word for
+      // a verb or a package (it is not read there); a substitution or a backquote is still not read.
+      const opaque = dialect === "powershell" ? inner : inner.replace(/\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\}|[@*#?$!0-9])/g, "\u0000");
+      if (dialect === "powershell" ? /[$`]/.test(inner) : /[$`]|\\[$`"\\\n]|\\$/.test(opaque)) return null;
+      word = (word ?? "") + opaque;
       i = end;
     } else if (ch === " " || ch === "\t") {
       endWord();
@@ -5368,14 +5434,17 @@ function configSourceToken(manager, token) {
   if (manager === "npm" || manager === "pnpm") {
     const name = token.replace(/^--/, "");
     if (token.startsWith("--") && name.length >= 2 && ["userconfig", "globalconfig"].some((k) => k.startsWith(name))) return true;
-    if (manager === "pnpm" && token.startsWith("--config.")) return true;
   }
-  if (manager === "uv") return token === "--config-file";
-  if (manager === "cargo") return token === "--config" || /^-z/.test(token);
-  if (manager === "yarn") return token === "--use-yarnrc";
-  if (manager === "bun") return token === "--config";
-  if (manager === "go") return token === "-modfile" || token === "--modfile";
-  return false;
+  // Round 29 (H2): every option on CONFIG_SOURCE_OPTIONS is a detector token of its manager, read
+  // from the table (lower case, as the detector reads: "--config.<key>" a prefix, "-Z" any -Z flag,
+  // Go's single-dash options also with two dashes).
+  const listed = Object.hasOwn(CONFIG_SOURCE_OPTIONS, manager) ? CONFIG_SOURCE_OPTIONS[manager] : [];
+  return listed.some((o) => {
+    const opt = o.toLowerCase();
+    if (opt.endsWith("<key>")) return token.startsWith(opt.slice(0, -5));
+    if (opt === "-z") return token.startsWith("-z");
+    return token === opt || (manager === "go" && token === "-" + opt);
+  });
 }
 /** A detector token: a run of name characters (`npm@10.9.2` is `npm` and `10.9.2`), or a line end. */
 const DETECT_TOKEN = /[a-z0-9._+-]+|[\n\r]/g;
@@ -6174,6 +6243,13 @@ function accountCommand(words, dialect, depth, exempt = true) {
   if (depth > MAX_WRAPS) return `a command more than ${MAX_WRAPS} wrappers deep`;
   // A command with no hit has nothing to account for; one whose program takes the words as data neither.
   if (exempt && dataCommand(words)) return null;
+  // Round 29: a variable kept opaque inside double quotes (a NUL in its word) on a command the
+  // detector names: the word may be a verb, a package or an option the hook cannot see.
+  if (detectsInWords(words) && words.some((w) => String(w).includes("\u0000"))) {
+    // The same part and remedy as a line the reader cannot take apart (accountLine).
+    const span = /${[^}]*}|$[A-Za-z_][A-Za-z0-9_]*|$[@*#?$!0-9]/.exec(accountRaw)?.[0];
+    return notReadAt("a command line this hook cannot take apart (a variable, a substitution, an escape, a quote or a bracket it does not read)", span ?? null, span ? "its value written out in single quotes, not a variable or substitution" : null);
+  }
   if (!detectsInWords(words)) {
     // Round 27 (E1): a runner fetch is read whether or not the detector names the command.
     const fetchBad = runnerFetches(words).bad;
@@ -6941,7 +7017,7 @@ const NAMED_OPTIONS = {
 const NAMED_TABLES = Object.fromEntries(Object.entries(NAMED_OPTIONS).map(([k, rows]) => [k, optionTable(rows.map((r) => r[0]).join(" "))]));
 export { NAMED_OPTIONS };
 // THE CONTRACT's constants (a1125-w2-hook-contract.test.ts asserts each exists and is exported).
-export { RUNNER_FETCH_FORMS, JS_MANAGERS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
+export { RUNNER_FETCH_FORMS, JS_MANAGERS, PNPM_INERT_KEYS, RUNNER_OPTIONS, MANAGER_GLOBAL_OPTIONS, CONFIG_SOURCE_OPTIONS, INDEX_TABLE_KEYS, NPM_OPTIONS, INERT_SETTING, MANAGERS, VERBS, MANIFESTS, MANIFEST_NAME_RULES, UNREAD_MANIFESTS, DATA_SPECS, SINK_SPECS, ADVICE_VERBS, LEDGER_WINDOW_MS, LATEST_WINDOW_MS, READ_BUDGET_MS, WALL_LIMIT_MS, WORKER_ABOVE_CHARS, SELF_LIMIT_MS, MAX_INPUT_CHARS, MAX_PARSE_CHARS, MAX_ACCOUNT_CHARS, MAX_MANIFEST_BYTES, MAX_LEDGER_BYTES, PROJECT_DEPTH, MIN_VERDICT_SERVER, OWN_SOURCE_FORMS, PATH_LAUNCHERS, REQUIREMENTS_DEPTH, REQUIREMENTS_FILES, CONFIG_WRITE_VERBS, INERT_CONFIG_KEYS, FETCH_VERBS, INERT_MANIFEST_KEYS, REQUIREMENTS_INERT_OPTIONS, CARGO_ENTRY_KEYS, CONFIG_FILES, CONFIG_INERT_KEYS, CALL_PIECE_MAX, CMD_SPECIAL, CONFIG_READERS, BUILDS_COMMAND, manifestKind, callData, windowsPath, namesDataSegment };
 
 /** Where the manager's own arguments start in `words` (after the program, or after `-m pip`). */
 function managerStart(key, words) {
@@ -7332,7 +7408,8 @@ function managerExpansion(command, dialect = "bash", beforeVerb = false) {
   const isExpansion = (w) => EXPANSION.test(w) || (dialect === "powershell" && SPLAT.test(w));
   // The commands of the line split at ; & | line ends, and the parentheses and braces of a subshell or group.
   for (const raw of String(command).split(/[;&|\n\r]+|(?<![$@])[(){}]/)) {
-    const words = raw.trim().split(/\s+/).filter(Boolean).map((w) => w.replace(/^["']+|["']+$/g, "") || w);
+    const rawWords = raw.trim().split(/\s+/).filter(Boolean);
+    const words = rawWords.map((w) => w.replace(/^["']+|["']+$/g, "") || w);
     // THE walk the reader uses (commandStart: assignments, keywords, PREFIXES with their arities);
     // a prefix option it does not know: the first manager or runner word stands for the command.
     let i = commandStart(words);
@@ -7362,7 +7439,35 @@ function managerExpansion(command, dialect = "bash", beforeVerb = false) {
     let seen = 0;
     let verb = null;
     let install = false;
-    for (const w of words.slice(i + 1)) {
+    // Round 29: an expansion that is the value of a global option of known arity (npm's own table,
+    // MANAGER_GLOBAL_OPTIONS) cannot become the verb: it is held only when the verb then installs,
+    // fetches or configures (`pnpm --filter $PKG build` goes ahead, `npm --prefix $P i x` does not).
+    let valueExpansion = false;
+    const rest = words.slice(i + 1);
+    const rawRest = rawWords.slice(i + 1);
+    // A value that stays one word: a double-quoted bash expansion, or a PowerShell variable (not a
+    // splat). An unquoted bash expansion is split into words, which may hold a verb: not read.
+    const oneWord = (r) => (dialect === "powershell" ? !SPLAT.test(rest[r] ?? "") : /^"/.test(rawRest[r] ?? ""));
+    const takesValue = (w, next) => {
+      if (!manager || !w.startsWith("-")) return false;
+      if (manager === "npm") return npmOption(w.replace(/=.*$/s, ""), next) === "value";
+      return MANAGER_GLOBAL_OPTIONS[manager]?.values.includes(w.replace(/=.*$/s, "")) ?? false;
+    };
+    for (let r = 0; r < rest.length; r++) {
+      const w = rest[r];
+      if (seen === 0 && !runner && w.startsWith("-") && takesValue(w, rest[r + 1])) {
+        if (w.includes("=")) {
+          if (isExpansion(w)) {
+            if (!oneWord(r)) return words.slice(i).join(" ");
+            valueExpansion = true;
+          }
+        } else if (isExpansion(rest[r + 1] ?? "")) {
+          if (!oneWord(r + 1)) return words.slice(i).join(" ");
+          valueExpansion = true;
+          r++;
+        } else r++;
+        continue;
+      }
       if (isExpansion(w)) {
         // Round 28 (G5): `beforeVerb`: only an expansion before the first word (an option's value included).
         if (beforeVerb ? seen === 0 : seen < need || install) return words.slice(i).join(" ");
@@ -7370,6 +7475,10 @@ function managerExpansion(command, dialect = "bash", beforeVerb = false) {
       }
       if (w.startsWith("-")) continue;
       seen++;
+      if (valueExpansion && manager) {
+        const v = w.toLowerCase();
+        if (isManagerVerb(manager, v) || (RUNNER_SUBCOMMANDS[manager] ?? []).includes(manager === "npm" ? (npmCommand(v) ?? v) : v)) return words.slice(i).join(" ");
+      }
       if (beforeVerb) break;
       if (seen === 1 && manager) {
         verb = w.toLowerCase();
@@ -7380,6 +7489,7 @@ function managerExpansion(command, dialect = "bash", beforeVerb = false) {
       }
       if (seen >= need && !install) break;
     }
+    if (valueExpansion && seen === 0) return words.slice(i).join(" ");
   }
   return null;
 }
@@ -8250,7 +8360,7 @@ function denialFor(introduced, ledger, dir, what) {
  */
 const LEDGER_MENTION = /check-ledger(?!\.(?:d\.)?(?:test\.)?[cm]?[jt]sx?\b)/;
 /** Programs that only show a file or a folder: one of them, alone on the line, may name the ledger. */
-const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "more", "wc", "get-content", "gc", "ls", "dir", "get-childitem", "gci", "du"]);
+const LEDGER_READ_COMMANDS = new Set(["cat", "type", "head", "tail", "less", "more", "wc", "get-content", "gc", "ls", "dir", "get-childitem", "gci", "du", "grep", "select-string", "sls"]);
 
 /**
  * A call's raw text in one spelling of paths: case folded, `\` read as `/`, `\\?\` stripped, a
@@ -8568,6 +8678,9 @@ function judgeCall(input, env, now) {
     const spec = String(c.spec).trim();
     // A version or constraint past its bound is held as not read, never dropped (it was in round 2).
     if (specTooLong(spec)) refuse(specTooLong(spec));
+    // Round 29: a range that bounds nothing (`>=0`, `>=0.0.0`, `*.x`) is the reading latest in a command
+    // too (P3); `*` written in a command stays the reading `*`.
+    else if (NAME_TEXT.test(c.name) && !c.tag && !c.url && spec !== "*" && spec.toLowerCase() !== LATEST && specText(c.spec) === spec && boundsNothing(spec)) changes.push({ ...c, spec: LATEST });
     else if (NAME_TEXT.test(c.name) && (specText(c.spec) === spec || (c.tag && isDistTag(spec)) || c.url)) changes.push(c);
     else if (String(c.name).length > 214) refuse("a package name over 214 characters");
   }
@@ -8855,11 +8968,11 @@ const INSTALL_ADVICE = "The package manager decides the releases actually instal
  * fetch what a changed manifest asks for. npm's words are read through its own abbreviations.
  */
 const ADVICE_VERBS = new Map([
-  ["pnpm", new Set(["add", "install", "i", "up", "update", "upgrade", "link", "ln", "audit", "dedupe"])],
-  ["yarn", new Set(["add", "install", "up", "upgrade", "link", "dedupe"])],
+  ["pnpm", new Set(["add", "install", "i", "up", "update", "upgrade", "link", "ln", "audit", "dedupe", "fetch", "import"])],
+  ["yarn", new Set(["add", "install", "up", "upgrade", "upgrade-interactive", "link", "dedupe"])],
   ["bun", new Set(["add", "a", "install", "i", "update", "link"])],
   ["pip", new Set(["install"])],
-  ["uv", new Set(["add", "sync", "install", "lock", "compile"])],
+  ["uv", new Set(["add", "sync", "install", "lock", "compile", "upgrade"])],
   ["poetry", new Set(["add", "install", "update", "sync", "lock"])],
   ["cargo", new Set(["add", "install", "update", "fetch", "build", "b", "run", "r", "test", "t", "generate-lockfile"])],
   ["go", new Set(["get", "install", "download", "tidy", "sync"])],

@@ -171,8 +171,10 @@ describe("D5: a manager word in the arguments of a program known to take text as
     expect(run(command).decision).toBe("allow");
   });
 
-  it("a line this hook cannot take apart is held, with a way through: single quotes", () => {
-    expect(run('echo "$HOME: npm install"').decision).toBe("deny");
+  // Round 29: a plain variable inside double quotes is an opaque part of a data program's text.
+  it("a variable inside double quotes in a data program's text goes ahead; a substitution there is held", () => {
+    expect(run('echo "$HOME: npm install"').decision).toBe("allow");
+    expect(run('echo "$(whoami): npm install"').decision).toBe("deny");
     expect(run("echo '$HOME: npm install'").decision).toBe("allow");
   });
 });

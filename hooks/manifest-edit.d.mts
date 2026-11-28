@@ -104,3 +104,5 @@ export const INDEX_TABLE_KEYS: Readonly<Record<string, readonly string[]>>;
 export const NPM_OPTIONS: readonly string[];
 /** Round 28 (F11): the JavaScript package managers an npm-family runner may run (their own command is read). */
 export const JS_MANAGERS: ReadonlySet<string>;
+/** Round 29 (H3): the pnpm-workspace.yaml settings that put no registry release in the lockfile. */
+export const PNPM_INERT_KEYS: ReadonlySet<string>;
