@@ -5,19 +5,16 @@
  * that names one; G4 CPU is bounded (once per distinct word); G5 the minors. Stubbed fetch over a canned world:
  * zqx-vuln-py 1.0.0 critical, zqxcrit4 1.0.0 critical, zqx-vuln-rs 1.0.0 critical, github.com/zqxevil/mod v1.0.0 critical.
  */
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { manifestPairs, pep508, unreadCommandLines } from "../tools/briefing-command-check.js";
 import { callBudgetMs, runWithCallBudget, WORD_SCAN_CAP } from "../call-budget.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
+import { childCpu } from "./helpers/child-cpu.js";
 
-// A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
-// interrupted by the test timeout (a macOS CI job sat in one of these for 21 minutes until it was cancelled).
-const CHILD_TIMEOUT_MS = 120_000;
+// The child-CPU cases run through helpers/child-cpu.ts (its wall timeout, environment, exit and folder are said there).
 
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
@@ -127,17 +124,8 @@ describe("G4: CPU is bounded", () => {
   const cases = recipes.filter((r) => r.unit).map((r) => ({ id: r.id, task: `${r.head ?? ""}${r.unit!.repeat(Math.ceil(r.length! / r.unit!.length)).slice(0, r.length)}` }));
   it.skipIf(!existsSync(dist))("the reviewer's slow inputs each cost under 3 s of child CPU", () => {
     for (const c of cases) {
-      const script = `
-        import { readFileSync } from "node:fs";
-        const { executeWhatShouldIKnow } = await import(${JSON.stringify(pathToFileURL(dist).href)});
-        process.env.FOURDA_OFFLINE = "true";
-        const task = readFileSync(0, "utf8");
-        const t0 = process.cpuUsage();
-        await executeWhatShouldIKnow(null, { task }, null);
-        const u = process.cpuUsage(t0);
-        console.log((u.user + u.system) / 1000);`;
       // The task goes in on stdin: a 199 KB environment value is over Linux's limit for one string (E2BIG).
-      const ms = Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input: c.task, maxBuffer: 1 << 24, timeout: CHILD_TIMEOUT_MS }).trim().split("\n").pop());
+      const [ms] = childCpu({ input: c.task, calls: "(task) => [{ task }]" });
       expect(ms, c.id).toBeLessThan(3000);
     }
   }, 300_000);

@@ -5,21 +5,18 @@
  * every reader is one pass, capped, and checks the deadline. P5 "a command this briefing does not read" in two exact
  * cases only. P7 the "split the task" text is reachable over stdio. Stubbed fetch over a canned world.
  */
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow, whatShouldIKnowTool } from "../tools/what-should-i-know.js";
 import { manifestPairs, pep508, requirementsPairs, strictEvidence, unreadCommandLines } from "../tools/briefing-command-check.js";
 import { MAX_SNIPPETS } from "../tools/briefing-snippets.js";
 import { TOOL_REGISTRY } from "../schema-registry.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
+import { childCpu as childCpuFigures } from "./helpers/child-cpu.js";
 import { resultText, serverEntry, stdioSession } from "./helpers/stdio-session.js";
 
-// A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
-// interrupted by the test timeout (a macOS CI job sat in one of these for 21 minutes until it was cancelled).
-const CHILD_TIMEOUT_MS = 120_000;
+// The child-CPU cases run through helpers/child-cpu.ts (its wall timeout, environment, exit and folder are said there).
 
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
@@ -140,18 +137,7 @@ describe("P5: a command this briefing does not read, two cases only", () => {
 
 describe("P4: CPU bounded on the reviewer's slow inputs and on every reader's trigger token", () => {
   const dist = path.resolve(__dirname, "../../dist/tools/what-should-i-know.js");
-  const childCpu = (task: string) => {
-    const script = `
-      import { readFileSync } from "node:fs";
-      const { executeWhatShouldIKnow } = await import(${JSON.stringify(pathToFileURL(dist).href)});
-      process.env.FOURDA_OFFLINE = "true";
-      const task = readFileSync(0, "utf8");
-      const t0 = process.cpuUsage();
-      await executeWhatShouldIKnow(null, { task, packages: [] }, null);
-      const u = process.cpuUsage(t0);
-      console.log((u.user + u.system) / 1000);`;
-    return Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input: task, maxBuffer: 1 << 24, timeout: CHILD_TIMEOUT_MS }).trim().split("\n").pop());
-  };
+  const childCpu = (task: string) => childCpuFigures({ input: task, calls: "(task) => [{ task, packages: [] }]" })[0];
   const recipes = JSON.parse(readFileSync(path.join(__dirname, "fixtures", "a1134-confirm", "slow-recipes.json"), "utf8")) as Array<{ id: string; unit: string; head?: string; length: number }>;
   const grow = (unit: string, length: number, head = "") => `${head}${unit.repeat(Math.ceil(length / unit.length)).slice(0, length)}`;
   it.skipIf(!existsSync(dist))("the ninth check's slow recipes: each under 3 s of child CPU (task on stdin)", () => {

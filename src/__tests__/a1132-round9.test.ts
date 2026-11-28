@@ -5,7 +5,6 @@
  * not read whole; E3 no remedy, the truth; E4 the minors. Stubbed fetch over a canned world (zqxcrit4 1.0.0 critical,
  * zqx-vuln-py 1.0.0 critical, certifi 2022.12.7 critical). The reviewer's own cases are vendored apart (a1132-confirm-review7).
  */
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,10 +12,9 @@ import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { RAW_SOURCE, STAYS_REVIEW } from "../tools/briefing-command-check.js";
 import { canonicalCommands } from "../tools/briefing-canonical.js";
 import { adv, createHarness, fixedIn, type Harness } from "./helpers/a1119-planner-harness.js";
+import { childCpu } from "./helpers/child-cpu.js";
 
-// A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
-// interrupted by the test timeout (a macOS CI job sat in one of these for 21 minutes until it was cancelled).
-const CHILD_TIMEOUT_MS = 120_000;
+// The child-CPU cases run through helpers/child-cpu.ts (its wall timeout, environment, exit and folder are said there).
 
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
@@ -159,15 +157,7 @@ describe("E4: minors", () => {
   });
   // Child CPU time on the built server (skipped where the suite runs unbuilt, as the MCP stdio tests are).
   it.skipIf(!existsSync(path.resolve(__dirname, "../../dist/tools/what-should-i-know.js")))("time: 45,000 lines of 'npm' with 100 dismissed words stays under 1.5 s of CPU (child process)", () => {
-    const script = `
-      const { executeWhatShouldIKnow } = await import(${JSON.stringify("file:///" + path.resolve(__dirname, "../../dist/tools/what-should-i-know.js").replace(/\\/g, "/"))});
-      process.env.FOURDA_OFFLINE = "true";
-      const task = Array(45000).fill("npm").join("\\n").slice(0, 199000);
-      const t0 = process.cpuUsage();
-      await executeWhatShouldIKnow(null, { task, packages: [], not_packages: Array.from({ length: 100 }, (_, i) => "w" + i) }, null);
-      const u = process.cpuUsage(t0);
-      console.log((u.user + u.system) / 1000);`;
-    const ms = Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: CHILD_TIMEOUT_MS }).trim().split("\n").pop());
+    const [ms] = childCpu({ input: "", calls: `() => [{ task: Array(45000).fill("npm").join("\\n").slice(0, 199000), packages: [], not_packages: Array.from({ length: 100 }, (_, i) => "w" + i) }]` });
     expect(ms).toBeLessThan(1500);
   }, 120_000);
   it.each(["npm it zqxok", "npm install-test zqxok"])("npm's %s is an install verb", (task) => {

@@ -6,19 +6,16 @@
  * package. R4 words from a requirements file pass the credential screen. R5 a file outside the project (real path)
  * or unreadable is said; file lines are labelled as such; group keys and manager names are never candidates.
  */
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import { requirementsPairs } from "../tools/briefing-command-check.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { childCpu } from "./helpers/child-cpu.js";
 
-// A child that hangs must fail its own case, not hold the whole suite: a synchronous child cannot be
-// interrupted by the test timeout (a macOS CI job sat in one of these for 21 minutes until it was cancelled).
-const CHILD_TIMEOUT_MS = 120_000;
+// The child-CPU cases run through helpers/child-cpu.ts (its wall timeout, environment, exit and folder are said there).
 
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
@@ -116,20 +113,8 @@ describe("R5 docs lane: a manager's own name and a dependency-group key are no c
 
 describe("R2: single characters repeated to 199,990: under 3 s of child CPU each", () => {
   const dist = path.resolve(__dirname, "../../dist/tools/what-should-i-know.js");
-  const run = (input: string) => {
-    const script = `
-      import { readFileSync } from "node:fs";
-      const { executeWhatShouldIKnow } = await import(${JSON.stringify(pathToFileURL(dist).href)});
-      process.env.FOURDA_OFFLINE = "true";
-      const { task, np } = JSON.parse(readFileSync(0, "utf8"));
-      for (const args of [{ task, packages: [] }, { task, packages: [], ...(np ? { not_packages: ["zqxfoo"] } : {}) }]) {
-        const t0 = process.cpuUsage();
-        await executeWhatShouldIKnow(null, args, null);
-        const u = process.cpuUsage(t0);
-        console.log((u.user + u.system) / 1000);
-      }`;
-    return execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input, maxBuffer: 1 << 24, timeout: CHILD_TIMEOUT_MS }).trim().split("\n").map(Number);
-  };
+  const run = (input: string) =>
+    childCpu({ input, calls: `(input) => { const { task, np } = JSON.parse(input); return [{ task, packages: [] }, { task, packages: [], ...(np ? { not_packages: ["zqxfoo"] } : {}) }]; }` });
   const CHARS = ["\n", "\r\n", " ", "\t", " ", "\f", "\v", "​", "`", "~", "#", "-", "=", "<", ">", "@", '"', "'", "\\", "(", ")", "[", "]", "{", "}", ",", "."];
   it.skipIf(!fs.existsSync(dist))("alone and between a word at each end, with packages [] and one not_packages word", () => {
     for (const c of CHARS) {

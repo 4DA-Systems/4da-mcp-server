@@ -6,11 +6,9 @@
  * project's configuration makes private gets dependency_check's own ledger record. U4 blanks are collapsed: a run of
  * blanks costs nothing. U5 the minors.
  */
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { executeWhatShouldIKnow, whatShouldIKnowTool } from "../tools/what-should-i-know.js";
 import { foldForNames, requirementsPairs, unreadCommandLines } from "../tools/briefing-command-check.js";
@@ -20,6 +18,7 @@ import { LEDGER_FILE, ledgerWritesSettled } from "../check-ledger.js";
 import { runDependencyCheck } from "../tools/dependency-check.js";
 import { screenValue } from "../output-screen.js";
 import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { childCpu as childCpuFigures } from "./helpers/child-cpu.js";
 
 let h: Harness;
 let live: Awaited<ReturnType<Harness["live"]>> | null = null;
@@ -141,20 +140,9 @@ describe("U4: blanks are collapsed; a run of blanks costs nothing", () => {
     expect(pep508(`zqx${"a".repeat(2_100)}==1`)).toBeNull();
   });
   const dist = path.resolve(__dirname, "../../dist/tools/what-should-i-know.js");
-  const childCpu = (input: string, root: string) => {
-    const script = `
-      import { readFileSync } from "node:fs";
-      const { executeWhatShouldIKnow } = await import(${JSON.stringify(pathToFileURL(dist).href)});
-      const { getLiveIntelligence } = await import(${JSON.stringify(pathToFileURL(path.resolve(__dirname, "../../dist/live-singleton.js")).href)});
-      process.env.FOURDA_OFFLINE = "true";
-      const { task } = JSON.parse(readFileSync(0, "utf8"));
-      const t0 = process.cpuUsage();
-      await executeWhatShouldIKnow(null, { task, packages: [], project_path: ${JSON.stringify(root)} }, null);
-      const u = process.cpuUsage(t0);
-      console.log((u.user + u.system) / 1000);
-      void getLiveIntelligence;`;
-    return Number(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", input, maxBuffer: 1 << 24, timeout: 120_000 }).trim().split("\n").pop());
-  };
+  // The project_path is given on purpose here (the harness's project).
+  const childCpu = (input: string, root: string) =>
+    childCpuFigures({ input, calls: `(input) => { const { task } = JSON.parse(input); return [{ task, packages: [], project_path: ${JSON.stringify(root)} }]; }` })[0];
   const SHAPES = [(b: string) => `requirements.txt\na${b}b`, (b: string) => `requirements.txt\nzqx-vuln-py${b}==${b}1.0.0${b};${b}python_version${b}>${b}"3"`, (b: string) => `Cargo.toml:\n\`\`\`toml\n[${b}dependencies${b}]\nzqx${b}=${b}"1.0"\n\`\`\``, (b: string) => `pyproject.toml:\n\`\`\`toml\n[project]\ndependencies${b}=${b}[${b}"zqx${b}>=${b}1"${b}]\n\`\`\``, (b: string) => `npm${b}install${b}zqx@1.0.0`, (b: string) => `Add zqx-vuln-py${b}==${b}1.0.0${b}to it.`];
   it.skipIf(!fs.existsSync(dist))("each reader's line shape with 3,000 / 6,000 / 50,000 blanks or tabs at each boundary: under 3 s of child CPU", () => {
     for (const shape of SHAPES)
