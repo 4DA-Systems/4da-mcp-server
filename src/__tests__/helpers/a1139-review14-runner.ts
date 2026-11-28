@@ -213,7 +213,7 @@ export function runReview14(sets: readonly string[]): void {
           const scanMalware = /"fastifyy"/.test(JSON.stringify(c.setup ?? {}));
           if (scanMalware) {
             expect(level, c.id).toBe("human_only");
-            expect(reason, c.id).toMatch(/fastifyy@1\.0\.1 installed, which is recorded as malware/);
+            expect(reason, c.id).toMatch(/fastifyy@1\.0\.1 \(in [^)]+\) installed, which is recorded as malware/);
           } else if (level === "safe_to_delegate") {
             expect(reason, c.id).toMatch(/nothing version-confirmed for the packages this task touches; \d+ project-wide finding/);
             expect((r.advisories ?? []).some((a: any) => a.scope === "project"), c.id).toBe(true);

@@ -272,6 +272,8 @@ export interface TreeDiscovery {
   skipped: Array<{ path: string; reason: SkipReason }>;
   /** Every lockfile found but not scanned (`skipped` may list fewer). */
   skippedCount: number;
+  /** Round 19, Q2: `skippedCount` by reason (every one counted, not only the listed ones). */
+  skippedByReason?: Partial<Record<SkipReason, number>>;
   /**
    * Of `skippedCount`, the files holding a merge conflict (reason `merge_conflict`, added by the
    * live layer: withMergeConflicts). lockfileProblemNotes words them, so discoveryNote does not.
@@ -851,6 +853,7 @@ function walkProjectTree(
   const budget = startWalkBudget(ignore);
   const skipped: TreeDiscovery["skipped"] = [];
   let skippedCount = 0;
+  const skippedByReason: Partial<Record<SkipReason, number>> = {};
   let visited = 0;
   let walkTruncated = false;
   let ignoredVisited = 0;
@@ -870,6 +873,7 @@ function walkProjectTree(
   };
   const noteSkipped = (lockPath: string, reason: SkipReason) => {
     skippedCount++;
+    skippedByReason[reason] = (skippedByReason[reason] ?? 0) + 1;
     if (skipped.length < MAX_LISTED_SKIPS) skipped.push({ path: lockPath, reason });
   };
   // Listed whether or not .gitignore names the file: a manifest nobody commits still declares what gets installed.
@@ -1081,6 +1085,7 @@ function walkProjectTree(
       maxProjects: limits.maxProjects,
       skipped,
       skippedCount,
+      skippedByReason,
       walkTruncated,
       ...(budget.stopped ? { walkStopped: "time_budget" as const } : {}),
       ...(ignoredWalkTruncated ? { ignoredWalkTruncated } : {}),

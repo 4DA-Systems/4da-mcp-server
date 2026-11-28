@@ -125,7 +125,24 @@ export const PROJECT_FINDINGS_LISTED = (n: number) =>
 /** Round 18b: the error text of a briefing that failed before it finished (index.ts): no level is given. */
 export const BRIEFING_FAILED = "what_should_i_know failed before it finished, so nothing about this task was checked: this is no assessment, and the task is not safe to delegate on it.";
 /** Round 18, N7: a "ready" scan that did not read every lockfile the walk found says how many it did not read. */
-export const NOT_SCANNED_LOCKFILES = (n: number) => `${n} lockfile${n === 1 ? "" : "s"} under ignored, excluded or test-fixture folders ${n === 1 ? "was" : "were"} not read, so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`;
+export const NOT_SCANNED_LOCKFILES = (by: number | { ignored: number; depth: number; projectLimit: number; outside: number; unreadable: number }) => {
+  const u = typeof by === "number" ? { ignored: by, depth: 0, projectLimit: 0, outside: 0, unreadable: 0 } : by;
+  const n = u.ignored + u.depth + u.projectLimit + u.outside + u.unreadable;
+  // Ignored, excluded or fixture folders alone: the round 18 sentence, unchanged.
+  if (n === u.ignored) return `${n} lockfile${n === 1 ? "" : "s"} under ignored, excluded or test-fixture folders ${n === 1 ? "was" : "were"} not read, so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`;
+  const parts = [
+    u.ignored > 0 ? `${u.ignored} under ignored, excluded or test-fixture folders` : "",
+    u.depth > 0 ? `${u.depth} deeper than the scan goes` : "",
+    u.projectLimit > 0 ? `${u.projectLimit} past the project limit` : "",
+    u.outside > 0 ? `${u.outside} behind a link outside the project` : "",
+    u.unreadable > 0 ? `${u.unreadable} in a folder that could not be listed` : "",
+  ].filter(Boolean);
+  return `${n} lockfile${n === 1 ? " was" : "s were"} found and not read (${parts.join(", ")}), so what ${n === 1 ? "it pins" : "they pin"} was not checked (lockfiles_not_scanned).`;
+};
+/** Round 19, M5: said in a safe reason whenever the scan withheld installed names the project's configuration makes private. */
+export const PRIVATE_INSTALLED = (n: number) => `${n} installed dependenc${n === 1 ? "y is" : "ies are"} private by the project's configuration and ${n === 1 ? "was" : "were"} not checked (vulnerability_scan lists ${n === 1 ? "it" : "them"}).`;
+/** Round 19, Q2: a lockfile the scan did not read for a bound or a link (not an ignored or fixture folder): the scan is incomplete. */
+export const SCAN_INCOMPLETE = "The scan is incomplete: it found lockfiles it did not read (deeper than it goes, past its project limit, behind a link outside the project, or in a folder it could not list), so it cannot vouch for the project. Pass project_path for the part you need.";
 /** Round 16, C3: said only when decisionConflictsFor found no conflict over the declared, the read and the installed names. */
 export const NO_DECISION_CONFLICT = "no recorded-decision conflict for this task";
 export const OUTSIDE_COVERAGE ="This briefing checks npm, PyPI, crates.io and Go packages: what the task installs through any other manager or tool is outside what this answer covers.";

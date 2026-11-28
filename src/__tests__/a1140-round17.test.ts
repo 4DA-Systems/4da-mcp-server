@@ -128,12 +128,12 @@ describe("C1: installed malware or a placeholder anywhere in the full scan holds
     expect(r.delegation_assessment.level, r.delegation_assessment.reason).toBe("human_only");
     const reason = String(r.delegation_assessment.reason);
     if (what === "placeholder") expect(reason).toContain(INSTALLED_PLACEHOLDER([`${name}@${version}`]));
-    else expect(reason).toMatch(new RegExp(`^This project has ${name.replace(/[.]/g, "\\.")}@${version.replace(/[.]/g, "\\.")}${kind === "drift" ? " \\(in node_modules; the lockfile pins 0\\.7\\.29\\)" : ""} installed, which is recorded as malware`));
+    else expect(reason).toMatch(new RegExp(`^This project has ${name.replace(/[.]/g, "\\.")}@${version.replace(/[.]/g, "\\.")}${kind === "drift" ? " \\(in node_modules of \\.; the lockfile pins 0\\.7\\.29\\)" : " \\(in [^)]+\\)"} installed, which is recorded as malware`));
     expect(reason).not.toMatch(/nothing version-confirmed|node_modules runs a vulnerable copy/);
     expect(brokenTextRules(r, args)).toEqual([]);
   }, 60_000);
   it("INSTALLED_MALWARE names the copy on disk", () => {
-    expect(INSTALLED_MALWARE(["uaparserjsq@0.7.28 (in node_modules; the lockfile pins 0.7.29)"])).toBe("This project has uaparserjsq@0.7.28 (in node_modules; the lockfile pins 0.7.29) installed, which is recorded as malware: a person must deal with that before any task is delegated.");
+    expect(INSTALLED_MALWARE(["uaparserjsq@0.7.28 (in node_modules of .; the lockfile pins 0.7.29)"])).toBe("This project has uaparserjsq@0.7.28 (in node_modules of .; the lockfile pins 0.7.29) installed, which is recorded as malware: a person must deal with that before any task is delegated.");
   });
 });
 

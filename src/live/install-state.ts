@@ -31,7 +31,9 @@ export function installFixFor(lockfilePath: string): InstallFixCommand | null {
   switch (path.basename(lockfilePath)) {
     case "pnpm-lock.yaml":
       return "pnpm install";
+    // Round 19, Q1: npm-shrinkwrap.json is a lockfile too (npm ci reads it).
     case "package-lock.json":
+    case "npm-shrinkwrap.json":
       return "npm ci";
     case "yarn.lock":
       return "yarn install";
@@ -97,6 +99,29 @@ export function readInstalledVersion(dir: string, name: string): string | null {
   return manifest ? readManifestVersion(manifest) : null;
 }
 
+/**
+ * Round 19, Q1: the direct dependencies a folder's package.json declares, in every section (dependencies, devDependencies,
+ * optionalDependencies, peerDependencies), as folder key -> package name: an npm alias (`"cart": "npm:qzx-cart-kit@1.0.2"`)
+ * is installed under its key (node_modules/cart), and is the package it names.
+ */
+function manifestDirect(dir: string): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    const pj = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf-8")) as Record<string, unknown>;
+    for (const section of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+      const deps = pj[section];
+      if (!deps || typeof deps !== "object") continue;
+      for (const [key, spec] of Object.entries(deps as Record<string, unknown>)) {
+        const alias = typeof spec === "string" ? /^npm:((?:@[^/@]+\/)?[^@]+)@/.exec(spec) : null;
+        if (!out.has(key)) out.set(key, alias ? alias[1] : key);
+      }
+    }
+  } catch {
+    // No readable package.json: the lockfile's own direct flags are all there is.
+  }
+  return out;
+}
+
 export interface InstallCheck {
   /** The direct deps with `installedVersion` filled in; a new array, inputs untouched. */
   resolved: ResolvedDependency[];
@@ -121,6 +146,8 @@ export function checkInstallState(
   dir: string,
   resolved: ResolvedDependency[],
   lockfilePath: string,
+  /** Round 19, Q1: the lockfile's versions by name, for a direct name (optional, peer) the resolved list does not hold. */
+  lockVersions: ReadonlyMap<string, string> = new Map(),
 ): InstallCheck {
   const nodeModules = path.join(dir, "node_modules");
   const signatures = new Map<string, FileSignature>([[nodeModules, fileSignature(nodeModules)]]);
@@ -142,34 +169,59 @@ export function checkInstallState(
 
   const drift: InstallDriftRecord[] = [];
   const driftAuditDeps: ResolvedDependency[] = [];
+  // Round 19, Q1: every section's names are direct (optional and peer too), each read under its own folder key.
+  const declared = manifestDirect(dir);
+  const keysOf = new Map<string, string[]>();
+  for (const [key, name] of declared) keysOf.set(name, [...(keysOf.get(name) ?? []), key]);
+  const seenKeys = new Set<string>();
   const checked = resolved.map((dep) => {
-    if (!dep.isDirect || dep.ecosystem !== "npm" || !dep.version) return dep;
-    const manifest = findInstalledManifest(dir, dep.name, chain);
+    if (dep.ecosystem !== "npm" || !dep.version) return dep;
+    const keys = (keysOf.get(dep.name) ?? (dep.isDirect ? [dep.name] : [])).filter((k) => !seenKeys.has(k));
+    if (keys.length === 0) return dep;
+    for (const k of keys) seenKeys.add(k);
+    let result: ResolvedDependency = dep;
+    for (const key of keys) result = driftOf(dep, key) ?? result;
+    return result;
+  });
+  // Round 19, Q1: a direct name of the manifest (an optionalDependency, a peerDependency) that the resolved list does not
+  // hold: compared with the lockfile's own version of it, for drift only.
+  for (const [key, name] of declared) {
+    if (seenKeys.has(key) || resolved.some((d) => d.name === name)) continue;
+    const version = lockVersions.get(name) ?? lockVersions.get(name.toLowerCase());
+    if (!version) continue;
+    seenKeys.add(key);
+    driftOf({ name, version, ecosystem: "npm", isDev: false, isDirect: true, devScopeKnown: true, target: null, platformActive: true, sourceDirs: [dir] }, key);
+  }
+  function driftOf(dep: ResolvedDependency, key: string): ResolvedDependency | null {
+    const lockVersion = dep.version;
+    const command = fix;
+    if (!lockVersion || !command) return null;
+    const manifest = findInstalledManifest(dir, key, chain);
     if (manifest) signatures.set(manifest, fileSignature(manifest));
     // A leading `v` is not part of the version: @upstash/* publish "v2.0.7",
     // which read as drift from the lockfile's 2.0.7 (audit L1), and would have
     // gone to OSV as "v2.0.7". The 4DA app drops it the same way.
     const raw = manifest ? readManifestVersion(manifest) : null;
     const installedVersion = raw ? raw.trim().replace(/^v(?=\d)/, "") : null;
-    if (installedVersion && installedVersion !== dep.version.replace(/^v(?=\d)/, "")) {
+    if (installedVersion && installedVersion !== lockVersion.replace(/^v(?=\d)/, "")) {
       drift.push({
         package: dep.name,
         dir,
-        lockfileVersion: dep.version,
+        lockfileVersion: lockVersion,
         installedVersion,
-        fix,
+        fix: command,
         isDev: dep.isDev,
       });
       driftAuditDeps.push({
         ...dep,
         version: installedVersion,
         installedVersion,
-        installDriftOf: dep.version,
-        installFix: fix,
+        installDriftOf: lockVersion,
+        installFix: command,
       });
     }
-    return { ...dep, installedVersion };
-  });
+    return { ...dep, installedVersion } as ResolvedDependency;
+  }
 
   return { resolved: checked, drift, driftAuditDeps, signatures };
 }

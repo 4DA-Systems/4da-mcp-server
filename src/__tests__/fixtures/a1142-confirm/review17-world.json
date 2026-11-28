@@ -1,0 +1,658 @@
+{
+ "_comment": "The canned public world for G7c. The proxy answers ONLY from this file and never forwards. A name that is not here does not exist (404 / empty), as a private name or a secret would not on the real registries. vulns: affected when introduced <= version < fixed (no fixed = every version). malware: true marks an OpenSSF-style malicious-package record.",
+ "npm": {
+  "zod": {
+   "versions": [
+    "3.23.8",
+    "3.24.1"
+   ]
+  },
+  "ky": {
+   "versions": [
+    "1.2.0",
+    "1.7.4"
+   ]
+  },
+  "p-throttle": {
+   "versions": [
+    "6.1.0",
+    "6.2.0"
+   ]
+  },
+  "hono": {
+   "versions": [
+    "4.6.3",
+    "4.6.14"
+   ]
+  },
+  "helmet": {
+   "versions": [
+    "7.1.0",
+    "8.0.0"
+   ]
+  },
+  "fastify": {
+   "versions": [
+    "4.28.1",
+    "5.2.0"
+   ]
+  },
+  "valibot": {
+   "versions": [
+    "0.42.1",
+    "1.0.0"
+   ]
+  },
+  "msw": {
+   "versions": [
+    "2.6.8",
+    "2.7.0"
+   ]
+  },
+  "papaparse": {
+   "versions": [
+    "5.4.1",
+    "5.5.0"
+   ]
+  },
+  "bullmq": {
+   "versions": [
+    "5.30.0",
+    "5.34.2"
+   ]
+  },
+  "drizzle-orm": {
+   "versions": [
+    "0.36.4",
+    "0.38.2"
+   ]
+  },
+  "undici": {
+   "versions": [
+    "5.8.0",
+    "5.28.4",
+    "6.21.0"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-g7c0-hhhh-0001",
+     "severity": "HIGH",
+     "fixed": "5.8.2",
+     "summary": "undici: request smuggling through a crafted header"
+    }
+   ]
+  },
+  "node-forge": {
+   "versions": [
+    "0.10.0",
+    "1.3.1"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-g7c0-cccc-0002",
+     "severity": "CRITICAL",
+     "fixed": "1.0.0",
+     "summary": "node-forge: signature verification bypass"
+    }
+   ]
+  },
+  "elliptic": {
+   "versions": [
+    "6.5.4",
+    "6.6.1"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-g7c0-cccc-0003",
+     "severity": "CRITICAL",
+     "fixed": "6.5.6",
+     "summary": "elliptic: private key extraction from malformed signatures"
+    }
+   ]
+  },
+  "fastifyy": {
+   "versions": [
+    "1.0.0",
+    "1.0.1"
+   ],
+   "downloads": 31,
+   "vulns": [
+    {
+     "id": "MAL-2026-90001",
+     "malware": true,
+     "summary": "Malicious code in fastifyy (npm)"
+    }
+   ]
+  },
+  "papaprse": {
+   "versions": [
+    "5.4.2"
+   ],
+   "downloads": 12,
+   "vulns": [
+    {
+     "id": "MAL-2026-90002",
+     "malware": true,
+     "summary": "Malicious code in papaprse (npm)"
+    }
+   ]
+  },
+  "undicii": {
+   "versions": [
+    "6.0.0"
+   ],
+   "downloads": 9,
+   "vulns": [
+    {
+     "id": "MAL-2026-90003",
+     "malware": true,
+     "summary": "Malicious code in undicii (npm)"
+    }
+   ]
+  },
+  "helmett": {
+   "versions": [
+    "7.1.0",
+    "7.1.1"
+   ],
+   "downloads": 17,
+   "vulns": [
+    {
+     "id": "MAL-2026-90004",
+     "malware": true,
+     "summary": "Malicious code in helmett (npm)"
+    }
+   ]
+  },
+  "express": {
+   "versions": [
+    "4.21.2",
+    "5.1.0"
+   ]
+  },
+  "lodash": {
+   "versions": [
+    "4.17.20",
+    "4.17.21"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-g7c0-hhhh-0005",
+     "severity": "HIGH",
+     "fixed": "4.17.21",
+     "summary": "lodash: command injection through template"
+    }
+   ]
+  },
+  "axios": {
+   "versions": [
+    "1.7.9"
+   ]
+  },
+  "dayjs": {
+   "versions": [
+    "1.11.13"
+   ]
+  },
+  "moment": {
+   "versions": [
+    "2.30.1"
+   ]
+  },
+  "typescript": {
+   "versions": [
+    "5.5.4",
+    "5.6.3",
+    "5.7.2"
+   ]
+  },
+  "pg": {
+   "versions": [
+    "8.13.1"
+   ]
+  },
+  "sharp": {
+   "versions": [
+    "0.33.5"
+   ]
+  },
+  "jsonwebtoken": {
+   "versions": [
+    "9.0.2"
+   ]
+  },
+  "dotenv": {
+   "versions": [
+    "16.4.7"
+   ]
+  },
+  "stripe": {
+   "versions": [
+    "17.4.0",
+    "17.5.0"
+   ]
+  },
+  "react": {
+   "versions": [
+    "18.3.1",
+    "19.0.0"
+   ]
+  },
+  "ioredis": {
+   "versions": [
+    "5.4.2"
+   ]
+  },
+  "redis": {
+   "versions": [
+    "4.7.0"
+   ]
+  },
+  "prisma": {
+   "versions": [
+    "6.1.0"
+   ]
+  },
+  "@prisma/client": {
+   "versions": [
+    "6.1.0"
+   ]
+  },
+  "vitest": {
+   "versions": [
+    "2.1.8"
+   ]
+  },
+  "csv-parse": {
+   "versions": [
+    "5.6.0"
+   ]
+  },
+  "pino": {
+   "versions": [
+    "9.6.0"
+   ]
+  },
+  "winston": {
+   "versions": [
+    "3.17.0"
+   ]
+  },
+  "qzx-evil-pkg": {
+   "versions": [
+    "1.0.0",
+    "1.0.1"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91001",
+     "malware": true,
+     "summary": "Malicious code in qzx-evil-pkg (npm)"
+    }
+   ]
+  },
+  "qzx-cart-kit": {
+   "versions": [
+    "1.0.0",
+    "1.0.1",
+    "1.0.2"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91002",
+     "malware": true,
+     "summary": "Malicious code in qzx-cart-kit (npm)",
+     "introduced": "1.0.1",
+     "fixed": "1.0.2"
+    }
+   ]
+  },
+  "qzx-ph-lib": {
+   "versions": [
+    "0.0.1-security",
+    "1.0.0"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91003",
+     "malware": true,
+     "summary": "Malicious code in qzx-ph-lib (npm)",
+     "fixed": "0.0.2"
+    }
+   ]
+  },
+  "qzx-vuln-kit": {
+   "versions": [
+    "2.0.0",
+    "2.0.1"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-qzx0-hhhh-0001",
+     "severity": "HIGH",
+     "fixed": "2.0.1",
+     "summary": "qzx-vuln-kit: prototype pollution"
+    }
+   ]
+  },
+  "@qzx/scoped-evil": {
+   "versions": [
+    "3.0.0"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91004",
+     "malware": true,
+     "summary": "Malicious code in @qzx/scoped-evil (npm)"
+    }
+   ]
+  },
+  "qzx-clean-kit": {
+   "versions": [
+    "1.0.0",
+    "1.1.0"
+   ],
+   "vulns": []
+  },
+  "qzx_sep.kit": {
+   "versions": [
+    "4.0.0",
+    "4.0.1"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-qzx0-hhhh-0002",
+     "severity": "HIGH",
+     "fixed": "4.0.1",
+     "summary": "qzx_sep.kit: injection"
+    }
+   ]
+  }
+ },
+ "PyPI": {
+  "flask": {
+   "versions": [
+    "3.0.3",
+    "3.1.0"
+   ]
+  },
+  "litestar": {
+   "versions": [
+    "2.12.1",
+    "2.13.0"
+   ]
+  },
+  "piccolo": {
+   "versions": [
+    "1.20.0",
+    "1.22.0"
+   ]
+  },
+  "hishel": {
+   "versions": [
+    "0.0.33",
+    "0.1.1"
+   ]
+  },
+  "beanie": {
+   "versions": [
+    "1.27.0",
+    "1.28.0"
+   ]
+  },
+  "ormar": {
+   "versions": [
+    "0.12.2",
+    "0.20.2"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-g7c0-cccc-0011",
+     "severity": "CRITICAL",
+     "fixed": "0.20.0",
+     "summary": "ormar: SQL injection through aggregate functions"
+    }
+   ]
+  },
+  "litestarr": {
+   "versions": [
+    "2.13.1"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-90011",
+     "malware": true,
+     "summary": "Malicious code in litestarr (PyPI)"
+    }
+   ]
+  },
+  "beaniee": {
+   "versions": [
+    "1.28.1"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-90012",
+     "malware": true,
+     "summary": "Malicious code in beaniee (PyPI)"
+    }
+   ]
+  },
+  "requests": {
+   "versions": [
+    "2.32.3"
+   ]
+  },
+  "httpx": {
+   "versions": [
+    "0.28.1"
+   ]
+  },
+  "pydantic": {
+   "versions": [
+    "2.10.4"
+   ]
+  },
+  "django": {
+   "versions": [
+    "5.1.4"
+   ]
+  },
+  "pyyaml": {
+   "versions": [
+    "6.0.2"
+   ]
+  },
+  "sqlalchemy": {
+   "versions": [
+    "2.0.36"
+   ]
+  },
+  "motor": {
+   "versions": [
+    "3.6.0"
+   ]
+  },
+  "pymongo": {
+   "versions": [
+    "4.10.1"
+   ]
+  },
+  "uvicorn": {
+   "versions": [
+    "0.34.0"
+   ]
+  },
+  "psycopg2-binary": {
+   "versions": [
+    "2.9.10"
+   ]
+  },
+  "boto3": {
+   "versions": [
+    "1.35.90"
+   ]
+  },
+  "qzx-py-evil": {
+   "versions": [
+    "1.0.0"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91011",
+     "malware": true,
+     "summary": "Malicious code in qzx-py-evil (PyPI)"
+    }
+   ]
+  },
+  "qzx-py-vuln": {
+   "versions": [
+    "1.0.0",
+    "1.0.1"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-qzx0-hhhh-0011",
+     "severity": "HIGH",
+     "fixed": "1.0.1",
+     "summary": "qzx-py-vuln: rce"
+    }
+   ]
+  }
+ },
+ "crates.io": {
+  "serde": {
+   "versions": [
+    "1.0.210",
+    "1.0.217"
+   ]
+  },
+  "tokio": {
+   "versions": [
+    "1.41.0",
+    "1.42.0"
+   ]
+  },
+  "anyhow": {
+   "versions": [
+    "1.0.94",
+    "1.0.95"
+   ]
+  },
+  "thiserror": {
+   "versions": [
+    "2.0.9"
+   ]
+  },
+  "serde_json": {
+   "versions": [
+    "1.0.134"
+   ]
+  },
+  "rmp-serde": {
+   "versions": [
+    "1.3.0"
+   ]
+  },
+  "smallvec": {
+   "versions": [
+    "1.6.0",
+    "1.6.1",
+    "1.13.2"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-g7c0-hhhh-0021",
+     "severity": "HIGH",
+     "fixed": "1.6.1",
+     "summary": "smallvec: buffer overflow in insert_many"
+    }
+   ]
+  },
+  "qzx-rs-evil": {
+   "versions": [
+    "0.1.0"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91021",
+     "malware": true,
+     "summary": "Malicious code in qzx-rs-evil (crates.io)"
+    }
+   ]
+  }
+ },
+ "Go": {
+  "github.com/pkg/errors": {
+   "versions": [
+    "v0.9.1"
+   ]
+  },
+  "github.com/go-chi/chi/v5": {
+   "versions": [
+    "v5.1.0",
+    "v5.2.0"
+   ]
+  },
+  "github.com/rs/zerolog": {
+   "versions": [
+    "v1.33.0"
+   ]
+  },
+  "golang.org/x/text": {
+   "versions": [
+    "v0.3.5",
+    "v0.3.8",
+    "v0.21.0"
+   ],
+   "vulns": [
+    {
+     "id": "GHSA-g7c0-hhhh-0031",
+     "severity": "HIGH",
+     "fixed": "0.3.8",
+     "summary": "golang.org/x/text: denial of service in language tag parsing"
+    }
+   ]
+  },
+  "example.org/qzx/evil": {
+   "versions": [
+    "v1.0.0"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91031",
+     "malware": true,
+     "summary": "Malicious code in example.org/qzx/evil (Go)"
+    }
+   ]
+  }
+ },
+ "RubyGems": {
+  "qzx-gem-evil": {
+   "versions": [
+    "1.0.0"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91041",
+     "malware": true,
+     "summary": "Malicious code in qzx-gem-evil (RubyGems)"
+    }
+   ]
+  }
+ },
+ "Packagist": {
+  "qzx/evil": {
+   "versions": [
+    "1.0.0"
+   ],
+   "vulns": [
+    {
+     "id": "MAL-2026-91051",
+     "malware": true,
+     "summary": "Malicious code in qzx/evil (Packagist)"
+    }
+   ]
+  }
+ }
+}

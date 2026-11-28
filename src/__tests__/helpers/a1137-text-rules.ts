@@ -94,7 +94,7 @@ function sentenceRules(): TextRule[] {
       "some copy on disk is a vulnerable copy that is not malware",
     ],
   };
-  const malwareCopies = (r: Answer) => new Set([...String(r?.delegation_assessment?.reason ?? "").matchAll(/This project has ([^.]+?) installed, which (?:is|are) recorded as malware/g)].flatMap((m) => m[1].split(/, | and /)).map((x) => x.replace(/ \(in node_modules.*$/, "").replace(/@.*$/, "")));
+  const malwareCopies = (r: Answer) => new Set([...String(r?.delegation_assessment?.reason ?? "").matchAll(/This project has (.+?) installed, which (?:is|are) recorded as malware/g)].flatMap((m) => m[1].split(/, | and /)).map((x) => x.replace(/ \(in .*$/, "").replace(/@.*$/, "")));
   HOLDS["not-human"] = [(r) => level(r) !== "human_only", "any level but human_only"];
   HOLDS["no-malware-copy"] = [
     (r) => ((r?.advisories ?? []) as Answer[]).filter((x) => /the reinstall is the whole fix/.test(String(x.action))).every((x) => !malwareCopies(r).has(String(x.title).split(":")[0])),
@@ -105,13 +105,20 @@ function sentenceRules(): TextRule[] {
     "human_only, with a high or critical task vulnerability without a fix that is no malicious-package record",
   ];
   HOLDS["withheld-said"] = [(r) => ((r?.task_packages?.not_read ?? []) as Answer[]).length > 0, "a word of the task was withheld (task_packages.not_read); its own standing sentence holds the level"];
+  HOLDS["private-installed"] = [(r) => Number(r?.private_installed ?? 0) > 0, "private_installed above 0"];
   HOLDS["not-scanned"] = [(r) => Number(r?.lockfiles_not_scanned ?? 0) > 0, "lockfiles_not_scanned above 0"];
   const extra: TextRule[] = [
+    {
+      constant: "Vulnerability scan ready (private installed said)",
+      found: (r) => /^Vulnerability scan ready/.test(reason(r)) && Number(r?.private_installed ?? 0) > 0,
+      holds: (r) => /private by the project's configuration and/.test(reason(r)),
+      when: "where private_installed is above 0, a safe reason says so",
+    },
     { constant: "Delegate, then review", found: (r) => /Delegate, then review: /.test(reason(r)), holds: (r) => level(r) !== "human_only" && level(r) !== "safe_to_delegate", when: "not with human_only or safe_to_delegate" },
     {
       constant: "Vulnerability scan ready (unread lockfiles said)",
       found: (r) => /^Vulnerability scan ready/.test(reason(r)) && Number(r?.lockfiles_not_scanned ?? 0) > 0,
-      holds: (r) => /under ignored, excluded or test-fixture folders/.test(reason(r)),
+      holds: (r) => /lockfiles? (?:was|were) found and not read|lockfiles? under ignored, excluded or test-fixture folders (?:was|were) not read/.test(reason(r)),
       when: "where lockfiles_not_scanned is above 0, the reason says so",
     },
   ];

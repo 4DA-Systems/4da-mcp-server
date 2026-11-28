@@ -315,7 +315,7 @@ describe("C1 / C3: the level, the project's findings and decisions", () => {
     h.npmProject({ zod: "3.24.1", fastifyy: "1.0.1" }, {}, { zod: { version: "3.24.1" }, fastifyy: { version: "1.0.1" } });
     const r = await brief({ task, ...(packages ? { packages } : {}) });
     expect(r.delegation_assessment.level).toBe("human_only");
-    expect(r.delegation_assessment.reason.startsWith(INSTALLED_MALWARE(["fastifyy@1.0.1"]))).toBe(true);
+    expect(r.delegation_assessment.reason.startsWith(INSTALLED_MALWARE(["fastifyy@1.0.1 (in .)"]))).toBe(true);
     expect(INSTALLED_MALWARE(["fastifyy@1.0.1"])).toBe("This project has fastifyy@1.0.1 installed, which is recorded as malware: a person must deal with that before any task is delegated.");
     expect(brokenTextRules(r, { task, packages })).toEqual([]);
   });

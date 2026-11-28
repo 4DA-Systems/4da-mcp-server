@@ -217,7 +217,9 @@ const ANYWHERE_SHAPES: readonly string[] = [
   "glpat-[\\w-]{20,}",
   "AIza[\\w-]{35,}",
   "hf_[A-Za-z0-9]{34,}",
-  "pypi-[\\w-]{20,}",
+  // Round 19: a PyPI API token is a macaroon whose base64 opens "AgE" (version and location fields), 150+ characters;
+  // "repypi-advisoryknowntoaffect", a pair of source words, matched the looser body.
+  "pypi-AgE[\\w-]{50,}",
   "SG\\.[\\w-]{10,}\\.[\\w-]{10,}",
   "shp(?:at|ss|ca|pa)_[a-fA-F0-9]{32,}",
   "dop_v1_[a-f0-9]{64,}",
@@ -231,6 +233,8 @@ const SECRET_SHAPES = new RegExp(`(?:${[...ANYWHERE_SHAPES, ...BOUNDARY_SHAPES.m
  * (output-screen.ts) renders any substring of one of them by shape in every tool result and error.
  */
 export const CREDENTIAL_SHAPES: RegExp = SECRET_SHAPES;
+/** Round 19: one compiled, non-global copy for the per-word tests (a RegExp was built for every word). */
+const SECRET_TEST = new RegExp(SECRET_SHAPES.source);
 /** The value of an assignment to a credential-named setting: `GITHUB_TOKEN=...`, `_authToken=...`, `"api_key": "..."`. */
 const SECRET_ASSIGNMENT = /(?:\b[A-Za-z][\w.-]{0,60}?(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|auth)\w{0,30}|\b_auth)(?:["'`]\s{0,4}:|\s{0,4}=)\s{0,4}["'`]?([^\s"'`]{4,})/gi;
 /** A value that is a version or a version constraint (`=3.2.0` after `oauthlib=`, `8.5.1`, `^4.10`, `>=2,<3`, `~=1.4`): an entry, not a secret. */
@@ -244,13 +248,13 @@ const PEM = /-----BEGIN [A-Z ]{0,40}-----[\s\S]{0,8000}?(?:-----END [A-Z ]{0,40}
  */
 export function credentialShape(name: string): boolean {
   const w = name.trim();
-  return new RegExp(SECRET_SHAPES.source).test(w) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(w) || /^[0-9a-f]{12,}$/i.test(w) || w.includes("-----BEGIN ");
+  return SECRET_TEST.test(w) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(w) || /^[0-9a-f]{12,}$/i.test(w) || w.includes("-----BEGIN ");
 }
 
 /** A word shaped like a generated credential rather than a package name. */
 export function looksLikeSecret(word: string): boolean {
   const w = strip(word, LEAD_WRAP, TRAIL_WRAP);
-  if (new RegExp(SECRET_SHAPES.source).test(w)) return true;
+  if (SECRET_TEST.test(w)) return true;
   // A UUID (an API key, a license, a header value; third blind check): no registry name is one.
   if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(w)) return true;
   for (const seg of w.split(/[-_.:/@=|^~<>,;]+/)) {

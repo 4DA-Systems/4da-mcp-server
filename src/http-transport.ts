@@ -288,14 +288,19 @@ async function batchRefusal(req: IncomingMessage): Promise<{ refusal: Record<str
   } catch {
     return { refusal: null, body: replay };
   }
-  // Round 17, C5(a): a request whose id has a credential's shape is not run (one answer, id null, for a batch too).
-  const credentialId = (Array.isArray(parsed) ? parsed : [parsed]).map(credentialIdRefusal).find((x) => x !== null);
-  if (credentialId) return { refusal: credentialId, body: replay };
-  if (!Array.isArray(parsed)) return { refusal: null, body: replay };
+  // Round 17, C5(a): a request whose id has a credential's shape is not run (one answer, id null).
+  if (!Array.isArray(parsed)) {
+    const credentialId = credentialIdRefusal(parsed);
+    return { refusal: credentialId, body: replay };
+  }
+  // Round 19: a batch on a revision without batches is refused as such (batchRefusedMessage), whatever its ids hold.
   const revision = requestRevision(req.headers["mcp-protocol-version"], parsed);
   if (revision >= FIRST_REVISION_WITHOUT_BATCHES) {
     return { refusal: { jsonrpc: "2.0", id: null, error: { code: -32600, message: batchRefusedMessage("http") } }, body: replay };
   }
+  // A served batch (2025-03-26 and earlier) holding a credential-shaped id is refused whole.
+  const credentialId = parsed.map(credentialIdRefusal).find((x) => x !== null);
+  if (credentialId) return { refusal: credentialId, body: replay };
   // Members that are not JSON-RPC objects stay as they are: the SDK refuses such a batch whole.
   if (!parsed.every(isPlainObject)) return { refusal: null, body: replay };
   const read = batchCancellation(parsed, () => null);
