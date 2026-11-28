@@ -174,6 +174,11 @@ describe("what_should_i_know after confirmation round 7: the command grammar and
     expect(next).toContain(`"${CREDENTIAL_REFUSAL("package name")}"`);
     expect(CREDENTIAL_REFUSAL("ecosystem")).toContain("not an ecosystem");
     expect(next).not.toContain("an operand of a runner command, an entry of a snippet");
+    // Round 17: the id refusal and the installed-copy text the CHANGELOG quotes.
+    expect(text("src/stdio-gate.ts")).toContain('"Invalid Request: the request id has a credential\'s shape, so it is not echoed and the request was not run; send it again with another id."');
+    expect(next).toContain(`"Invalid Request: the request id has a credential's shape, so it is not echoed and the request was not run; send it again with another id."`);
+    expect(text("src/tools/what-should-i-know.ts")).toContain("the installed copy is the vulnerable one, so make sure the task replaces it");
+    expect(next).toContain("the installed copy is the vulnerable one, so make sure the task replaces it");
     // Rounds 16b / 16c: the placeholder text, and no sentence left saying a glued token is not matched.
     expect(next).toContain(`("${INSTALLED_PLACEHOLDER(["lodahs@0.0.1-security"])}")`);
     for (const doc of [readme, next]) expect(doc).not.toMatch(/glued to the letters before it[^.]*is not matched/);
