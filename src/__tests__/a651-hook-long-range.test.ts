@@ -18,6 +18,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const R = "^3.0.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0-0 || ^9.0.0 || ^10.0.0-0";
 const R2 = ">=16.14.0 <17.0.0 || >=17.0.2 <18.0.0 || >=18.2.0 <19.0.0 || >=19.0.0 <20.0.0";

@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { NAMED_OPTIONS } from "../../hooks/manifest-edit.mjs";
 import { sandbox, type Sandbox } from "./helpers/a1123-hookfix-run.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 

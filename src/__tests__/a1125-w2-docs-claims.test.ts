@@ -24,6 +24,8 @@ import { MAX_TASK_WORD } from "../tools/briefing-task-screen.js";
 import { AGE_NOTE_MINUTES } from "../tools/dependency-check-age.js";
 import { AFTER_RUN } from "../tools/upgrade-plan-protocol.js";
 import { whatShouldIKnowTool } from "../tools/what-should-i-know.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const text = (file: string) => readFileSync(join(root, file), "utf8");

@@ -33,7 +33,7 @@ describe("J1: a name alone that a project file here or above names is held", () 
     ["package.json", '{"overrides":{"lodash":"4.17.20"}}', "bun add lodash"],
     ["package.json", '{"resolutions":{"lodash":"4.17.20"}}', "yarn add lodash"],
     ["pnpm-workspace.yaml", "catalog:\n  lodash: 4.17.20\ncatalogMode: prefer\n", "pnpm add lodash"],
-    ["pnpm-workspace.yaml", "overrides:\n  lodash: 4.17.20\n", "pnpm add -Dw lodash"],
+    ["pnpm-workspace.yaml", "overrides:\n  lodash: 4.17.20\n", "pnpm add -D -w lodash"],
     [".pnpmfile.cjs", "module.exports = { hooks: { readPackage(p) { p.dependencies.lodash = '4.17.20'; return p; } } };", "pnpm add lodash"],
     ["Cargo.toml", '[workspace]\nmembers = ["app"]\n[workspace.dependencies]\nregex = "=1.5.4"\n', "cargo add regex"],
     ["pyproject.toml", '[tool.uv.workspace]\nmembers = ["app"]\n[project]\nname = "root"\nversion = "0"\ndependencies = ["requests==2.19.0"]\n', "uv add requests"],
@@ -46,7 +46,7 @@ describe("J1: a name alone that a project file here or above names is held", () 
     expect(r.decision, r.text).toBe("deny");
     // Round 17 (L1): a workspace root above, or a workspace option, is held first, for its own cause.
     const workspace = file === "pnpm-workspace.yaml" || /^\[(?:workspace|tool\.uv\.workspace)\]/.test(content);
-    expect(r.text).toContain(workspace ? (command.includes("-Dw") ? "a workspace option" : "this folder is inside a workspace") : `${file} in a parent folder already names`);
+    expect(r.text).toContain(workspace ? (command.includes("-w") ? "a workspace option" : "this folder is inside a workspace") : `${file} in a parent folder already names`);
     expect(r.text).toContain("name the version");
   });
   it("in this folder: said so; the remedy is in the manager's own syntax", () => {

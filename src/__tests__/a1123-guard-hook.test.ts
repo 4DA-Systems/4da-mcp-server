@@ -25,6 +25,8 @@ import { LiveIntelligence } from "../live/index.js";
 import { runDependencyCheck } from "../tools/dependency-check.js";
 import { parseTarget } from "../tools/dependency-check-versions.js";
 import { emptyNet, npmDoc, onlineForTests, stubNet } from "./helpers/a1119-check-net.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = join(root, "hooks", "manifest-edit.mjs");

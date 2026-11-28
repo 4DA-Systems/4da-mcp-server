@@ -132,8 +132,6 @@ describe("L1 b: a workspace selector holds the name alone", () => {
     "pnpm -r add lodash",
     "pnpm --recursive add lodash",
     "pnpm add -w lodash",
-    "pnpm add -Dw lodash",
-    "pnpm add -wD lodash",
     "pnpm add lodash --workspace-root",
     "yarn workspace app add lodash",
     "yarn workspaces foreach add lodash",
@@ -343,5 +341,14 @@ describe("L6: the advice line after any install verb, package named or not", () 
   });
   it.each(["npm test", "npm run build", "yarn --version", "git commit -m 'npm ci'", "echo npm ci", "uv run pytest"])("%s: none", (command) => {
     expect(post(command).text).toBe("");
+  });
+});
+
+// Round 34 (B1): a cluster of letters is not read for pnpm (nopt reads one its own way): held as not read.
+describe("L1 b: pnpm's -Dw and -wD", () => {
+  it.each(["pnpm add -Dw lodash", "pnpm add -wD lodash"])("%s: held, not read", (command) => {
+    const r = s.run({ session_id: "s", cwd: s.project, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });
+    expect(r.decision).toBe("deny");
+    expect(r.text).toContain("could not be read");
   });
 });

@@ -110,7 +110,12 @@
  * VERBS written directly after the manager and its global options (MANAGER_GLOBAL_OPTIONS), each
  * package it names judged, of a configuration write (CONFIG_WRITE_VERBS) and of a fetch
  * (FETCH_VERBS); a manager's other sub-commands are read best effort (L3) [test:
- * a1125-w2-hook-forms, a1125-w2-hook-round33]. P3: a release the call takes from a source the hook reads as the
+ * a1125-w2-hook-forms, a1125-w2-hook-round33]. P3: an option word before the verb or among the
+ * words of an examined command is read only in an exact spelling on that manager's table: a long
+ * option whose name is exactly on it (no abbreviation), with or without its value after =, a single
+ * documented short letter alone, or an exact shorthand word the manager documents; an option written any other way (an
+ * abbreviation, a single-dash long name, a cluster of letters where the manager's parser reads one
+ * differently) makes the command not read [test: a1125-w2-hook-round34]. P3: a release the call takes from a source the hook reads as the
  * project's own, for example a local path, git, or a host private by its shape, is not judged
  * (sourceVerdict, urlDependency) [test: a1125-w2-hook-round18, a1125-w2-hook-round19,
  * a1123-hookfix-local-sources]. P3: a dependency entry that names an index, a registry or a source
@@ -148,8 +153,12 @@
  * one the hook cannot read, one past REQUIREMENTS_DEPTH levels, one past REQUIREMENTS_FILES files
  * in all for each file a command or an edit names (every distinct file it reaches counted once,
  * siblings too), one named by a command that changes its folder, and one holding an option line not on
- * REQUIREMENTS_INERT_OPTIONS, are denied as not read (requirementFileInstalls, includeRequirements)
- * [test: a1125-w2-hook-round25, a1125-w2-hook-round29]. P3: a write of a manager's own configuration by one of its
+ * REQUIREMENTS_INERT_OPTIONS, are denied as not read (requirementFileInstalls, includeRequirements),
+ * and each such file is read strictly: one with a coding declaration other than UTF-8, or with any
+ * character other than LF and CRLF at which a manager that reads it ends a line, is not read, and after a
+ * requirement's specifier a line holds only a marker, hash options or a comment, or it is not read
+ * (requirementsTextBad, requirementLine) [test: a1125-w2-hook-round25, a1125-w2-hook-round29,
+ * a1125-w2-hook-round34]. P3: a write of a manager's own configuration by one of its
  * CONFIG_WRITE_VERBS is denied as not read unless each key it writes is on INERT_CONFIG_KEYS, and a
  * release named on one of the FETCH_VERBS is judged as an install is (configWriteOf) [test:
  * a1125-w2-hook-round25]. P3: an edit of a file on the CONFIG_FILES list is read from the file it
@@ -160,13 +169,13 @@
  * file that is code, when it changes the file at all (configFileChange) [test:
  * a1125-w2-hook-round25b, a1125-w2-hook-round29]. P3: a configuration write is read operand by operand
  * in its manager's own grammar, past the global options before its sub-command that are on
- * MANAGER_GLOBAL_OPTIONS for that manager (for one manager its own option table with its
- * abbreviations, NPM_OPTIONS), every key it writes judged against INERT_CONFIG_KEYS; a write whose
+ * MANAGER_GLOBAL_OPTIONS for that manager (for one manager its own option table, NPM_OPTIONS, in exact
+ * spellings), every key it writes judged against INERT_CONFIG_KEYS; a write whose
  * operands the grammar does not account for, or that stands behind an option before the
  * sub-command that is on none of those tables, is denied as not read; a configuration file named by
- * the user or global configuration option on any command of the managers that take one, or by an
- * abbreviation of it the manager accepts, is denied as not read unless the file is read and every
- * key in it is inert, and so is an option that may abbreviate one and abbreviates no other; and an
+ * the user or global configuration option on any command of the managers that take one is denied
+ * as not read unless the file is read and every key in it is inert (an abbreviation of the option is
+ * not read, as any abbreviation is not); and an
  * option on CONFIG_SOURCE_OPTIONS on any command of its manager, a configuration source named on the
  * command, is denied as not read wherever it stands before the words of a program the command runs
  * (before or after the sub-command, with its value after = or as the next word), and no reader's
@@ -463,7 +472,8 @@
  *   .test, .example, .invalid or .localhost) and nothing else naming a source: goes ahead unjudged,
  *   as the project's own source; --no-index with every --find-links a local path, a file: URL with no host
  *   (or localhost), or a UNC path (`//host/share`, `\\host\share`) or file: URL whose host is private
- *   by its shape: goes ahead (no index is read, measured with pip); in every other case the named
+ *   by its shape: goes ahead (no index is read, measured with pip; each option is read written in
+ *   full only: an abbreviation pip accepts, such as `--no-ind`, is not read); in every other case the named
  *   packages are judged on the ledger (a proceed or review for the release named, or a private
  *   record, lets it through), and a denial for a missing verdict says how a private name is released
  *   (FOURDA_PRIVATE_PACKAGES or the registry's configuration, so the server records it private).
@@ -474,7 +484,9 @@
  * install`, `cargo fetch`, `build` (`b`), `run` (`r`) and `test` (`t`), which resolve and download what the manifest asks for (`check` is not on the list), `go mod download`, npm / pnpm / Yarn / Bun `link`,
  * and the updates the manager chooses: npm and pnpm `audit` (`npm audit fix`, `pnpm audit --fix`; a
  * plain audit is advised too), npm, pnpm and Yarn `dedupe`, `go mod tidy`, `go work sync`, `uv lock`, `uv pip
-()=>" * compile`, `uv tool upgrade`, `poetry lock`, `cargo generate-lockfile`,\n * pnpm `fetch` and `import` and `yarn upgrade-interactive` (round 29, H9: each manager\x27s own command list,\n * uv 0.6.8 `uv --help` and `uv tool --help`, pnpm 10.34.6 `pnpm help`),"
+ * compile`, `uv tool upgrade`, `poetry lock`, `cargo generate-lockfile`,
+ * pnpm `fetch` and `import` and `yarn upgrade-interactive` (round 29, H9: each manager's own command list,
+ * uv 0.6.8 `uv --help` and `uv tool --help`, pnpm 10.34.6 `pnpm help`),
  * also run by npx, bunx or pnpx, with or without a version on the manager (`npx pnpm@9 install`);
  * not text that only mentions one),
  * where a ledger exists and the guard is on or advising, the hook adds one line of advice at
@@ -1694,6 +1706,9 @@ function includeRequirements(out, inc, base, depth, seen) {
   seen.add(path.toLowerCase());
   const text = readManifest(path);
   if (text === null) return refuse(`${callData(inc.file)}, a requirements file named by ${inc.kind} that the hook could not read`, "No dependency_check verdict releases this: the file it names must be readable (a path relative to the file that names it), so that the versions in it are judged.");
+  // Round 34 (B2): an included file is read as strictly as the file that names it.
+  const badText = requirementsTextBad(text);
+  if (badText) return refuse(`${callData(inc.file)}: ${badText}`);
   for (const line of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
     tick();
     const nested = requirementsInclude(line);
@@ -1748,6 +1763,9 @@ function requirementFileInstallsOf(file, base) {
   const path = resolve(base, windowsPath(file, base) ?? file);
   const text = readManifest(path);
   if (text === null) return { installs: [], bad: `${callData(file)}, a requirements file the command names that the hook could not read` };
+  // Round 34 (B2): read strictly (coding, line ends).
+  const badText = requirementsTextBad(text);
+  if (badText) return { installs: [], bad: `${callData(file)}: ${badText}` };
   const options = [...requirementOptions(text, dirname(path))];
   if (options.length > 0) return { installs: [], bad: `${callData(options[0])} in ${callData(file)}, an option line that changes where or which releases pip resolves` };
   const saved = manifestFolder;
@@ -1773,6 +1791,22 @@ function requirementFileArgs(args) {
   return files;
 }
 
+/**
+ * Round 34 (B2): a requirements or constraints file is read strictly: it must carry no coding
+ * declaration in its first two lines other than UTF-8 (pip honours one: under utf-7 `+AAo-` is a
+ * line feed), and no character that pip's str.splitlines or uv ends a line at other than LF and
+ * CRLF (a lone CR, VT, FF, FS, GS, RS, NEL, U+2028, U+2029). Returns the part not read, or null.
+ */
+function requirementsTextBad(text) {
+  const t = String(text);
+  for (const line of t.split(/\r?\n/).slice(0, 2)) {
+    const m = /^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)/.exec(line);
+    if (m && !/^utf[-_]?8$/i.test(m[1])) return `a coding declaration (${callData(m[1])}) in a requirements file, which this hook reads as UTF-8 only`;
+  }
+  // eslint-disable-next-line no-control-regex -- the control characters are what this rule finds
+  if (/\r(?!\n)|[\v\f\x1c\x1d\x1e\x85\u2028\u2029]/.test(t)) return "a requirements file with a line end other than LF or CRLF (pip and uv end a line there, this hook does not)";
+  return null;
+}
 function requirementLine(line) {
   const text = line.replace(/(^|\s)#.*$/, "").trim();
   if (text.length > MAX_LINE_CHARS) return refuse(`a requirements line over ${MAX_LINE_CHARS} characters`);
@@ -1798,7 +1832,12 @@ function requirementLine(line) {
     return /^@\s*(?:git\+|file:)/i.test(rest) ? null : notRead();
   }
   const spec = PEP440_SPECIFIERS.exec(rest);
-  return spec ? { name: nameKey("PyPI", m[1]), spec: spec[1].replace(/\s+/g, "") } : notRead();
+  if (!spec) return notRead();
+  // Round 34 (B2): after the specifier a line holds only a closing `)`, a marker (`; ...`), --hash
+  // options, or nothing (the comment is taken out above); anything else is not read.
+  const tail = rest.slice(spec[0].length).replace(/^\s*\)?\s*/, "");
+  if (tail !== "" && !tail.startsWith(";") && !/^(?:--hash(?:=|\s+)\S+\s*)+$/.test(tail)) return notRead();
+  return { name: nameKey("PyPI", m[1]), spec: spec[1].replace(/\s+/g, "") };
 }
 /** Y1 b: the requirements line forms that name no registry release: a path, a local archive, git, file:. */
 const OWN_REQUIREMENT_FORM = /^(?:\.{1,2}(?:[\\/]|$)|[\\/]|~[\\/]|[A-Za-z]:[\\/]|git\+|file:)|^\S+\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz)(?:\s|$|#)/i;
@@ -2219,8 +2258,9 @@ function boundsNothing(v) {
         .replace(/(>=|==|!=|=|\^|~>?)\s+/g, "$1")
         .split(/[\s,]+/)
         .filter(Boolean);
-      // M6: an exclusion (`!=1.0`, PEP 440) bounds nothing either: only wildcards and exclusions = latest.
-      return parts.every((c) => WILDCARD_COMPARATOR.test(c) || /^!=\S/.test(c));
+      // Round 34: a spec of exclusions (`!=6.1.3`) is a range: the release it picks is not the newest
+      // when the newest is excluded, so only wildcards bound nothing.
+      return parts.every((c) => WILDCARD_COMPARATOR.test(c));
     });
 }
 const npmUnbounded = boundsNothing;
@@ -2515,6 +2555,12 @@ function declaredVersions(file, text, disk = () => null, place = -1, whole = fal
       }
     }
   } else if (file === "requirements.txt") {
+    // Round 34 (B2): a text with another line end or coding is not read.
+    const badText = requirementsTextBad(text);
+    if (badText) {
+      refuse(badText);
+      return out;
+    }
     // Round 29 (H4): the files of -r and -c are counted over the whole file read (siblings too), not per chain.
     const seen = new Set();
     // pip joins a line that ends in a backslash with the next (`requests\` + `==2.0.0`).
@@ -3953,9 +3999,10 @@ const INERT_CONFIG_KEYS = Object.freeze([
 /** S6: a configuration write in a manager's words: { keys } (lower case; empty when the key cannot be read), or null. */
 /**
  * Round 27 (E4): each manager's global options, with their arity, that may stand before its
- * sub-command (npm: npm's own option table, NPM_OPTIONS, with npm's abbreviations; each other
- * manager: flags take no value, values take the next word or =value). An option before the
- * sub-command that is on none of them leaves the sub-command unread.
+ * sub-command (npm: npm's own option table, NPM_OPTIONS, read by exact spelling only since round
+ * 34: no abbreviation, no single-dash long name, no letter cluster; each other manager: flags take
+ * no value, values take the next word or =value). An option before the sub-command that is on none
+ * of them, or written another way, leaves the sub-command unread.
  */
 const MANAGER_GLOBAL_OPTIONS = Object.freeze({
   pnpm: Object.freeze({ flags: ["-r", "--recursive", "-w", "--workspace-root", "-s", "--silent", "--no-color", "--color", "--aggregate-output", "--stream", "-g", "--global", "--parallel", "--sequential"], values: ["-C", "--dir", "-F", "--filter", "--workspace-dir", "--loglevel", "--reporter"] }),
@@ -4000,7 +4047,8 @@ function configWriteOf(program, args) {
   const keyOf = (k) => String(k ?? "").replace(/=.*$/s, "").replace(/^--/, "").toLowerCase();
   const NOT_READ = { keys: [] };
   // Options that take a value, and options that may stand among a config command's words.
-  const VALUE_OPTIONS = new Set(["--location", "--userconfig", "--globalconfig", ...(program === "npm" || program === "pnpm" ? ["--workspace", "-w"] : [])]);
+  // Round 34 (B4): pip config's --editor takes a value (`pip config --editor notepad edit` is an edit).
+  const VALUE_OPTIONS = new Set(["--location", "--userconfig", "--globalconfig", ...(program === "npm" || program === "pnpm" ? ["--workspace", "-w"] : []), ...(program === "pip" ? ["--editor"] : [])]);
   const SWITCHES = new Set(["-g", "--global", "-H", "--home", "--json", "--user", "--site", "--local", "--unset", "-q", "--quiet", "-v", "--verbose"]);
   const pos = [];
   const optionKeys = [];
@@ -4074,7 +4122,8 @@ function configWriteOf(program, args) {
     if (!args.includes("--unset") && pos.length < 3) return null;
     return { keys: [keyOf(pos[1])] };
   }
-  if (program === "go" && pos[0] === "env" && (args.includes("-w") || args.includes("-u"))) {
+  // Round 34 (B3): Go's flag package reads -w, --w, -w=true and --w=true alike.
+  if (program === "go" && pos[0] === "env" && args.some((a) => /^--?[wu](?:=.*)?$/.test(String(a)))) {
     const ops = pos.slice(1);
     return ops.length > 0 ? { keys: ops.map(keyOf) } : NOT_READ;
   }
@@ -4605,23 +4654,34 @@ const NPM_SHORT_VALUE = new Set(["C", "L", "c", "m", "w"]);
  * "always").
  */
 function npmOption(a, next) {
-  if (a.includes("=")) return "switch";
-  // A switch followed by `true` or `false` takes it as its value (nopt: `--audit false install`
-  // runs install; audit 2026-11-25, D minor). npm has no command named either word.
+  // Round 34 (B1): default deny on the option SPELLING. npm's parser (nopt) also reads unambiguous
+  // abbreviations, single-dash long names (`-reg`, `-cache`) and letter clusters, each its own way;
+  // this hook reads only an exact spelling: `--name` / `--name=value` / `--no-name` with `name` on
+  // NPM_OPTIONS, a single documented short letter, or one of npm's exact shorthand words. Any other
+  // spelling is "unknown": the command is not read.
   const bool = next === "true" || next === "false" ? "value" : "switch";
-  if (/^-[^-]/.test(a)) return a.length === 2 && NPM_SHORT_VALUE.has(a[1]) ? "value" : bool;
-  if (a.slice(2).startsWith("no-") && NPM_OPTIONS.includes(a.slice(5))) return bool;
-  const name = npmOptionName(a.slice(2));
+  if (/^-[^-]/.test(a)) {
+    if (a.includes("=")) return "unknown";
+    if (NPM_SHORT_WORDS.has(a)) return "switch";
+    if (a.length !== 2) return "unknown";
+    if (NPM_SHORT_VALUE.has(a[1])) return "value";
+    return NPM_SHORT_SWITCHES.has(a[1]) ? bool : "unknown";
+  }
+  const eq = a.indexOf("=");
+  const long = (eq > 0 ? a.slice(0, eq) : a).slice(2);
+  if (eq < 0 && NPM_LONG_SHORTHANDS.has(long)) return "switch";
+  const plain = long.startsWith("no-") && NPM_OPTIONS.includes(long.slice(3)) ? long.slice(3) : long;
+  const name = npmOptionName(plain);
   if (name === null) return "unknown";
+  if (eq > 0) return "switch";
+  if (plain !== long) return bool;
   if (name === "color") return next === "always" ? "value" : bool;
   return NPM_VALUE_OPTIONS.has(name) ? "value" : bool;
 }
 
-/** The npm option a long name (without `--`) names: itself, or the one option it is a unique prefix of; null otherwise. */
+/** Round 34 (B1): the npm option a long name (without `--`) names: itself when it is EXACTLY on NPM_OPTIONS, else null (no abbreviation is read). */
 function npmOptionName(name) {
-  if (NPM_OPTIONS.includes(name)) return name;
-  const matches = NPM_OPTIONS.filter((k) => k.startsWith(name));
-  return matches.length === 1 ? matches[0] : null;
+  return NPM_OPTIONS.includes(name) ? name : null;
 }
 
 /** npm's arguments as operands (its options and their values removed), and whether an option before the first operand was one npm does not know. */
@@ -5489,11 +5549,12 @@ const ACCOUNT_TABLES = {
 const NPM_SHORT_SWITCHES = new Set(["a", "B", "D", "d", "E", "f", "g", "h", "H", "l", "O", "p", "P", "q", "s", "S", "v", "y"]);
 /** npm's long shorthands, switches that set another option (npm 10 lib/utils/config/definitions.js shorthands). */
 const NPM_LONG_SHORTHANDS = new Set(["silent", "quiet", "verbose", "loud", "dd", "ddd", "desc", "porcelain", "help", "local", "global"]);
-const NPM_SHORT_WORDS = new Set(["-dd", "-ddd", "-ws", "-iwr", "-desc", "-reg"]);
+// Round 34 (B1): npm's exact shorthand words that are switches (`-reg` is --registry, a value: not read).
+const NPM_SHORT_WORDS = new Set(["-dd", "-ddd", "-ws", "-iwr", "-desc"]);
 /** npm options that change which release a name resolves to: not taken (held). */
 const NPM_RESOLVING = new Set(["tag", "before"]);
 /** Environment settings before a manager that change where it installs from or what it resolves. */
-const MANAGER_SETTING = /^(?:npm_config_|yarn_|bun_config|pip_|uv_|poetry_|cargo_registr|cargo_source|goproxy|goflags|goprivate|gonoproxy|gonosumdb|goinsecure|gotoolchain)/i;
+const MANAGER_SETTING = /^(?:npm_config_|yarn_|bun_config|pip_|uv_|poetry_|cargo_registr|cargo_source|goproxy|goflags|goprivate|gonoproxy|gonosumdb|gonosumcheck|gosumdb|goinsecure|govcs|goauth|gotoolchain)/i;
 /** GitHub CLI commands whose words are text (a pull request's or an issue's title and body). */
 const GH_DATA = new Set(["pr", "issue", "release", "gist"]);
 const GH_DATA_VERBS = new Set(["create", "edit", "comment", "review", "view", "list", "close", "reopen"]);
@@ -5538,7 +5599,7 @@ const MANAGERS = Object.freeze(["npm", ...DETECT_VERBS.keys()]);
  * installs resolve (a registry, an index, a release-age setting): examined like an install, held
  * unless the key written is on INERT_CONFIG_KEYS.
  */
-const CONFIG_WRITE_VERBS = Object.freeze({ npm: Object.freeze(["config", "c", "set", "--userconfig", "--globalconfig"]), pnpm: Object.freeze(["config", "c", "set", "--userconfig", "--globalconfig"]), yarn: Object.freeze(["config", "set"]), bun: Object.freeze(["config"]), pip: Object.freeze(["config"]), poetry: Object.freeze(["config", "source"]), go: Object.freeze(["-w", "-u"]) });
+const CONFIG_WRITE_VERBS = Object.freeze({ npm: Object.freeze(["config", "c", "set", "--userconfig", "--globalconfig"]), pnpm: Object.freeze(["config", "c", "set", "--userconfig", "--globalconfig"]), yarn: Object.freeze(["config", "set"]), bun: Object.freeze(["config"]), pip: Object.freeze(["config"]), poetry: Object.freeze(["config", "source"]), go: Object.freeze(["-w", "-u", "--w", "--u"]) });
 /**
  * Round 25 (S7): the verbs that fetch a named registry release to disk for a later install from a
  * local path (npm pack and npm cache add, pip download and pip wheel, go mod download): a release
@@ -5736,7 +5797,8 @@ function readOptions(args, table, mode = "", stop = false) {
     if (mode === "npm") {
       if (NPM_SHORT_WORDS.has(name)) continue;
       const letters = name.slice(1);
-      let ok = letters.length > 0;
+      // Round 34 (B1): one letter alone; a cluster or a single-dash long name is not read.
+      let ok = letters.length === 1;
       for (let k = 0; k < letters.length && ok; k++) {
         if (NPM_SHORT_VALUE.has(letters[k])) {
           const value = k + 1 < letters.length ? letters.slice(k + 1) : args[++i];
@@ -5758,7 +5820,8 @@ function readOptions(args, table, mode = "", stop = false) {
       else add(name, "");
       continue;
     }
-    if (mode !== "go" && eq < 0 && /^-[A-Za-z0-9]./.test(a)) {
+    // Round 34 (B1): pnpm's parser is nopt, as npm's: a cluster of letters is not read for pnpm.
+    if (mode !== "go" && table !== ACCOUNT_TABLES.pnpm && eq < 0 && /^-[A-Za-z0-9]./.test(a)) {
       let ok = true;
       for (let k = 1; k < a.length; k++) {
         const opt = `-${a[k]}`;
@@ -7771,7 +7834,7 @@ function namesManager(text) {
   return false;
 }
 /** R4: a manager's own setting names, by raw text. */
-const SETTING_NAME = /(?<![A-Za-z0-9_])(?:npm_config_[A-Za-z0-9_]+|yarn_[A-Za-z0-9_]+|bun_config[A-Za-z0-9_]*|pip_[A-Za-z0-9_]+|uv_[A-Za-z0-9_]+|poetry_[A-Za-z0-9_]+|cargo_(?:registr|source|net|http)[A-Za-z0-9_]*|goproxy|goflags|goprivate|gonoproxy|gonosumdb|goinsecure|gotoolchain)(?![A-Za-z0-9_])/gi;
+const SETTING_NAME = /(?<![A-Za-z0-9_])(?:npm_config_[A-Za-z0-9_]+|yarn_[A-Za-z0-9_]+|bun_config[A-Za-z0-9_]*|pip_[A-Za-z0-9_]+|uv_[A-Za-z0-9_]+|poetry_[A-Za-z0-9_]+|cargo_(?:registr|source|net|http)[A-Za-z0-9_]*|goproxy|goflags|goprivate|gonoproxy|gonosumdb|gonosumcheck|gosumdb|goinsecure|govcs|goauth|gotoolchain)(?![A-Za-z0-9_])/gi;
 /**
  * R4: the first manager setting named in the call at or before the end of the last line the
  * detector names: held, its remedy built from the text as written (the setting word, or the whole
@@ -8561,7 +8624,8 @@ function denialFor(introduced, ledger, dir, what) {
     // A call that was made and left nothing behind would be stopped here for ever: say what that
     // means, once, where a version has no entry at all (an `unknown` answer is named above).
     if (unchecked.some(({ last }) => !last)) {
-      const none = ledger.length === 0 ? `No dependency_check verdict at all is recorded in ${dir} for the last 24 hours. ` : "";
+      // Round 34 (B5): a line an older server wrote is on record, but does not count.
+      const none = ledger.length === 0 ? (olderServer !== null ? `A dependency_check verdict from an older 4da server is on record in ${dir}, and it does not count here. ` : `No dependency_check verdict at all is recorded in ${dir} for the last 24 hours. `) : "";
       lines.push(
         `(${none}If this stops again after dependency_check has answered for it, do not retry: the 4da server that answered left no verdict in ${dir}. Either it is older than this guard needs (before 6.5.0 a server keeps no record; this guard counts proceed and review from ${MIN_VERDICT_SERVER} on: update it), or it keeps its data folder elsewhere (Claude Code's environment needs the same FOURDA_MCP_HOME as the server). FOURDA_GUARD (advise, off) is the user's setting: tell the user, and do not change it yourself.)`,
       );
