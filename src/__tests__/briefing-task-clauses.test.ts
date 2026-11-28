@@ -23,6 +23,7 @@ import type { OsvVulnerability, ResolvedDependency, VulnerabilityScanResult } fr
 import { detectNewPackages } from "../tools/briefing-new-packages.js";
 import { readTaskVersions } from "../tools/briefing-requested-versions.js";
 import { executeWhatShouldIKnow, type BriefingLiveIntel } from "../tools/what-should-i-know.js";
+import { waitingWords, nearMissHint } from "./helpers/a1127-task-packages.js";
 
 const dep = (name: string, version: string, ecosystem: ResolvedDependency["ecosystem"] = "npm"): ResolvedDependency => ({
   name,
@@ -304,13 +305,15 @@ afterEach(() => {
   else process.env.FOURDA_OFFLINE = priorOffline;
 });
 
-const brief = (task: string, deps: ResolvedDependency[] = NPM_PROJECT, over: Partial<BriefingLiveIntel> = {}) => executeWhatShouldIKnow(db, { task }, intel(deps, over));
+const brief = (task: string, deps: ResolvedDependency[] = NPM_PROJECT, over: Partial<BriefingLiveIntel> = {}) => executeWhatShouldIKnow(db, { packages: [], task }, intel(deps, over));
 
 describe("what_should_i_know: the audit's phrasings (all came back with something unchecked)", () => {
   it('"bring in rustdecimal" in an npm project: crates.io\'s malware is found, though npm has no such name (it was safe_to_delegate)', async () => {
     const r = await brief("bring in rustdecimal");
-    expect(r.new_packages).toMatchObject([{ name: "rustdecimal", ecosystem: "crates.io", malicious: true, verdict: "avoid", also_checked: [{ ecosystem: "npm", verdict: "not_found" }] }]);
-    expect(r.delegation_assessment.level).toBe("human_only");
+    // Fourth blind check of the 2026-11-25 fixes, item 3: a bundled-list name of an ecosystem the project does
+    // not use is no evidence there: rustdecimal is listed as an unverified npm word, and the task is not safe.
+    expect(waitingWords(r)).toMatchObject([{ word: "rustdecimal", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
   it.each([
@@ -336,11 +339,20 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
     ["add left-pad + electorn", NPM_PROJECT, "electorn"],
     ["add left-pad plus electorn", NPM_PROJECT, "electorn"],
     ["add left-pad 1.3.0, chalk 5.6.2 & electorn", NPM_PROJECT, "electorn"],
-  ])("%s: the later package is checked, and its malware is human_only (it was never checked)", async (task, deps, bad) => {
+  ])("%s: the later package is not lost: listed malware is human_only, a near-miss is noted", async (task, deps, bad) => {
     NPM["lodash-es"] = { latest: "4.17.21", versions: ["4.17.21"] };
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is listed in task_packages.to_confirm, never sent by it, and a
+    // near-miss of a popular name (electorn, lodahs) carries a spelling note (fourth blind check, item 4).
     const r = await brief(task, deps);
-    expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
-    expect(r.delegation_assessment.level).toBe("human_only");
+    if (bad === "electorn") {
+      expect(waitingWords(r)?.find((w) => w.word === bad)).toMatchObject({ hint: nearMissHint("electron") });
+      expect(ASKED.some((u) => u.includes("electorn"))).toBe(false);
+      expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    } else {
+      expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
+      expect(r.delegation_assessment.level).toBe("human_only");
+    }
   });
 
   it.each(["replace request with axios 0.21.0", "swap request for axios 0.21.0", "migrate from request to axios 0.21.0"])(
@@ -371,10 +383,14 @@ describe("what_should_i_know: the audit's phrasings (all came back with somethin
     expect(r.requested_versions?.map((v) => `${v.name}@${v.to}`)).toEqual(["lodash@4.17.21", "express@4.x"]);
   });
 
-  it("a clean list stays safe_to_delegate, every item checked", async () => {
+  it("a clean list: every item is checked or handed back at its own version", async () => {
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is listed in task_packages.to_confirm, never sent by it, and a
+    // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief("add left-pad 1.3.0, chalk 5.6.2 and express 5.1.0");
-    expect(r.new_packages?.map((p) => `${p.name}@${p.version}=${p.verdict}`)).toEqual(["left-pad@1.3.0=proceed", "chalk@5.6.2=proceed", "express@5.1.0=proceed"]);
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(r.new_packages?.map((p) => `${p.name}@${p.version}=${p.verdict}`)).toEqual(["chalk@5.6.2=proceed", "express@5.1.0=proceed"]);
+    expect(waitingWords(r)).toEqual([{ word: "left-pad", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
   it("what a swap takes out is not judged as written: replacing request 2.88.2 is no reason to review", async () => {
@@ -391,46 +407,59 @@ describe("a task naming more packages than the briefing checks fails closed", ()
   });
 
   it("ten clean packages: the first eight are checked, the other two are NOT CHECKED by name, and it is not safe_to_delegate (it was, silently)", async () => {
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is listed in task_packages.to_confirm, never sent by it, and a
+    // near-miss of a popular name (electorn, lodahs) is judged offline: review_needed, did you mean.
     const r = await brief(`npm install ${many(10).join(" ")}`);
-    expect(r.new_packages?.map((p) => p.name)).toEqual(many(8));
-    expect(r.new_packages?.every((p) => p.verdict === "proceed")).toBe(true);
-    expect(r.delegation_assessment.level).toBe("review_needed");
-    expect(r.delegation_assessment.reason).toContain("NOT CHECKED: 2 more packages named in the task (pkg-9, pkg-10)");
-    expect(r.summary).toContain("NOT CHECKED: 2 more packages named in the task (pkg-9, pkg-10)");
-    // Never looked up past the cap: said, not sent.
-    expect(ASKED.some((u) => u === "https://registry.npmjs.org/pkg-9")).toBe(false);
+    expect(r.new_packages).toBeUndefined();
+    expect(waitingWords(r)?.map((w) => w.word)).toEqual(many(10));
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(r.summary).toContain("CONFIRMATION NEEDED: 10 names the task may mean as packages were not looked up");
+    expect(ASKED.some((u) => /pkg-\d/.test(u))).toBe(false);
+    // Past 25 names the rest is counted, not listed.
+    for (let i = 13; i <= 30; i++) NPM[`pkg-${i}`] = { latest: "1.0.0", versions: ["1.0.0"] };
+    const more = await brief(`npm install ${Array.from({ length: 30 }, (_, i) => `pkg-${i + 1}`).join(" ")}`);
+    expect(waitingWords(more)).toHaveLength(25);
+    expect(more.summary).toContain("CONFIRMATION NEEDED: 30 names");
   });
 
   it("a prose list past eight fails closed the same way", async () => {
+    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
+    // held (task_packages.not_read) and the task is review_needed. An install command's operand is looked up.
     const r = await brief(`add ${many(8).join(", ")} and pkg-9`);
-    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
-    expect(r.delegation_assessment.reason).toContain("NOT CHECKED: 1 more package named in the task (pkg-9)");
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(waitingWords(r)?.map((w) => w.word)).toEqual(many(9));
+    expect(ASKED.some((u) => /pkg-\d/.test(u))).toBe(false);
   });
 
-  it("exactly eight clean packages: all checked, safe_to_delegate, nothing said NOT CHECKED", async () => {
-    const r = await brief(`npm install ${many(8).join(" ")}`);
+  it("eight popular packages: all checked, safe_to_delegate, nothing said NOT CHECKED", async () => {
+    const eight = ["chalk", "express", "zod", "axios", "dayjs", "uuid", "debug", "commander"];
+    for (const name of eight) NPM[name] ??= { latest: "1.0.0", versions: ["1.0.0"] };
+    const r = await brief(`npm install ${eight.join(" ")}`);
     expect(r.new_packages).toHaveLength(8);
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(waitingWords(r)).toBeUndefined();
     expect(r.summary).not.toContain("NOT CHECKED");
   });
 
   it("a private name never takes a checked slot, and is never named as unchecked", async () => {
     const r = await brief(`npm install acme-vault ${many(8).join(" ")}`, NPM_PROJECT, { privateReason: (_e: string, n: string) => (n === "acme-vault" ? "private by .npmrc" : null) });
-    expect(r.new_packages?.map((p) => p.name)).toEqual(many(8));
-    expect(r.summary).not.toContain("NOT CHECKED: 1 more");
+    expect(waitingWords(r)?.map((w) => w.word)).toEqual(many(8));
+    expect(JSON.stringify(waitingWords(r))).not.toContain("acme-vault");
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
   });
 });
 
 describe("what was already right stays right", () => {
   it.each([
-    ["add the lodahs package", "human_only"],
+    // Final design of the 2026-11-25 fixes: lodahs is a near-miss of lodash, judged offline (did you mean lodash?).
+    ["add the lodahs package", "confirmation_needed"],
     ["add tests", "safe_to_delegate"],
     ["add logging to the handler", "safe_to_delegate"],
     ["add error handling, then update the docs", "safe_to_delegate"],
     ["add tests, logging and retries", "safe_to_delegate"],
     ["upgrade lodash to 4.17.21", "safe_to_delegate"],
-    ["add the left-pad package", "safe_to_delegate"],
+    // left-pad is on no bundled list: listed in task_packages.to_confirm, so review_needed.
+    ["add the left-pad package", "confirmation_needed"],
   ] as const)("%s: %s", async (task, level) => {
     NPM.lodahs = { latest: "0.0.1-security", versions: ["0.0.1-security"] };
     OSV.push(advisory("MAL-2025-25502", "lodahs", "CRITICAL", {}, "npm", true));
@@ -441,9 +470,13 @@ describe("what was already right stays right", () => {
   it("a word that is prose is looked up nowhere, and a bare name no registry has is still dropped", async () => {
     await brief("add tests, logging and retries");
     expect(ASKED.some((u) => /tests|logging|retries/.test(u))).toBe(false);
+    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
+    // held (task_packages.not_read) and the task is review_needed. An install command's operand is looked up.
     const r = await brief("add frobnicator");
     expect(r.new_packages).toBeUndefined();
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(ASKED.some((u) => u.includes("frobnicator"))).toBe(false);
+    expect(waitingWords(r)).toEqual([{ word: "frobnicator", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
   it("a private name in a list is looked up nowhere, in any ecosystem; the public ones still are", async () => {
@@ -451,11 +484,11 @@ describe("what was already right stays right", () => {
       privateReason: (_eco: string, name: string) => (name.toLowerCase() === "acme-vault" ? "private by .npmrc @acme registry" : null),
     });
     expect(ASKED.some((u) => u.includes("acme-vault"))).toBe(false);
-    // left-pad is listed beside a name that is certainly a package, so it is said (clean), not dropped
-    // as prose (r8: a long list dropped its clean bare names without a word); electorn is malware.
-    expect(r.new_packages?.map((p) => `${p.name}=${p.verdict}`)).toEqual(["left-pad=proceed", "electorn=avoid"]);
-    expect(ASKED.some((u) => u === "https://registry.npmjs.org/left-pad")).toBe(true);
-    expect(r.delegation_assessment.level).toBe("human_only");
+    // electorn is a near-miss of electron, noted; left-pad is listed; neither is sent (fourth blind check, item 4).
+    expect(r.new_packages).toBeUndefined();
+    expect(waitingWords(r)?.map((w) => w.word)).toEqual(["left-pad", "electorn"]);
+    expect(ASKED.some((u) => /left-pad|electorn/.test(u))).toBe(false);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
   it("a private name the project's registries do not have is never sent to the other ecosystems either", async () => {

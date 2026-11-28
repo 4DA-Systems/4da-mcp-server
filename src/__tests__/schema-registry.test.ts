@@ -38,11 +38,15 @@ describe("tool registry", () => {
   });
 
   it("descriptions stay within budget (Claude Code truncates at 2,048; tool search reads them)", () => {
+    // upgrade_planner's says which plan it is (this server's, from the lockfiles) and when the
+    // app's stored plan is returned instead, unverified (audit 2026-11-25): 500.
+    const LONGER: Record<string, number> = { upgrade_planner: 500 };
     for (const [name, entry] of Object.entries(TOOL_REGISTRY)) {
-      expect(entry.summary.length, `${name}: ${entry.summary.length} chars`).toBeLessThanOrEqual(300);
+      expect(entry.summary.length, `${name}: ${entry.summary.length} chars`).toBeLessThanOrEqual(LONGER[name] ?? 300);
     }
     const total = Object.values(TOOL_REGISTRY).reduce((n, e) => n + e.summary.length, 0);
-    expect(total, `combined descriptions are ${total} chars`).toBeLessThanOrEqual(3400);
+    // 3,400 until upgrade_planner's description grew (audit 2026-11-25).
+    expect(total, `combined descriptions are ${total} chars`).toBeLessThanOrEqual(3650);
   });
 
   it("tools/list serves every tool's FULL inputSchema, optional parameters included", () => {
@@ -60,7 +64,9 @@ describe("tool registry", () => {
 
   it("the whole tools/list stays within a ~5k-token budget", () => {
     const chars = JSON.stringify(getSlimToolList()).length;
-    expect(chars, `tools/list is ${chars} chars`).toBeLessThanOrEqual(20_000);
+    // 20,000 until upgrade_planner's description grew by ~240 characters (audit 2026-11-25).
+    // 21,300 from wave 2: what_should_i_know takes `packages` and `not_packages` (the package confirmation loop), ~1,000 characters.
+    expect(chars, `tools/list is ${chars} chars`).toBeLessThanOrEqual(21_300);
   });
 
   it("every tool has a title and honest read/write annotations", () => {

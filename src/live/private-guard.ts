@@ -248,8 +248,13 @@ function* liveSources(): Generator<PrivateNameSource> {
   }
 }
 
-/** Zero-width and other invisible characters a name can carry without looking different. */
-const INVISIBLE = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]|\uDB40[\uDC00-\uDDEF]/g;
+/**
+ * Zero-width and other invisible characters a name can carry without looking different (round 16, C5): the Unicode
+ * property Default_Ignorable_Code_Point itself, not a hand list (U+1BCA0-1BCA3, U+1D173-1D17A and U+E01F0-E0FFF were
+ * missing from the list it replaces).
+ */
+export const DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+const INVISIBLE = DEFAULT_IGNORABLE;
 
 /**
  * Free text (a briefing task) as a reader sees it: percent-escapes decoded and invisible characters
@@ -282,10 +287,16 @@ export function readableText(text: string): string {
   return foldName(decoded.replace(INVISIBLE, ""));
 }
 
-/** Dashes and hyphens other than `-` (U+2010-U+2015, minus, small and fullwidth hyphen-minus, hyphen bullet). */
-const DASHES = /[‐-―⁃−﹘﹣－]/g;
-/** Slashes other than `/` that NFKC leaves alone (division and fraction slash). */
-const SLASHES = /[⁄∕]/g;
+/**
+ * Round 17, C4: the dash look-alikes folded to "-": every Dash_Punctuation character (\p{Pd}: U+2010-2015, U+2E3A,
+ * U+2E3B, U+058A, U+05BE, U+1806, U+2E17, U+301C, U+30A0, U+1400, the small and fullwidth hyphen-minus among them) and
+ * DASH_EXTRAS, the dash-shaped characters of other categories.
+ */
+export const DASH_EXTRAS: readonly string[] = ["\u2212", "\u2043", "\u02D7", "\u2796"];
+const DASHES = new RegExp(`[\\p{Pd}${DASH_EXTRAS.join("")}]`, "gu");
+/** Round 17, C4: the slash look-alikes NFKC leaves alone, folded to "/". */
+export const SLASH_LOOKALIKES: readonly string[] = ["\u2044", "\u2215", "\u29F8", "\u2571", "\u1735", "\u3033", "\u27CB", "\u29F6", "\u2AFB", "\u2AFD"];
+const SLASHES = new RegExp(`[${SLASH_LOOKALIKES.join("")}]`, "gu");
 
 /**
  * A name as a registry would read it once look-alike characters are folded: NFKC (fullwidth
@@ -315,6 +326,52 @@ const WRAPPERS = /[`'"<>(){}[\]‘’‚‛“”„‟«»‹›「」『』]/g
 const SEPARATORS = /[\s,;|]+/;
 /** A distribution archive's suffix: `acme.tar.gz`, `acme-1.0.0.tgz`, `acme-1.0-py3-none-any.whl`. */
 const ARCHIVE = /\.(?:tar\.(?:gz|bz2|xz|zst)|tgz|tbz2?|zip|whl|egg|gem|crate|jar|nupkg)$/i;
+
+/*
+ * Linear forms of three patterns that were quadratic on a long word (pre-publish audit 2026-11-25,
+ * F-M3): a trailing run anchored with `$` was rescanned from every position inside it.
+ */
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+const LEADING_STRAY = /^[^\p{L}\p{N}@]+/u;
+
+/** `name` without the punctuation either side of it (a scope's leading `@` kept). */
+function trimPunctuation(name: string): string {
+  let end = name.length;
+  while (end > 0) {
+    // A surrogate pair is one character: read the code point that ends here.
+    const low = name.charCodeAt(end - 1);
+    const high = end >= 2 ? name.charCodeAt(end - 2) : 0;
+    const pair = low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff;
+    const ch = pair ? name.slice(end - 2, end) : name[end - 1];
+    if (LETTER_OR_DIGIT.test(ch)) break;
+    end -= ch.length;
+  }
+  return name.slice(0, end).replace(LEADING_STRAY, "");
+}
+
+/** A version at the end of a file name (`acme-3.1.0` of `acme-3.1.0.tar.gz`) removed. */
+function withoutFileVersion(name: string): string {
+  // Only the trailing run of characters a version can hold can contain the match: read only that.
+  let start = name.length;
+  while (start > 0 && /[\w.+!-]/.test(name[start - 1])) start--;
+  const tail = name.slice(start);
+  const m = /[-_]v?\d+\.\d+[\w.+!-]*$/.exec(tail);
+  return m ? name.slice(0, start + m.index) : name;
+}
+
+/** PyPI extras and version specifiers removed: name[extra], name==1.0, name>=1,<2, name ~= 1.0, name; marker. */
+function withoutSpecifier(name: string): string {
+  let cut = name.search(/===?|~=|>=|<=|!=|>|<|;/);
+  // `[...]` at the very end with no `]` inside: the `[` after the last `]` before the final one.
+  if (name.endsWith("]")) {
+    const open = name.indexOf("[", name.lastIndexOf("]", name.length - 2) + 1);
+    if (open >= 0 && open < name.length - 1 && (cut < 0 || open < cut)) cut = open;
+  }
+  if (cut < 0) return name;
+  // Blanks before it go too.
+  while (cut > 0 && /\s/.test(name[cut - 1])) cut--;
+  return name.slice(0, cut);
+}
 
 /**
  * Every form of `name` a registry or OSV.dev could read as a package: the name as written, then
@@ -353,15 +410,17 @@ export function nameForms(name: string): string[] {
     const tokens = n.replace(WRAPPERS, " ").split(SEPARATORS).filter(Boolean);
     if (tokens.length !== 1 || tokens[0] !== n) for (const t of tokens) next(t);
     // Stray punctuation either side (a scope's leading `@` kept).
-    next(n.replace(/^[^\p{L}\p{N}@]+|[^\p{L}\p{N}]+$/gu, ""));
+    next(trimPunctuation(n));
     // A distribution archive, and the version in its file name (`acme-3.1.0.tar.gz`).
     next(n.replace(ARCHIVE, ""));
-    if (!n.includes("/")) next(n.replace(ARCHIVE, "").replace(/[-_]v?\d+\.\d+[\w.+!-]*$/, ""));
+    if (!n.includes("/")) next(withoutFileVersion(n.replace(ARCHIVE, "")));
     // `\` or `:` where a scope's `/` belongs.
     next(n.replace(/\\+/g, "/"));
     next(n.replace(/^@([^/:\\\s]+):+/, "@$1/"));
     // A host with a port, or scp-style (`git@host:org/x`): the module path is the host and the path.
-    next(n.replace(/^(?:[\w.-]+@)?([^/:@\s]+\.[^/:@\s]+):(?:\d+\/?|(?=[^/\d]))/, "$1/"));
+    // The host is one run, checked for an inner dot afterwards: `[^/:@\s]+\.[^/:@\s]+` was quadratic
+    // on a long dotted word with no colon (199,000 characters of "1.1" took 89 s; audit 2026-11-25, F-M3).
+    next(n.replace(/^(?:[\w.-]+@)?([^/:@\s]+):(?:\d+\/?|(?=[^/\d]))/, (whole, host: string) => (/.\../.test(host) ? `${host}/` : whole)));
     try {
       next(decodeURIComponent(n));
     } catch {
@@ -376,7 +435,7 @@ export function nameForms(name: string): string[] {
     // name@version, @scope/name@version (the scope's own @ is not a version).
     next(n.replace(/(?<=.)@[^@/]*$/, ""));
     // PyPI extras and version specifiers: name[extra], name==1.0, name>=1,<2, name ~= 1.0, name; marker
-    next(n.replace(/\s*(?:\[[^\]]*\]|(?:===?|~=|>=|<=|!=|>|<|;).*)$/, ""));
+    next(withoutSpecifier(n));
     // A URL to a registry: the package is the path after the host (and a scoped npm name is two segments).
     const url = /^[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+?)\/?$/i.exec(n);
     if (url) {
@@ -390,9 +449,9 @@ export function nameForms(name: string): string[] {
     // `.../tree/main` and `mod.git` reached the registries and OSV.dev. The module path is the host
     // and the repository path, without scheme, credentials, port, `.git`, fragment or a browse path.
     next(n.replace(/^git\+/i, ""));
-    next(n.replace(/[#?].*$/, ""));
+    next(n.replace(/[#?][^]*$/, ""));
     next(n.replace(/\.git\/*$/i, ""));
-    next(n.replace(/\/+(?:-\/+)?(?:tree|blob|commits?|releases\/tag|src)\/.*$/i, ""));
+    next(n.replace(/(?<!\/)\/+(?:-\/+)?(?:tree|blob|commits?|releases\/tag|src)\/[^]*$/i, ""));
     const repo = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:@]+)(?::\d*)?\/+(.+)$/i.exec(n);
     if (repo) next(`${repo[1].toLowerCase()}/${repo[2]}`);
     // The module proxy's case-encoding (`github.com/!acme!org/core` is `github.com/AcmeOrg/core`):
@@ -603,7 +662,7 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
     if (m) out.push(["PyPI", m[1]]);
   } else if (host === "proxy.golang.org" || host === "sum.golang.org") {
     const path = goUnescape(segments.join("/"));
-    const module = path.replace(/\/@(v|latest)(\/.*)?$/, "").replace(/^lookup\//, "");
+    const module = path.replace(/\/@(v|latest)(\/.*)?$/, "").replace(/^lookup\//, "").replace(/\/+$/, "");
     if (module) out.push(["Go", module.replace(/@.*$/, "")]);
   } else if (host === "rubygems.org" || host === "index.rubygems.org") {
     // /api/v1/gems/<name>.json, /api/v1/versions/<name>.json, /gems/<name>-<v>.gem, /info/<name>
@@ -614,6 +673,10 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
     // /p2/<vendor>/<name>.json, /packages/<vendor>/<name>.json
     const at = segments.findIndex((s) => s === "p2" || s === "p" || s === "packages");
     if (at >= 0 && segments[at + 2]) out.push(["Packagist", `${segments[at + 1]}/${segments[at + 2].replace(/(~dev)?\.json$/, "")}`]);
+  } else if (host === "api.github.com" || host === "github.com" || host === "raw.githubusercontent.com") {
+    // Round 15, A1: a repository the request is about, as a Go path names it (`github.com/owner/repo`).
+    const at = host === "api.github.com" ? segments.indexOf("repos") + 1 : 0;
+    if (segments[at] && segments[at + 1]) out.push([null, `github.com/${segments[at]}/${segments[at + 1].replace(/\.git$/, "")}`]);
   } else if (host === "hn.algolia.com") {
     for (const term of (u.searchParams.get("query") ?? "").split(/[\s"]+/)) if (term) out.push([null, term]);
   }
@@ -643,8 +706,30 @@ export function namesInRequest(url: string, body: unknown): Array<[string | null
   return out;
 }
 
-/** Throws PrivateRequestRefused when the request names a private package; returns otherwise. */
+/**
+ * Round 15, A1: a call's own never-send set (what_should_i_know: its not_packages words and `public: false`
+ * entries), held for the call's requests. `forbids(ecosystem, name)` says whether a name, or for a path any prefix of
+ * it at a `/` boundary, is in the set (the caller folds names as the set is folded).
+ */
+export interface RequestVeto {
+  forbids(ecosystem: string | null, name: string): boolean;
+}
+const vetoes = new AsyncLocalStorage<RequestVeto>();
+/** Run `fn`, and every request it makes, under the call's never-send set. */
+export function withRequestVeto<T>(veto: RequestVeto, fn: () => T): T {
+  return vetoes.run(veto, fn);
+}
+/** The text a request refused by the call's never-send set is answered with (the lookup is not checked). */
+export const VETOED = "not checked: it would have named something you marked private";
+
+/**
+ * Throws PrivateRequestRefused when the request names a private package, or a name of the call's never-send set (or a
+ * path under one); returns otherwise. THE choke point: every registry, proxy, OSV.dev and search request passes it
+ * (http-utils.ts fetchWithTimeout, each redirect hop too).
+ */
 export function refusePrivateRequest(url: string, init?: { body?: unknown }): void {
+  const veto = vetoes.getStore();
+  if (veto) for (const [eco, name] of namesInRequest(url, init?.body)) if (veto.forbids(eco, name)) throw new PrivateRequestRefused(VETOED);
   if (sources.size === 0 && byKey.size === 0 && remembered.size === 0 && !context.getStore()) return;
   for (const [eco, name] of namesInRequest(url, init?.body)) {
     const why = privateWhy(eco, name);

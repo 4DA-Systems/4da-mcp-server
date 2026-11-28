@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * What a word in a task can and cannot be, as a package name (blind audit round 4): shared by the
  * briefing's readers of named versions (briefing-requested-versions.ts) and new packages
- * (briefing-new-packages.ts).
+ * (briefing-new-packages.ts). The forms that tie a version to a name live in briefing-command-check.ts
+ * (strictEvidence), for example name@spec (bare or quoted), `alias@npm:name@spec` (tied to name), name==spec and
+ * PEP 440's other operators, `name = "spec"`, `"name": "spec"`. They are versions the briefing happens to read,
+ * best effort: a spelling it does not read is not checked (round 11, P1).
  */
 
+import { mayScanWord } from "../call-budget.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
@@ -24,7 +30,20 @@ export function normalizePypiName(name: string): string {
  * and for anything else. Deterministic and offline (live/popular-pypi.ts). `colourama` is
  * colorama, `jeIlyfish` jellyfish, `python3-dateutil` python-dateutil.
  */
+const CLOSEST_PYPI = new Map<string, string | null>();
+/** Round 10, G4: once per distinct name (pure in the name), as closestPopularNpm. */
 export function closestPopularPypi(name: string): string | null {
+  const key = normalizePypiName(name);
+  if (key.length >= 5 && !POPULAR_PYPI_SET.has(key) && !mayScanWord(`PyPI\0${key}`)) return null;
+  const known = CLOSEST_PYPI.get(key);
+  if (known !== undefined) return known;
+  const found = closestPopularPypiUncached(name);
+  if (CLOSEST_PYPI.size >= 20_000) CLOSEST_PYPI.clear();
+  CLOSEST_PYPI.set(key, found);
+  return found;
+}
+
+function closestPopularPypiUncached(name: string): string | null {
   const n = normalizePypiName(name);
   if (n.length < 5 || POPULAR_PYPI_SET.has(n)) return null;
   const nearest = (max: number) => {
@@ -133,12 +152,16 @@ export function normalizeVersionSyntax(task: string): string {
   const toml = TOML_MANIFEST.test(task);
   return (
     task
+      // Build metadata after a version (`4.17.15+<hash>`, `1.0.0+build.5`) is not part of what a resolver
+      // compares, and the text after `+` is never a name: `npm install lodash@4.17.15+<32 hex>` listed the
+      // hex as a package (third blind check of the 2026-11-25 fixes).
+      .replace(/(\d)\+[0-9A-Za-z][0-9A-Za-z.-]{0,300}/g, "$1")
       // A manifest entry written into the task (pre-publish audit of 5d709ff): `"dbg": "npm:debug@4.4.2"`
       // installs debug 4.4.2 under the name dbg, and was read as the packages dbg and npm, both clean.
-      .replace(JSON_ALIAS_ENTRY, (_m, _q1, _key, _q2, name: string, spec: string | undefined) => (spec ? `${name}@${joinSpec(spec)}` : name))
+      .replace(JSON_ALIAS_ENTRY, (_m, _q1, _key, _q2, name: string, spec: string | undefined) => (spec ? `${JSON_MARK}${name}@${joinSpec(spec)}` : `${JSON_MARK}${name}`))
       // `"lodash": "^4.17.20"`, `"minimist": ">=1.2.5 <1.2.6"`: the whole range is the package's (r8, B2:
       // only `<1.2.6` was read, and judged as the release 1.2.6).
-      .replace(JSON_VERSION_ENTRY, (m, _q1, name: string, _q2, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${name}@${joinSpec(spec)}`))
+      .replace(JSON_VERSION_ENTRY, (m, _q1, name: string, _q2, spec: string) => (NOT_DEPENDENCY_FIELDS.has(name.toLowerCase()) ? m : `${JSON_MARK}${name}@${joinSpec(spec)}`))
       // Cargo.toml / Poetry: `serde = { version = "1.0.200", features = [...] }`. Marked as a TOML entry
       // (TOML_MARK), so both readers file it under crates.io or PyPI, never npm (pre-publish round 10, W3:
       // the clause reader filed `smallvec = { version = ">=1.6.0, <1.6.1" }` under crates.io and the
@@ -196,6 +219,14 @@ export function isTomlEntry(task: string, start: number): boolean {
 }
 
 /**
+ * Put before the name of a JSON manifest entry written in the task (`"name": "^1.2"`): a key of a
+ * manifest, so the readers take its key as a package name and its value as the version.
+ * Private-use, outside every token, as TOML_MARK.
+ */
+export const JSON_MARK = "\uE004";
+
+
+/**
  * A constraint in the form dependency_check reads it in for that ecosystem, or null when it has no
  * reading there. npm (and Go) join comparators with spaces and read no comma, PyPI joins them with
  * commas and reads no space, Cargo reads both: "add minimist >= 1.2.0, < 1.2.6" went to dependency_check
@@ -239,18 +270,22 @@ const BARE_VERSION = String.raw`v?\d[\w.*+-]*`;
  * ` - version` (a hyphen range). A single operator version is joined too (`<1.2.6`, `>= 2`).
  */
 const PROSE_CHAIN = new RegExp(
-  String.raw`(?:(?<![-=])${OP_VERSION}|(?<![\w.])${BARE_VERSION}(?=(?:\s*\|\|\s*|\s+|\s*,\s*)(?:[<>=~^!]|v?\d)|\s+-\s+v?\d))(?:\s*\|\|\s*(?:${OP_VERSION}|${BARE_VERSION})|\s*,\s*${OP_VERSION}|\s+${OP_VERSION}|\s+-\s+${BARE_VERSION})*`,
+  String.raw`(?:(?<![-=])${OP_VERSION}|(?<![\w.])${BARE_VERSION}(?=(?:\s*\|\|\s*|\s+|\s*,\s*)(?:[<>=~^!]|v?\d)|\s+-\s+v?\d))(?:\s*\|\|\s*(?:${OP_VERSION}|${BARE_VERSION})|\s*,\s*${OP_VERSION}|\s+${OP_VERSION}|\s+-\s+${BARE_VERSION}){0,20}`,
   "g",
 );
 
 /** A package name as a manifest key: `lodash`, `@scope/name`. */
-const KEY = String.raw`@?[\w.~-]+(?:\/[\w.~-]+)?`;
-/** A version or range a manifest entry gives: `4.17.20`, `^1.2`, `~2.0.1`, `>=2`, `=1.0.0`, `7.x`, `>=1.2.5 <1.2.6`, `>=1.0, <2`. */
-const SPEC = String.raw`(?:[~^]|[<>]=?|={1,2})?\s*v?\d[\w.*+<>=~^!|,\s-]*?`;
+const KEY = String.raw`@?[\w.~-]{1,214}(?:\/[\w.~-]{1,214})?`;
+/**
+ * A version or range a manifest entry gives: `4.17.20`, `^1.2`, `~2.0.1`, `>=2`, `=1.0.0`, `7.x`, `>=1.2.5 <1.2.6`, `>=1.0, <2`.
+ * Every run in these entry patterns is bounded: an unbounded lazy run rescanned the rest of the task
+ * from every `name = {` (pre-publish audit 2026-11-25, F-M3). No real name, version or inline table is longer.
+ */
+const SPEC = String.raw`(?:[~^]|[<>]=?|={1,2})?\s{0,8}v?\d[\w.*+<>=~^!|,\s-]{0,200}?`;
 const JSON_ALIAS_ENTRY = new RegExp(String.raw`(["'])(${KEY})\1\s*:\s*(["'])npm:(${KEY})(?:@([^"'\s]+))?\3`, "g");
 const JSON_VERSION_ENTRY = new RegExp(String.raw`(["'])(${KEY})\1\s*:\s*(["'])(${SPEC})\3`, "g");
-const TOML_TABLE_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]*)\s*=\s*\{[^}]*?\bversion\s*=\s*(["'])(${SPEC})\3[^}]*\}`, "gm");
-const TOML_VERSION_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]*)\s*=\s*(["'])(${SPEC})\3`, "gm");
+const TOML_TABLE_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]{0,213})\s{0,8}=\s{0,8}\{[^{}]{0,400}?\bversion\s{0,8}=\s{0,8}(["'])(${SPEC})\3[^{}]{0,400}\}`, "gm");
+const TOML_VERSION_ENTRY = new RegExp(String.raw`(^|[\s\x60(])([A-Za-z0-9][\w.-]{0,213})\s{0,8}=\s{0,8}(["'])(${SPEC})\3`, "gm");
 const TOML_MANIFEST = /\b(?:cargo\.toml|pyproject\.toml|crates?|cargo|poetry)\b/i;
 /** Manifest fields that hold a version but are not a dependency (`"version": "1.2.3"`, engines' `"node": ">=18"`, `edition = "2021"`). */
 const NOT_DEPENDENCY_FIELDS: ReadonlySet<string> = new Set([

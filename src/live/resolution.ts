@@ -416,7 +416,7 @@ export function* resolveGroupSteps(group: ResolutionGroup): Steps<GroupResolutio
   // Only a lockfile pins exact versions; comparing node_modules against a
   // manifest's specifier floor would report drift that is not there.
   if (ecosystem === "npm" && read.kind === "lockfile" && read.source) {
-    const install = checkInstallState(group.dir, resolved, read.source);
+    const install = checkInstallState(group.dir, resolved, read.source, read.versions);
     resolved = install.resolved;
     drift = install.drift;
     driftAudit = install.driftAuditDeps;

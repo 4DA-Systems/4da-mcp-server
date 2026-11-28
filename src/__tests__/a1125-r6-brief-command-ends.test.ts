@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * Fourth blind check of the 2026-11-25 fixes, item 2: the command reader read past the end of a command.
+ * `npm install lodash && git push origin feature-x` listed git, push, origin, feature-x; `npm install pg
+ * && psql -U admin -W pw` listed psql and pw; `npm install lodash --auth admin:hunter2` listed hunter2;
+ * abbreviated private-registry options (`-ihttps://...`, `--reg URL`, `YARN_REGISTRY=`) left the private
+ * package readable. A shell or sentence separator now ends the operands; a shell variable or expansion
+ * and a word with a colon inside are never names, and a value is never repeated. Stubbed fetch.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
+import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
+
+let h: Harness;
+let bodies: string[];
+const sent = () => [...h.requests, ...bodies].map((s) => decodeURIComponent(s));
+
+beforeEach(() => {
+  h = createHarness();
+  bodies = [];
+  const inner = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+    if (init?.body) bodies.push(String(init.body));
+    return inner(input, init);
+  });
+  h.npmProject({ minimist: "1.2.5" }, {}, { minimist: { version: "1.2.5" } });
+  h.NPM = { lodash: { latest: "4.17.21", versions: { "4.17.21": {} } }, pg: { latest: "8.13.0", versions: { "8.13.0": {} } } };
+});
+afterEach(() => h.dispose());
+
+async function brief(task: string): Promise<Record<string, any>> {
+  return (await executeWhatShouldIKnow(null, { task, project_path: h.dir }, await h.live())) as Record<string, any>;
+}
+
+/** Every word the answer names as a package, looked up or not. */
+const named = (r: Record<string, any>) => [
+  ...(waitingWords(r) ?? []).map((w: { word: string }) => w.word),
+  ...(r.new_packages ?? []).map((p: { name: string }) => p.name),
+  ...(r.requested_versions ?? []).map((p: { name: string }) => p.name),
+];
+
+describe("a separator ends the command's operands", () => {
+  it.each([
+    "npm install lodash && git push origin feature-x",
+    "npm install lodash; cargo build",
+    "npm install lodash || git push",
+    "npm install lodash | tee log.txt",
+    "npm install lodash & npm run dev",
+    "npm install lodash\ngit push origin main",
+    "run `npm install lodash` then `git push`",
+  ])("%s", async (task) => {
+    const r = await brief(task);
+    expect(named(r)).toEqual(["lodash"]);
+    expect(r.requested_versions).toBeUndefined();
+  });
+
+  it("npm install pg && psql -U admin -W pw: psql and pw are no packages", async () => {
+    const r = await brief("npm install pg && psql -U admin -W pw");
+    expect(named(r)).toEqual(["pg"]);
+    expect(sent().some((s) => /\bpw\b|psql/.test(s))).toBe(false);
+  });
+});
+
+// Round 8, m10: a command not read whole (prose after its operands that is no shell separator, a comma, a colon word,
+// an unlisted option) is looked up by no reader, its bundled names included: nothing of it is offered, repeated or
+// looked up, and the level is review_needed at most.
+describe("round 8, m10: a command not read whole is looked up by no reader", () => {
+  // Round 9, E2: a redirection or a shell comment is no end of the command: not read whole, nothing looked up.
+  it.each(["npm install lodash // the util", "npm install lodash, then build it", "npm install lodash (the util) and test", "npm install lodash — the util", "npm install lodash > out.txt", "npm install lodash < in.txt", "npm install lodash # then commit", "npm install lodash 2>&1 zqx207", "npm install lodash 2> err.log", "npm install lodash &> out.log"])("%s", async (task) => {
+    const r = await brief(task);
+    expect(named(r)).toEqual([]);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+    expect(sent().some((s) => s.includes("lodash"))).toBe(false);
+  });
+});
+
+describe("shell expansions and colon words are never names, and never repeated", () => {
+  it.each(["npm install $(cat pkgs.txt)", "npm install $PKG", "npm install %PKG%", "npm install ${PKG}"])("%s: not read, and not safe", async (task) => {
+    const r = await brief(task);
+    expect(named(r)).toEqual([]);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+  });
+
+  it.each(["npm install lodash --auth admin:hunter2", "npm install lodash user:hunter2"])("%s", async (task) => {
+    const r = await brief(task);
+    // Round 8, m10: not read whole, so not even lodash is looked up.
+    expect(named(r)).toEqual([]);
+    expect(JSON.stringify({ ...r, task: undefined })).not.toContain("hunter2");
+    expect(sent().some((s) => s.includes("hunter2"))).toBe(false);
+  });
+});
+
+describe("an abbreviated or glued private registry is a private source", () => {
+  it.each([
+    "npm install -ihttps://npm.zqx.internal zqx-cli",
+    "npm install --reg https://npm.zqx.internal zqx-cli",
+    "YARN_REGISTRY=https://npm.zqx.internal yarn add zqx-cli",
+    "npm i zqx-cli --regi=https://npm.zqx.internal/",
+    "pip install -ihttps://pypi.zqx.internal/simple zqx-cli",
+    "pip install --inde https://pypi.zqx.internal/simple zqx-cli",
+    "pip install --extra-index https://pypi.zqx.internal/simple zqx-cli",
+    "cargo add zqx_cli --reg zqx",
+  ])("%s", async (task) => {
+    const r = await brief(task);
+    expect(named(r)).toEqual([]);
+    expect(sent().some((s) => s.includes("zqx"))).toBe(false);
+    expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
+  });
+});

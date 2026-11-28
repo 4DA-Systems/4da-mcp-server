@@ -15,6 +15,8 @@ import { isActionableVulnerability } from "../live/maintenance.js";
 import { driftFor } from "./install-drift-notes.js";
 import { discoveryFor, discoveryNote, exclusionNotes, lockfileProblemNotes, splitLockfileProblems, workspaceNote } from "../project-tree.js";
 import { vulnerabilityCoverage } from "../live/scan-coverage.js";
+import { walkNotReadNote } from "./what-should-i-know.js";
+import { escapeUnsafeDirs, liveUnsafeDirs } from "../live/shell-safe.js";
 import { withheldLine } from "../live/private-packages.js";
 import { uncheckedOfferNote, vetOfferedReleases } from "../live/offered-release.js";
 import { quoteThirdParty } from "../untrusted-text.js";
@@ -48,7 +50,7 @@ export const dependencyHealthTool = {
   description:
     "Assess health of project dependencies — version freshness, deprecation status, known CVEs. Auto-detects stack from lock files. Covers npm, Rust, Python, and Go. For npm, `installedVersion` appears beside `currentVersion` when node_modules holds a different version than the lockfile. " +
     "Two populations: `totalDeps`, `outdatedCount` and `deprecatedCount` are over the DIRECT dependencies (registry rows; devDependencies only with include_dev); `vulnerableCount` is distinct vulnerable packages in the full installed tree of `treeDeps` (the same set as vulnerability_scan), `vulnerableDirectCount` the direct ones among them, so it can exceed `totalDeps`. `healthScoreBasis` gives the penalties behind `healthScore`. " +
-    "When the CVE check is missing or incomplete (OSV.dev unreachable, timed out, rate limited, or FOURDA_OFFLINE), the summary starts with \"NOT CHECKED: ...\", `vulnerabilityCoverage` says how many dependencies were not checked, and `healthScore` and `vulnerableCount` are null: that is not a healthy result.",
+    "When the CVE check is missing or incomplete (OSV.dev unreachable, timed out, rate limited, or FOURDA_OFFLINE), the summary starts with \"NOT CHECKED: ...\", `vulnerabilityCoverage` says how many dependencies were not checked, and `healthScore` and `vulnerableCount` are null: that is not a healthy result. So are they when a lockfile could not be read or was read only in part (older than its manifest, truncated, entries skipped): `withheldReason` says which.",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -198,7 +200,17 @@ function nothingChecked(start: number, liveIntel: LiveIntelligence | null, only?
   };
 }
 
+/** dependency_health, with every repository directory whose name is not a plain path named escaped in its sentences (audit 2026-11-25 review). */
 export async function executeDependencyHealth(
+  db: FourDADatabase | null,
+  params: DependencyHealthParams,
+  liveIntel: LiveIntelligence | null,
+): Promise<DependencyHealthResult> {
+  const answer = await dependencyHealthAnswer(db, params, liveIntel);
+  return escapeUnsafeDirs(answer, liveUnsafeDirs(liveIntel));
+}
+
+async function dependencyHealthAnswer(
   _db: FourDADatabase | null,
   params: DependencyHealthParams,
   liveIntel: LiveIntelligence | null,
@@ -263,11 +275,11 @@ export async function executeDependencyHealth(
   // A lockfile that could not be read is a gap of the same kind: nothing it
   // pins was sent to OSV. 6.2.5 scored a merge-conflicted package-lock.json
   // 32/100 from package.json's pins alone (audit M5); the score and the
-  // counts are withheld, as for an OSV gap. A file read with entries skipped
-  // (PARTIAL) or a requirements include refused by policy (REFUSED) loses
-  // only what it names: the checked part is scored, marked partial
-  // (scoreCoverage), so a refusal that is permanent by design does not
-  // withhold the score forever. ecosystem_filter narrows these too.
+  // counts are withheld, as for an OSV gap; so they are for a file read only in
+  // part (PARTIAL, below). A requirements include refused by policy (REFUSED)
+  // or a lockfile not cross-checked loses nothing it holds: the checked part is
+  // scored, marked partial (scoreCoverage), so a refusal that is permanent by
+  // design does not withhold the score forever. ecosystem_filter narrows these too.
   const problems = liveIntel.getLockfileProblems().filter((p) => !params.ecosystem_filter || !p.ecosystem || p.ecosystem === params.ecosystem_filter);
   const { unreadable, partial: partialReads, refused, conflicts, uncrossed, mergeConflicts } = splitLockfileProblems(problems);
   // A file holding a merge conflict was not read at all: the same gap as an unreadable one.
@@ -279,7 +291,14 @@ export async function executeDependencyHealth(
   const noLockfile = liveIntel.wasLockfileRead() || readGap !== null
     ? null
     : "NOT CHECKED: no lockfile was read for this project, so no installed version is known: what its manifests declare are ranges (declaredRange on each row), not installs, and what they install was not checked. Generate a lockfile (npm install --package-lock-only, cargo generate-lockfile, uv lock ...) and scan again.";
-  const withheld = coverage !== null || readGap !== null || noLockfile !== null;
+  // A lockfile read only in part (older than its manifest, truncated, entries skipped) or one beside
+  // it that pins another set (CONFLICT): a declared or installed dependency was not read, so a score
+  // ("100/100 over the checked part") would read as reassurance beside it. The score and the counts
+  // are withheld and the summary leads with what was not read, as vulnerability_scan's totals are
+  // (audit 2026-11-25: C1 Gemfile, C2 Pipfile older than their manifests read 100/100).
+  const unreadParts = [...partialReads, ...conflicts];
+  const partialGap = unreadParts.length > 0 ? `NOT CHECKED: ${lockfileProblemNotes(unreadParts).join(" ")}` : null;
+  const withheld = coverage !== null || readGap !== null || noLockfile !== null || partialGap !== null;
   // Direct dependencies whose registry did not answer: their outdated and deprecated state is
   // unknown, not current. Under a registry outage the score counted them neither and the summary
   // said every one was "checked against its registry" (audit 6.2.5 B-7: 58/100, true 37).
@@ -290,7 +309,13 @@ export async function executeDependencyHealth(
           `PARTIAL: ${registryFailed.length} of ${registryData.length} direct dependenc${registryData.length === 1 ? "y" : "ies"} could not be checked against ${registryFailed.length === 1 ? "its registry" : "their registries"} (${String(registryFailed[0].fetchError).slice(0, 120)}); whether ${registryFailed.length === 1 ? "it is" : "they are"} outdated or deprecated is unknown, not current.`,
         ]
       : [];
-  const partialNotes = [...lockfileProblemNotes([...partialReads, ...refused, ...conflicts, ...uncrossed]), ...registryNote];
+  // A walk that stopped before it reached every directory: the score is over the part it read, never
+  // "all healthy", and the summary says so first (audit 2026-11-25 F-B1).
+  const walkNote = walkNotReadNote(liveIntel.getDiscovery());
+  // A lockfile that was read whole but could not be compared with its manifest is a note beside
+  // the score, never a reason to call the score partial (the scan and the planner treat it so too).
+  const uncrossedNotes = lockfileProblemNotes(uncrossed);
+  const partialNotes = [...(walkNote ? [walkNote] : []), ...lockfileProblemNotes(refused), ...registryNote];
   const scorePartial = !withheld && partialNotes.length > 0;
   // One population for every count: the stored scan can be vulnerability_scan's,
   // which includes direct devDependencies by default, while the registry rows
@@ -457,7 +482,7 @@ export async function executeDependencyHealth(
   const partial = discoveryNote(liveIntel.getDiscovery());
   if (partial) parts.push(partial.replace(/[.]$/, ""));
   // Ecosystems not read, test fixtures left out, lockfiles that could not be read: never silent.
-  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...partialNotes]) parts.push(note.replace(/[.]$/, ""));
+  for (const note of [...exclusionNotes(liveIntel.getDiscovery()), ...partialNotes.filter((n) => n !== walkNote), ...uncrossedNotes]) parts.push(note.replace(/[.]$/, ""));
 
   return {
     scannedAt: new Date().toISOString(),
@@ -481,7 +506,17 @@ export async function executeDependencyHealth(
     vulnerableCount: withheld ? null : vulnerable,
     advisoryCount,
     healthScore,
-    ...(withheld ? { withheldReason: noLockfile ? ("no_lockfile" as const) : coverage ? ("vulnerability_data_incomplete" as const) : ("lockfile_unreadable" as const) } : {}),
+    ...(withheld
+      ? {
+          withheldReason: noLockfile
+            ? ("no_lockfile" as const)
+            : coverage
+              ? ("vulnerability_data_incomplete" as const)
+              : readGap
+                ? ("lockfile_unreadable" as const)
+                : ("lockfile_partial" as const),
+        }
+      : {}),
     ...(scorePartial ? { scoreCoverage: { complete: false as const, basis: "checked_part" as const, notes: partialNotes } } : {}),
     ...(vulnResult?.aliasSeverity ? { aliasSeverity: vulnResult.aliasSeverity } : {}),
     ...(coverage ? { vulnerabilityCoverage: coverage } : {}),
@@ -490,8 +525,8 @@ export async function executeDependencyHealth(
     // By each advisory's own grade, before the transitive/dev-only discount vulnerability_scan's
     // by_severity applies; unlabelled, the two read as a contradiction (audit 6.2.5 D-8: 13 vs 1 critical).
     ...(vulnSummary ? { vulnerabilitySummaryBasis: "each advisory's own severity, before the transitive and dev-only discount vulnerability_scan's by_severity applies" } : {}),
-    summary: `${withheld
-      ? `${[noLockfile, coverage?.note, readGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
+    summary: `${walkNote ? `${walkNote} ` : ""}${withheld
+      ? `${[noLockfile, coverage?.note, readGap, partialGap].filter(Boolean).join(" ")} Health score withheld until every dependency is checked. ${capitalise(parts.join("; "))}.`
       : `Health: ${healthScore}/100${scorePartial ? " over the checked part only (see scoreCoverage)" : ""} (100 minus ${vulnPenalty} for vulnerabilities, ${outdatedPenalty} for outdated, ${deprecatedPenalty} for deprecated; see healthScoreBasis). ${capitalise(parts.join("; "))}.`}${startedIn ? ` ${startedIn}` : ""}`,
     scanDurationMs: Date.now() - start,
     cached: false,

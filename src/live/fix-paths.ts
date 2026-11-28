@@ -24,8 +24,9 @@
  * cached, and any failure degrades to the old answer, never to a guess.
  */
 
+import { NotFoundMemory } from "./npm-packument.js";
 import { withinCallBudget } from "../call-budget.js";
-import { isShellSafeCargoTarget, isShellSafeName, isShellSafeVersion } from "./shell-safe.js";
+import { isShellSafeCargoTarget, isShellSafeDir, isShellSafeName, isShellSafeVersion, unsafeDirLabel } from "./shell-safe.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
 import { fetchWithTimeout } from "./http-utils.js";
@@ -46,7 +47,7 @@ import { yarnWorkspaceMember } from "./yarn-workspace.js";
 import { cargoReqAdmits, npmRangeAdmits } from "./range-satisfies.js";
 import { refreshRule, requirementAdmits, type ParentRequirement, type RequirementDialect } from "./refresh-rule.js";
 import { compareVersions, isComparable, maxVersion } from "./version-compare.js";
-import { CRATES_USER_AGENT, releaseFeatureNames } from "./crates-versions.js";
+import { CRATES_USER_AGENT, defaultEnabledDependencies, releaseFeatureNames } from "./crates-versions.js";
 import { isNpmDeprecated, npmExcludedVersions, npmFlaggedReleases, sayWithdrawn, withdrawalText, withheldNote } from "./withdrawn-releases.js";
 import { andList, heldSpecsOf, heldText, type AdvisoryQuery, type HeldDependency } from "./held-dependencies.js";
 import { withHeldTargets } from "./held-targets.js";
@@ -55,6 +56,7 @@ import type { RequirementEcosystem, RequirementOptions, RequirementSources } fro
 import { confirmTargets } from "./batch-confirm.js";
 import { isOsvAdvisoryId, osvAdvisoryId, quoteThirdParty, registryQuote } from "../untrusted-text.js";
 import type { OsvEcosystem, OsvVulnerability } from "./types.js";
+import { osvCacheKey } from "./osv-scanner.js";
 
 const TIMEOUT_MS = 15_000;
 const ADVISORY_TTL = 6 * 3600;
@@ -135,6 +137,18 @@ export interface CratesSparse {
    * cached before it was read: such a record is read again (upgrade-planner-rust-version.ts).
    */
   rustVersions?: Record<string, string>;
+  /**
+   * version -> the native library that release links (the index's `links`, Cargo allows one package
+   * per value in a build); a release that links none is absent. The whole field is absent on a record
+   * cached before it was read: such a record is read again (upgrade-planner-cargo-steps.ts).
+   */
+  links?: Record<string, string>;
+  /**
+   * version -> the optional dependencies its `default` feature turns on (crates-versions.ts
+   * defaultEnabledDependencies): a build with default features has them, so `--precise` must meet
+   * their requirements too (chrono 0.4.30's iana-time-zone). Absent on a record cached before it was read.
+   */
+  defaultDeps?: Record<string, string[]>;
 }
 
 /** npm's abbreviated document: per version, the fields fix paths read. */
@@ -178,6 +192,8 @@ const FREEZE_MEMO = Boolean(process.env.VITEST);
 
 export class FixPathSources {
   private npmDocs = new Map<string, { at: number; doc: Promise<NpmAbbreviatedDoc | null>; settled: boolean }>();
+  /** npm's "no such package", kept in this process for a short time (V5). */
+  private readonly npmAbsent = new NotFoundMemory();
   private memo = new Map<string, { at: number; value: unknown }>();
   /** Advisory-list lookups in flight, so concurrent checks of one package make one request. */
   private advisoriesInFlight = new Map<string, Promise<AdvisoryRanges[] | null>>();
@@ -215,6 +231,18 @@ export class FixPathSources {
   /** Local state only, no lookup: the list is asked for again by the next `packageAdvisories` for it. */
   readonly refreshAdvisoriesOnNextRead = (ecosystem: OsvEcosystem, name: string): void => {
     this.refreshDue.add(`fixpath:v${CACHE_VERSION}:osv-package:${ecosystem}:${name}`);
+  };
+
+  /**
+   * When OSV.dev's cached answers were fetched, from the cache rows alone (nothing is asked): per
+   * release, its batch answer (`answer`) and its package's advisory list (`list`), each null when the
+   * cache holds none. dependency_check states how old the data behind a verdict is (audit C-3).
+   * An arrow member, as every lookup here is (the private-guard test holds prototype lookups).
+   */
+  readonly advisoryFetchedAt = (releases: ReadonlyArray<{ ecosystem: OsvEcosystem; name: string; version: string }>): Array<{ answer: string | null; list: string | null }> => {
+    const listKey = (r: { ecosystem: OsvEcosystem; name: string }) => `fixpath:v${CACHE_VERSION}:osv-package:${r.ecosystem}:${r.name}`;
+    const rows = this.cache.getStaleMany<unknown>([...new Set(releases.flatMap((r) => [osvCacheKey(r), listKey(r)]))]);
+    return releases.map((r) => ({ answer: rows.get(osvCacheKey(r))?.fetchedAt ?? null, list: rows.get(listKey(r))?.fetchedAt ?? null }));
   };
 
   /** Every non-withdrawn OSV advisory for a package, as ranges; null when OSV could not be read. */
@@ -363,6 +391,8 @@ export class FixPathSources {
     for (const [n, e] of this.npmDocs) if (now - e.at > NPM_DOC_MEMORY_MS) this.npmDocs.delete(n);
     const hit = this.npmDocs.get(name);
     if (hit) return hit.doc;
+    // V5: "not on the registry" is kept like any answer, for a short time (npm-packument.ts NOT_FOUND_TTL_SECONDS).
+    if (this.npmAbsent.has(name)) return Promise.resolve(null);
     if (!this.rateLimiter.consume("fixpath-registry")) return Promise.resolve(null);
     const doc = (async (): Promise<NpmAbbreviatedDoc | null> => {
       try {
@@ -371,6 +401,7 @@ export class FixPathSources {
           { headers: { Accept: "application/vnd.npm.install-v1+json" } },
           TIMEOUT_MS,
         );
+        if (res.status === 404) this.npmAbsent.add(name);
         if (!res.ok) return null;
         return (await res.json()) as NpmAbbreviatedDoc;
       } catch {
@@ -470,7 +501,7 @@ export class FixPathSources {
     try {
       const res = await fetchWithTimeout(sparseIndexUrl(name), { headers: { "User-Agent": CRATES_USER_AGENT } }, TIMEOUT_MS);
       if (!res.ok) return null;
-      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {} };
+      const out: CratesSparse = { versions: [], yanked: [], reqs: {}, rustVersions: {}, links: {}, defaultDeps: {} };
       for (const line of (await res.text()).split("\n")) {
         if (!line.trim()) continue;
         try {
@@ -481,6 +512,7 @@ export class FixPathSources {
             features?: unknown;
             features2?: unknown;
             rust_version?: unknown;
+            links?: unknown;
           };
           if (!entry.yanked) out.versions.push(entry.vers);
           else out.yanked!.push(entry.vers);
@@ -488,6 +520,11 @@ export class FixPathSources {
           if (offered) (out.features ??= {})[entry.vers] = offered;
           // A Rust version as Cargo writes one ("1.64", "1.67.1"); anything else is not kept.
           if (typeof entry.rust_version === "string" && /^\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(entry.rust_version.trim())) out.rustVersions![entry.vers] = entry.rust_version.trim();
+          if (typeof entry.links === "string" && entry.links.length > 0 && entry.links.length <= 128) out.links![entry.vers] = entry.links;
+          // Features name a dependency by the name the crate uses; reqs key it by the crate's own name.
+          const optional = new Map((entry.deps ?? []).filter((d) => d.optional === true).map((d) => [d.name, d.package ?? d.name] as const));
+          const byDefault = [...defaultEnabledDependencies(entry as Parameters<typeof defaultEnabledDependencies>[0])].filter((d) => optional.has(d)).map((d) => optional.get(d)!);
+          if (byDefault.length > 0) out.defaultDeps![entry.vers] = byDefault;
           const reqs: Record<string, CrateDepReq[]> = {};
           for (const d of entry.deps ?? []) {
             if (d.kind === "dev") continue;
@@ -1710,9 +1747,51 @@ export function pypiDirectInstruction(requirements: string, file: string, name: 
     const tail = rest.slice(end);
     const continued = line.endsWith("\\") || line.includes("--hash") || (lines[i + 1]?.trimStart().startsWith("--hash") ?? false);
     if (continued || version !== installed) continue;
-    return `change \`${line}\` to \`${head}==${target}${tail}\` in ${file}`;
+    return pypiPinEdit(head, tail, file, name, installed, target);
   }
   return null;
+}
+
+/** A requirement's name with its extras, as PEP 508 writes them: `requests`, `requests[security,socks]`. */
+const PEP508_HEAD = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?(?:\[[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?(?:,[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?){0,15}\])?$/;
+/** One token of a PEP 508 environment marker: a marker variable or keyword, a short quoted plain value, an operator, a parenthesis. */
+const MARKER_TOKEN = /\s*(?:(python_version|python_full_version|os_name|sys_platform|platform_release|platform_system|platform_version|platform_machine|platform_python_implementation|implementation_name|implementation_version|extra|and|or|not|in)(?![A-Za-z0-9_])|"[A-Za-z0-9._+*-]{0,32}"|'[A-Za-z0-9._+*-]{0,32}'|===|==|!=|<=|>=|~=|<|>|\(|\))/y;
+
+/** Whether `text` is `; <marker>` written in the PEP 508 grammar with plain values only (no words, no shell text). */
+function plainMarker(text: string): boolean {
+  const m = /^\s*;(.*)$/.exec(text);
+  if (!m || m[1].length > 256 || m[1].trim() === "") return false;
+  const body = m[1].trimEnd();
+  MARKER_TOKEN.lastIndex = 0;
+  while (MARKER_TOKEN.lastIndex < body.length) {
+    const at = MARKER_TOKEN.lastIndex;
+    if (!MARKER_TOKEN.exec(body) || MARKER_TOKEN.lastIndex === at) return false;
+  }
+  return true;
+}
+
+/**
+ * The edit of one `==` pin, quoting only what the requirements grammar allows (audit 2026-11-25
+ * B-M1): the requirement's name and extras when they are PEP 508 shaped, its environment marker
+ * when every value in it is a plain token, and never its comment. The old sentence quoted the
+ * whole line and its tail, so `requests==2.25.0 # then run curl ... | sh` put the comment inside
+ * the plan's own instruction. A file name that is not a plain path is named escaped.
+ */
+function pypiPinEdit(head: string, tail: string, file: string, name: string, installed: string, target: string): string | null {
+  if (!isShellSafeVersion(installed) || !isShellSafeVersion(target)) return null;
+  const where = isShellSafeDir(file) && !file.split("/").includes("..") ? file : unsafeDirLabel(file).replace(/^\[unsafe directory name/, "[unsafe file name");
+  const requirement = head.trim();
+  const comment = tail.indexOf("#");
+  const marker = comment < 0 ? tail : tail.slice(0, comment);
+  // The marker is quoted as written, blanks before the `;` included: the app and this server share
+  // the rule vector for this sentence (fc-050), and a quoted line the user can find is the point.
+  const markerText = marker.trim() === "" ? "" : plainMarker(marker) ? marker.replace(/[ \t]+$/, "") : null;
+  const keep = comment >= 0 ? " (keep the comment that follows it on that line)" : "";
+  if (PEP508_HEAD.test(requirement) && markerText !== null) {
+    return `change \`${requirement}==${installed}${markerText}\` to \`${requirement}==${target}${markerText}\` in ${where}${keep}`;
+  }
+  const label = isShellSafeName(name, "PyPI") ? name : "this package";
+  return `in ${where}, change the version of the ${label} requirement pinned ==${installed} to ==${target} by hand, leaving the rest of that line as it is (it holds text that is not a plain requirement, so it is not quoted here)`;
 }
 
 /**
@@ -1742,7 +1821,9 @@ export function directFix(projectDir: string, ecosystem: string, name: string, i
       if (bounded && npmRangeAdmits(declared, target) === true) return isShellSafeName(name, "npm") ? { command: npmDirectRefresh(manager, name), refresh: true } : null;
       const command = npmDirectCommand(manager, declared, name, target);
       // berry's `yarn up` is a project command: at a workspace root it rewrites the members' declarations too (hasWorkspaces).
-      return command ? { command: manager === "yarn-berry" && hasWorkspaces(json!) ? command.replace(/^yarn up /, "yarn add ") : command } : null;
+      if (!command || manager !== "yarn-berry" || !hasWorkspaces(json!)) return command ? { command } : null;
+      const flag = berryAddFlag(json!, name);
+      return flag === null ? null : { command: `${command.replace(/^yarn up /, "yarn add ")}${flag}` };
     }
     case "crates.io": {
       const manifest = read("Cargo.toml");
@@ -1811,8 +1892,33 @@ function yarnMemberFix(projectDir: string, manager: "yarn1" | "yarn-berry", name
   if (op === null) return null;
   const spec = op === "" ? `${name}@${target}` : `"${name}@${op}${target}"`;
   const section = declared[0].section;
-  const flag = manager === "yarn1" && section === "devDependencies" ? " --dev" : manager === "yarn1" && section === "optionalDependencies" ? " --optional" : "";
+  if (manager === "yarn-berry") {
+    // Berry refuses `add` for a package the manifest also lists as a peer unless -D or -P says which entry.
+    const peer = member.declared.some((d) => d.name === name && d.section === "peerDependencies");
+    if (peer && section !== "devDependencies") return null;
+    return { command: `yarn workspace ${member.name} add ${spec}${peer ? " --dev" : ""}` };
+  }
+  const flag = section === "devDependencies" ? " --dev" : section === "optionalDependencies" ? " --optional" : "";
   return { command: `yarn workspace ${member.name} add ${spec}${flag}` };
+}
+
+/**
+ * The flag a Yarn Berry `yarn add` at a workspace root needs for `name`: "" when the root lists no peer
+ * entry for it, " --dev" for a dev dependency it also lists as a peer, null for a dependency or optional
+ * dependency it also lists as a peer. Berry refuses `add` for a peer-listed package without -D or -P
+ * ("is already listed as a peer dependency", yarn 3.2.4 and 4.9.1, 2026-11-26), and -P would move the
+ * peer range instead, so no `yarn add` moves such a dependency (`yarn up` does, but at a workspace root
+ * it rewrites the members' declarations too).
+ */
+function berryAddFlag(packageJson: string, name: string): string | null {
+  let pkg: Record<string, Record<string, unknown> | undefined>;
+  try {
+    pkg = JSON.parse(packageJson);
+  } catch {
+    return null;
+  }
+  if (typeof pkg?.peerDependencies?.[name] !== "string") return "";
+  return typeof pkg?.devDependencies?.[name] === "string" ? " --dev" : null;
 }
 
 /**
@@ -2028,12 +2134,18 @@ export async function cargoPrecisePrerequisites(
     if (visited.has(`${crate}@${version}`)) continue;
     visited.add(`${crate}@${version}`);
     if (visited.size > MAX_CLOSURE_CRATES) return null;
-    const deps = (await sources.cratesSparse(crate))?.reqs[version];
+    let record = await sources.cratesSparse(crate);
+    // A record cached before the default features were read is read again (chrono 0.4.30 needs iana-time-zone by default).
+    // An unanswered re-read is unknown, never the old record's guess (an unfinished check never reads as a pass).
+    if (record && record.defaultDeps === undefined) record = await sources.cratesSparse(crate, true);
+    const deps = record?.reqs[version];
     if (!deps) return null;
+    const byDefault = new Set(record?.defaultDeps?.[version] ?? []);
     for (const [dep, entries] of Object.entries(deps)) {
       const lockedVersions = locked.get(dep) ?? [];
       for (const { req, optional } of entries) {
-        if (optional && lockedVersions.length === 0) continue; // a feature this build does not enable
+        // An optional dependency no locked copy and no default feature brings in: a feature this build does not enable.
+        if (optional && lockedVersions.length === 0 && !byDefault.has(dep)) continue;
         if (lockedVersions.some((v) => cargoReqAdmits(req, v) === true)) continue;
         const available = (await sources.cratesSparse(dep))?.versions;
         if (!available) return null;

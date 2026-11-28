@@ -73,7 +73,9 @@ export function serverUsage(version: string | null): string {
     --dry-run           With --setup: print each file and entry, write nothing
     --update            With --setup: replace an existing 4da entry that differs
                         (default: keep it and say so)
-    --doctor            Validate database, bindings, and LLM providers
+    --doctor            Check Node.js, the SQLite driver, the data folder and
+                        databases, the embedding provider, and that OSV.dev
+                        and the registries answer
 
   An argument not listed here exits with this text and code 2.
 

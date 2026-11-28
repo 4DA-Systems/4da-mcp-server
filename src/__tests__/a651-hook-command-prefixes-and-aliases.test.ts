@@ -128,8 +128,6 @@ describe("left unread on purpose", () => {
     // A registry other than the public one: the package is not the public one the hook can name.
     "npm i lodash@4.17.20 --registry=https://npm.internal.example/",
     "npx --registry https://npm.internal.example pnpm add lodash@4.17.20",
-    // An npm: alias with no version (an alias with one is read as its target: a651-hook-cheap-forms).
-    "npm install my-lodash@npm:lodash",
     // What xargs reads from its input is not on the command line.
     "echo lodash@4.17.20 | xargs npm i",
   ])("%s", (command) => {
@@ -165,7 +163,7 @@ describe("controls: harmless commands are not read as installs", () => {
     "arr=(npm i lodash@4.17.20)",
     "f() { npm i lodash@4.17.20; }",
     "npm view lodash@4.17.20",
-    "npx lodash@4.17.20",
+    // (round 26, R2: `npx lodash@4.17.20` fetches that release: judged, a1125-w2-hook-round26)
   ])("%s", (command) => {
     expect(installsIn(command, "bash")).toEqual([]);
   });

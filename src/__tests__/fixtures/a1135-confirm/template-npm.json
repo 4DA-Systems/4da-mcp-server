@@ -1,0 +1,5 @@
+{
+ "package-lock.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.4.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"shop-api\",\n      \"version\": \"1.4.0\",\n      \"dependencies\": {\n        \"zod\": \"^3.23.8\"\n      }\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\",\n      \"integrity\": \"sha512-XBx9AXhXktjUqnepgTiE5flcKIYWi/rme0Eaj+5Y0lftuGBq+jyRu/md4WnuxqgP1ubdpNCsYEYPxrzVHD8d6g==\",\n      \"license\": \"MIT\"\n    }\n  }\n}\n",
+ "package.json": "{\n  \"name\": \"shop-api\",\n  \"version\": \"1.4.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"dependencies\": {\n    \"zod\": \"^3.23.8\"\n  }\n}\n",
+ "src/index.js": "import { z } from 'zod';\nexport const Order = z.object({ id: z.string(), total: z.number() });\n"
+}

@@ -107,30 +107,31 @@ describe("what_should_i_know hybrid wisdom", () => {
     delete process.env.FOURDA_EMBED_MODEL;
   });
 
-  it("surfaces a paraphrased prior decision in the briefing (hybrid mode)", async () => {
-    // "document database" shares NO words with the Postgres/mongo decision, but
-    // is the same topic — hybrid wisdom should surface it; lexical would not.
+  // Wave 2, C1: the briefing sends no task text to an embedding provider, ever. Its wisdom is ranked on this
+  // machine with a provider configured too, and the answer says once that the task was not sent.
+  it("ranks wisdom on this machine with a provider configured, and says the task was not sent (C1)", async () => {
+    const fetchMock = installEmbeddingStub();
     const res = (await executeWhatShouldIKnow(db, {
-      task: "plan a document database migration",
+      packages: [],
+      task: "plan a postgresql datastore migration",
     })) as {
       wisdom_recall_mode: string;
+      wisdom_recall_note?: string;
       relevant_wisdom: Array<{ subject: string; type: string }>;
     };
 
-    expect(res.wisdom_recall_mode).toBe("hybrid");
-    const subjects = res.relevant_wisdom.map((w) => w.subject);
-    expect(subjects).toContain("Datastore choice");
-    // The unrelated auth memory should NOT surface for a datastore task.
-    expect(subjects).not.toContain("Auth approach");
+    expect(res.wisdom_recall_mode).toBe("ranked_lexical");
+    expect(res.wisdom_recall_note).toBe("The task text is not sent for embedding: what_should_i_know ranks your stored decisions and memories on this machine.");
+    expect(res.relevant_wisdom.map((w) => w.subject)).toContain("Datastore choice");
+    expect(fetchMock.mock.calls.map(([, init]) => String((init as { body?: string } | undefined)?.body ?? "")).filter((b) => b.includes("datastore migration"))).toEqual([]);
   });
 
-  it("the embedding provider receives the task text, never the file paths (audit 2026-11-11 W1 M2-3)", async () => {
+  it("the embedding provider receives neither the task text nor the file paths (audit 2026-11-11 W1 M2-3; C1)", async () => {
     const fetchMock = installEmbeddingStub();
     const files = ["C:/Users/alice/acme-secret-project/src/billing/ledger.ts", "/home/alice/private-repo/db.ts"];
-    await executeWhatShouldIKnow(db, { task: "plan a document database migration", files });
+    await executeWhatShouldIKnow(db, { task: "plan a document database migration", files, packages: [] });
     const bodies = fetchMock.mock.calls.map(([, init]) => String((init as { body?: string } | undefined)?.body ?? ""));
-    const queries = bodies.filter((b) => b.includes("document database migration"));
-    expect(queries.length).toBeGreaterThan(0);
+    expect(bodies.filter((b) => b.includes("document database migration"))).toEqual([]);
     for (const body of bodies) {
       expect(body).not.toContain("acme-secret-project");
       expect(body).not.toContain("private-repo");
@@ -144,6 +145,7 @@ describe("what_should_i_know hybrid wisdom", () => {
     // The briefing is always async now (it awaits the vulnerability scan);
     // what must hold is that wisdom retrieval stays lexical without a provider.
     const res = await executeWhatShouldIKnow(db, {
+      packages: [],
       task: "plan a document database migration",
     });
 

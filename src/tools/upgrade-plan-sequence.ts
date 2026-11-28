@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { pushAll } from "../array-utils.js";
 import { pypiCompileCommand } from "../live/pypi-advice.js";
 import type { ReleaseMetadataSource } from "../live/release-metadata.js";
-import { isShellSafeName, isShellSafeVersion } from "../live/shell-safe.js";
+import { isShellSafeDir, isShellSafeName, isShellSafeVersion, unsafeDirLabel } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
 import { overrideCommandsOf } from "./upgrade-plan-overrides.js";
 import { peerConflictReader, type PeerContext } from "./upgrade-plan-peers.js";
@@ -83,7 +83,8 @@ export interface CommandContext {
 export function rowCommands(row: CommandRow, ctx: CommandContext): PlanCommand[] {
   const out: PlanCommand[] = [];
   const add = (dir: string, command: string) => {
-    if (isManualStep(command)) return;
+    // A directory whose name is not a plain path gets no command (audit 2026-11-25 B-B1): the row's reasons say it in words.
+    if (isManualStep(command) || !isShellSafeDir(dir)) return;
     for (const run of splitCompound(command)) if (!out.some((c) => c.dir === dir && c.run === run)) out.push({ dir, run });
   };
   for (const c of row.upgradeCommands ?? []) add(c.dir, c.command);
@@ -123,6 +124,10 @@ export interface RunOrderStep {
   n: number;
   dir: string;
   run: string;
+  /** Project-relative files the step changes (upgrade-plan-protocol.ts). */
+  changes?: string[];
+  /** How to put back what the step can leave edited when it fails (upgrade-plan-protocol.ts); absent when a failure writes nothing. */
+  if_it_fails?: string;
   /** "ecosystem:package" of the rows this step serves. */
   fixes: string[];
 }
@@ -164,6 +169,7 @@ type Parsed =
   | { kind: "precise"; pkg: string; from: string; to: string }
   | { kind: "pre"; specs: string[] }
   | { kind: "compile"; head: string; upgrades: Array<{ pkg: string; version: string }> }
+  | { kind: "uvlock"; pkg: string; version: string | null }
   | { kind: "reinstall" }
   | { kind: "other" };
 
@@ -171,11 +177,13 @@ const SPEC = String.raw`"?((?:@[^/\s"@]+\/)?[^@\s"]+)@[=^~]?([^"\s]+)"?`;
 const SET_FORMS: Array<[RegExp, string]> = [
   [new RegExp(`^npm install ${SPEC}(?: --save-exact)?$`), "npm"],
   [new RegExp(`^pnpm up ${SPEC}$`), "pnpm"],
-  [new RegExp(`^yarn (?:upgrade|up|add) ${SPEC}$`), "yarn"],
+  // `--dev`: a Berry root `yarn add` for a dev dependency the manifest also lists as a peer (fix-paths.ts berryAddFlag).
+  [new RegExp(`^yarn (?:upgrade|up|add) ${SPEC}(?: --dev)?$`), "yarn"],
 ];
 const REFRESH_FORMS: Array<[RegExp, string]> = [
   [/^npm update (\S+)$/, "npm"],
-  [/^pnpm update (?:-r )?(\S+) (?:--no-save|--depth Infinity)$/, "pnpm"],
+  // `--depth Infinity --no-save`: every edge of a copy pnpm keeps at a workspace root (upgrade-planner-shared-copy.ts).
+  [/^pnpm update (?:-r )?(\S+) (?:--no-save|--depth Infinity(?: --no-save)?)$/, "pnpm"],
   [/^yarn (?:upgrade|up -R) (\S+)$/, "yarn"],
   [/^uv lock --upgrade-package (\S+)$/, "uv"],
   [/^poetry update (\S+)$/, "poetry"],
@@ -191,6 +199,8 @@ export function parseCommand(run: string): Parsed {
   if (member) return { kind: "set", tool: "yarn", pkg: member[2], version: member[3], flags: `workspace ${member[1]}` };
   const pnpmAdd = new RegExp(`^pnpm add (-D |-O )?${SPEC}$`).exec(run);
   if (pnpmAdd) return { kind: "set", tool: "pnpm", pkg: pnpmAdd[2], version: pnpmAdd[3], flags: "" };
+  const uv = /^uv lock --upgrade-package ([A-Za-z0-9._-]+)(?:==(\S+))?$/.exec(run);
+  if (uv) return { kind: "uvlock", pkg: uv[1], version: uv[2] ?? null };
   for (const [form, tool] of REFRESH_FORMS) {
     const m = form.exec(run);
     if (m) return { kind: "refresh", tool, pkg: m[1] };
@@ -221,7 +231,14 @@ const ECOSYSTEM_OF_TOOL: Record<string, string> = { npm: "npm", pnpm: "npm", yar
  * upgrade run after a refresh can (fastapi-frontend: @hey-api/openapi-ts 0.97.3 pins, through
  * @hey-api/json-schema-ref-parser 1.4.2, js-yaml 4.1.1, below the 4.3.2 `npm update js-yaml` had set).
  */
-const PHASE = { pre: 0, precise: 1, set: 2, compile: 2, goget: 2, other: 2, refresh: 3, tidy: 4, reinstall: 5 } as const;
+const PHASE = { pre: 0, precise: 1, set: 2, compile: 2, uvlock: 2, goget: 2, other: 2, refresh: 3, tidy: 4, reinstall: 5 } as const;
+
+/** The npm-family tools whose steps are ordered by the lockfile they act on. */
+const JS_TOOLS = new Set(["npm", "pnpm", "yarn", "bun"]);
+/** An override or resolution written by `npm pkg set` (upgrade-plan-overrides.ts). */
+const OVERRIDE_SET = /^npm pkg set "(?:overrides|resolutions|pnpm\.overrides)\./;
+/** An npm override scoped to a parent's subtree: `npm pkg set "overrides.<parent>.<name>=<version>"`. */
+const SCOPED_NPM_OVERRIDE = /^npm pkg set "overrides\.[^".=]+\.[^"=]+=/;
 
 /** One step of the script, merged from every row command that does the same thing. */
 interface Node {
@@ -257,6 +274,23 @@ export interface RunOrderOptions {
   peerConflict?: (dir: string, pkg: string, version: string) => PeerConflict | null;
   /** The operator of `name`'s declaration in `dir`/package.json ("^", "~", "" for an exact pin); null when it is not declared there or not read. */
   declaredOperator?: (dir: string, name: string) => string | null;
+  /**
+   * Steps taken off a row because they would run in a directory whose name is not safe in a command
+   * (upgrade-plan-runnable.ts withholdUnsafeDirs): its other steps still run; the note says how many were withheld.
+   */
+  withheldSteps?: (row: SequencedRow) => number;
+  /**
+   * The npm-family lockfile (absolute path) that holds the project at a step's directory; null when
+   * none. Commands of one row on different lockfiles are not ordered against each other, and an
+   * override or resolution runs before the version-setting steps on its own lockfile.
+   */
+  jsLockfileOf?: (dir: string) => string | null;
+  /**
+   * Cargo: whether `dependent` (name@version) depends on `dependency` in the lockfile of `dir`'s
+   * project. A `--precise` step moves the dependencies its new release needs, so a dependency is
+   * moved first and a later step never names a version an earlier one already moved.
+   */
+  cargoDependsOn?: (dir: string, dependent: string, dependency: string) => boolean;
 }
 
 export interface PeerConflict {
@@ -340,8 +374,12 @@ export function buildRunOrder(opts: RunOrderOptions): RunOrder {
       extra.filter((e) => e.rows.some((r) => !peerBlocked.has(r))),
     );
   }
-  const steps = graph.order().map((n, i) => ({ n: i + 1, dir: n.dir, run: n.run, fixes: [...n.fixes].sort() }));
-  const note = runOrderNote(opts, runnable, peerBlocked, steps.length, graph.notes);
+  // Never a step in a directory whose name is not a plain path, whatever produced it.
+  const steps = graph
+    .order()
+    .filter((n) => isShellSafeDir(n.dir))
+    .map((n, i) => ({ n: i + 1, dir: n.dir, run: n.run, fixes: [...n.fixes].sort() }));
+  const note = runOrderNote(opts, runnable, peerBlocked, steps.length, graph.notes, steps.some((s) => s.run.startsWith("cargo update ")));
   return { run_order: steps, run_order_note: note, peerBlocked };
 }
 
@@ -430,6 +468,7 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
   const installed = installedVersions(rows);
   const goNodes = new Map<string, Map<string, { version: string; fixes: Set<string> }>>();
   const compiles = new Map<string, Map<string, string>>();
+  const uvLocks = new Map<string, Map<string, string | null>>();
   const pres = new Map<string, string[]>();
   const precises = new Map<string, { pkg: string; from: string; to: string }>();
   const preOwners = new Map<string, Set<string>>();
@@ -447,17 +486,52 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
     edges.set(from, (edges.get(from) ?? new Set()).add(to));
   };
 
+  // npm-family lockfile of a JS command's directory (null: not a JS command, or not known).
+  const jsLock = new Map<string, string | null>();
+  const lockOf = (c: PlanCommand): string | null => {
+    if (!opts.jsLockfileOf || !JS_TOOLS.has(c.run.split(" ")[0])) return null;
+    if (!jsLock.has(c.dir)) jsLock.set(c.dir, opts.jsLockfileOf(c.dir));
+    return jsLock.get(c.dir) ?? null;
+  };
+  const overrideNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
+  const scopedNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
+  const setNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
+  const npmRefreshNodes: Array<{ key: string; lock: string; row: SequencedRow }> = [];
   for (const row of rows) {
     const fix = keyOf(row);
-    let previous: string | null = null;
+    let previous: { key: string; lock: string | null } | null = null;
     for (const c of row.commands) {
       const p = parseCommand(c.run);
       const n = place(p, c, row, fix);
       n.fixes.add(fix);
-      if (previous) edge(previous, n.key);
-      previous = n.key;
+      const lock = lockOf(c);
+      // The row's own order holds within one lockfile; two lockfiles are two projects (formik: the
+      // root's install ran last, and website's resolution after it, past website's upgrades).
+      if (previous && !(previous.lock !== null && lock !== null && previous.lock !== lock)) edge(previous.key, n.key);
+      previous = { key: n.key, lock };
+      if (lock !== null && SCOPED_NPM_OVERRIDE.test(c.run)) scopedNodes.push({ key: n.key, lock, row });
+      else if (lock !== null && OVERRIDE_SET.test(c.run)) overrideNodes.push({ key: n.key, lock, row });
+      if (lock !== null && p.kind === "set") setNodes.push({ key: n.key, lock, row });
+      if (lock !== null && p.kind === "refresh" && p.tool === "npm") npmRefreshNodes.push({ key: n.key, lock, row });
     }
   }
+  // An override or resolution runs before the version-setting steps of other rows on its lockfile:
+  // an install never takes a copy past the forced release for a later install to force it down.
+  // Only a row whose fix on that lockfile is the override alone leads: a row that also sets a version
+  // there keeps its own order, and no two rows' edges can then form a cycle.
+  const rowSets = (r: SequencedRow, lock: string) => setNodes.some((s) => s.row === r && s.lock === lock);
+  // An override node one row places after its own version step (the same command text merges rows) never leads.
+  const follows = new Set(overrideNodes.filter((o) => rowSets(o.row, o.lock)).map((o) => o.key));
+  for (const o of overrideNodes) {
+    if (follows.has(o.key)) continue;
+    for (const s of setNodes) if (s.lock === o.lock && s.key !== o.key) edge(o.key, s.key);
+  }
+  // An npm override scoped to a parent (`overrides.request.qs`) stops `npm update` from moving any
+  // package inside that parent's subtree, applied or not (npm 10.9.2, starship v1.0.0 docs/:
+  // `npm update jsprim` under request said "up to date" and left json-schema 0.2.3; run first, it
+  // moved jsprim to 1.4.2 and the override and install after it landed too). So the npm refreshes
+  // on its lockfile run before it.
+  for (const o of scopedNodes) for (const r of npmRefreshNodes) if (r.lock === o.lock && r.row !== o.row && r.key !== o.key) edge(r.key, o.key);
   for (const e of extra) {
     const p = parseCommand(e.run);
     if (p.kind !== "set") continue;
@@ -533,6 +607,20 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
         }
         return node(key, c.dir, PHASE.compile, p.head, () => `${p.head} ${[...ups].map(([pkg, v]) => `--upgrade-package "${pkg}==${v}"`).join(" ")}`);
       }
+      case "uvlock": {
+        // Every uv row of one lockfile in ONE `uv lock`: uv resolves every pin at once, so no pin can
+        // lower what another step's resolution raised (crewAI 0.86.0: `mem0ai==2.0.18` after
+        // `litellm==1.100.4` had brought mem0ai 2.2.1 in). A pin beats a plain upgrade of the same
+        // package (its release was checked); of two pins the higher stays.
+        const key = `${c.dir}\0uvlock`;
+        const ups = uvLocks.get(key) ?? new Map<string, string | null>();
+        uvLocks.set(key, ups);
+        const held = ups.get(p.pkg);
+        if (held === undefined || (p.version !== null && (held === null || compareVersions(p.version, held, "PyPI") > 0))) ups.set(p.pkg, p.version);
+        return node(key, c.dir, PHASE.uvlock, "uv lock", () =>
+          `uv lock ${[...ups].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([pkg, v]) => `--upgrade-package ${v === null ? pkg : `${pkg}==${v}`}`).join(" ")}`,
+        );
+      }
       case "reinstall":
         return node(`${c.dir}\0reinstall\0${c.run}`, c.dir, PHASE.reinstall, c.run, () => c.run);
       case "other":
@@ -556,6 +644,23 @@ function buildGraph(rows: SequencedRow[], opts: RunOrderOptions, groups: string[
       edge(`${dir}\0pre`, key);
       for (const [other] of precises) if (other !== key && preOwners.has(`${dir}\0${p.pkg}@${p.from}`) && other.startsWith(`${dir}\0`)) edge(key, other);
     }
+  }
+  // A crate before the crates that depend on it (wave 2, 2b: crossbeam-utils before crossbeam-epoch).
+  if (opts.cargoDependsOn) {
+    for (const [ka, a] of precises) {
+      const dir = ka.slice(0, ka.indexOf("\0"));
+      for (const [kb, b] of precises) {
+        if (ka === kb || !kb.startsWith(`${dir}\0`)) continue;
+        if (opts.cargoDependsOn(dir, `${a.pkg}@${a.from}`, `${b.pkg}@${b.from}`)) edge(kb, ka);
+      }
+    }
+  }
+  for (const [key, ups] of uvLocks) {
+    if (ups.size < 2) continue;
+    const dir = key.slice(0, key.indexOf("\0"));
+    notes.push(
+      `the ${ups.size} uv upgrades of ${dirWords(dir)} run as one \`uv lock\`, so no pin lowers a version another upgrade's resolution raised; when it fails uv writes nothing: then run the rows' own commands one at a time and leave out the one that fails`,
+    );
   }
   for (const [key, state] of sets) {
     const chosen = state.chosen();
@@ -696,7 +801,7 @@ function topological(nodes: Map<string, Node>, edges: Map<string, Set<string>>):
 }
 
 function dirWords(dir: string): string {
-  return dir === "." ? "the project root" : dir;
+  return dir === "." ? "the project root" : unsafeDirLabel(dir);
 }
 
 function andList(items: string[]): string {
@@ -711,6 +816,10 @@ export interface SequenceContext {
   peers?: PeerContext;
   /** RunOrderOptions.declaredOperator. */
   declaredOperator?: RunOrderOptions["declaredOperator"];
+  /** RunOrderOptions.withheldSteps. */
+  withheldSteps?: RunOrderOptions["withheldSteps"];
+  /** RunOrderOptions.cargoDependsOn. */
+  cargoDependsOn?: RunOrderOptions["cargoDependsOn"];
   /** Time the go.mod reads may take. */
   budgetMs: number;
 }
@@ -760,7 +869,9 @@ async function goRequirements(rows: SequencedRow[], source: SequenceContext["goS
  */
 export async function sequencePlan(rows: SequencedRow[], ctx: SequenceContext): Promise<{ run_order: RunOrderStep[]; run_order_note: string }> {
   const goRequires = await goRequirements(rows, ctx.goSource, Date.now() + ctx.budgetMs);
-  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: ctx.peers ? peerConflictReader(ctx.peers) : undefined, declaredOperator: ctx.declaredOperator });
+  const peers = ctx.peers;
+  const jsLockfileOf = peers ? (dir: string) => peers.lockfileFor(path.resolve(peers.root, dir)) : undefined;
+  const result = buildRunOrder({ rows, totalRows: ctx.totalRows, heldUnclean: ctx.heldUnclean, goRequires, peerConflict: peers ? peerConflictReader(peers) : undefined, declaredOperator: ctx.declaredOperator, withheldSteps: ctx.withheldSteps, cargoDependsOn: ctx.cargoDependsOn, jsLockfileOf });
   for (const [row, why] of result.peerBlocked) if (!row.reasons.includes(why)) row.reasons.push(why);
   return { run_order: result.run_order, run_order_note: result.run_order_note };
 }
@@ -776,14 +887,14 @@ function named(rows: SequencedRow[]): string {
 }
 
 /** What the script covers (the rows shown that a command fixes here) and what it leaves out, by why. */
-function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlocked: Map<SequencedRow, string>, steps: number, notes: string[]): string {
+function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlocked: Map<SequencedRow, string>, steps: number, notes: string[], cargoMoves = false): string {
   const ran = runnable.filter((r) => !peerBlocked.has(r));
   const parts: string[] = [];
   const shown = opts.rows.length;
   parts.push(
     steps === 0
       ? `run_order is empty: none of the ${shown} row${shown === 1 ? "" : "s"} shown is fixed on this host by a command`
-      : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, in an order that is safe to run from the first step to the last (no step lowers a version that is installed or that an earlier step sets), each in the directory it names: upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
+      : `run_order is ${steps} step${steps === 1 ? "" : "s"} for ${ran.length} of the ${shown} row${shown === 1 ? "" : "s"} shown, in an order that is safe to run from the first step to the last (no step lowers a version that is installed or that an earlier step sets), each in the directory it names: ${cargoMoves ? "Cargo's pre-updates and `--precise` moves before anything else in their directory (a crate before the crates that depend on it; each `--precise` names the version it moves, so it fails rather than lowers one an earlier step moved), then " : ""}upgrades first, then in-range refreshes (which never lower what an upgrade set), and every parent upgrade before the refreshes that follow it`,
   );
   // The order is checked, and each upgraded release's first-level dependencies; nothing deeper.
   // held-second-level.ts: an npm target's dependencies' exact pins are judged; nothing deeper is.
@@ -792,19 +903,34 @@ function runOrderNote(opts: RunOrderOptions, runnable: SequencedRow[], peerBlock
   const forced = ran.filter((r) => overrideCommandsOf(r).length > 0);
   if (forced.length > 0) parts.push(`${forced.length} of them force a version with an override or resolution written by \`npm pkg set\` (${named(forced)}): it applies to every copy its key names, so re-scan after running`);
   const inScript = new Set(runnable);
+  const withheld = (r: SequencedRow) => opts.withheldSteps?.(r) ?? 0;
+  // Steps that would run in a directory whose name is not safe in a command are withheld; the
+  // row's steps elsewhere stay in the script (audit 2026-11-25 blind check: one odd directory
+  // emptied run_order for the whole package).
+  const partly = ran.filter((r) => withheld(r) > 0);
+  const withheldTotal = opts.rows.reduce((n, r) => n + withheld(r), 0);
+  if (withheldTotal > 0) {
+    const one = withheldTotal === 1;
+    const tail = partly.length > 0 ? `; ${partly.length} row${partly.length === 1 ? " is" : "s are"} here only for ${partly.length === 1 ? "its" : "their"} other directories and ${partly.length === 1 ? "is" : "are"} not counted as fixed (${named(partly)})` : "";
+    parts.push(`${withheldTotal} step${one ? " was" : "s were"} withheld because ${one ? "it" : "they"} would run in a directory whose name is not safe to put in a command (it holds characters a shell reads as code; the rows' reasons name it, escaped): do ${one ? "it" : "them"} by hand${tail}`);
+  }
+  const unsafe = opts.rows.filter((r) => withheld(r) > 0 && !inScript.has(r));
+  // Each row is named once, in the first group that holds it: one with every step withheld there.
+  const rows = opts.rows.filter((r) => !unsafe.includes(r));
   const eligible = (r: SequencedRow) => !inScript.has(r) && !opts.heldUnclean(r) && (FIX_ACTIONS.has(r.action) || r.action === "override_or_replace") && (r.action !== "upgrade_direct" || r.targetVersion !== null);
-  const hand = opts.rows.filter((r) => eligible(r) && isHandEdit(r));
+  const hand = rows.filter((r) => eligible(r) && isHandEdit(r));
   // The script alone does not finish the job: what is left to edit by hand is counted and named.
   if (hand.length > 0) parts.push(`${hand.length} row${hand.length === 1 ? " is a hand edit" : "s are hand edits"} and ${hand.length === 1 ? "is" : "are"} not in this script: ${named(hand)} (a manifest or lockfile edit, or an override that crosses a major; ${hand.length === 1 ? "its reasons say" : "their reasons say"} what to edit)`);
   const groups: Array<[string, SequencedRow[]]> = [
-    ["name no command for their fix (their reasons say why)", opts.rows.filter((r) => eligible(r) && !isHandEdit(r) && r.action !== "override_or_replace")],
-    ["name no confirmed target (NOT CHECKED; their reasons say why)", opts.rows.filter((r) => r.action === "upgrade_direct" && r.targetVersion === null && !opts.heldUnclean(r))],
-    ["have a target that is NOT a clean fix (it holds an affected dependency; see their reasons)", opts.rows.filter((r) => FIX_ACTIONS.has(r.action) && opts.heldUnclean(r))],
-    ["are not counted as fixed by their commands (override_or_replace, upgrade_parent_unverified: check their reasons first)", opts.rows.filter((r) => (r.action === "override_or_replace" && !inScript.has(r) && !hand.includes(r)) || r.action === "upgrade_parent_unverified")],
-    ["apply where the code is built, not on this host (not_built_on_this_host)", opts.rows.filter((r) => r.action === "not_built_on_this_host")],
+    ["have their steps in a directory whose name is not safe to put in a command (handled by hand; their reasons name it, escaped)", unsafe],
+    ["name no command for their fix (their reasons say why)", rows.filter((r) => eligible(r) && !isHandEdit(r) && r.action !== "override_or_replace")],
+    ["name no confirmed target (NOT CHECKED; their reasons say why)", rows.filter((r) => r.action === "upgrade_direct" && r.targetVersion === null && !opts.heldUnclean(r))],
+    ["have a target that is NOT a clean fix (it holds an affected dependency; see their reasons)", rows.filter((r) => FIX_ACTIONS.has(r.action) && opts.heldUnclean(r))],
+    ["are not counted as fixed by their commands (override_or_replace, upgrade_parent_unverified: check their reasons first)", rows.filter((r) => (r.action === "override_or_replace" && !inScript.has(r) && !hand.includes(r)) || r.action === "upgrade_parent_unverified")],
+    ["apply where the code is built, not on this host (not_built_on_this_host)", rows.filter((r) => r.action === "not_built_on_this_host")],
     [
       "have nothing to run (waiting on upstream, no fix, not determined, not checked, hold, or remove)",
-      opts.rows.filter((r) => !FIX_ACTIONS.has(r.action) && !["override_or_replace", "upgrade_parent_unverified", "not_built_on_this_host"].includes(r.action)),
+      rows.filter((r) => !FIX_ACTIONS.has(r.action) && !["override_or_replace", "upgrade_parent_unverified", "not_built_on_this_host"].includes(r.action)),
     ],
     ["break a peer range an installed dependency declares (their reasons say which and what to upgrade with them)", [...peerBlocked.keys()]],
   ];

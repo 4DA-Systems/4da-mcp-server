@@ -128,7 +128,7 @@ describe("what_should_i_know with families and latest", () => {
         );
       },
     };
-    const result = await executeWhatShouldIKnow(memoryDb(), { task: "bump tauri and all tauri plugins to latest" }, live);
+    const result = await executeWhatShouldIKnow(memoryDb(), { packages: [], task: "bump tauri and all tauri plugins to latest" }, live);
     expect(result.task_dependencies.map((d) => d.package)).toEqual([
       "tauri",
       "tauri-build",
@@ -162,7 +162,7 @@ describe("what_should_i_know with families and latest", () => {
         return [];
       },
     };
-    const result = await executeWhatShouldIKnow(memoryDb(), { task: "bump tauri to 2.13.0" }, live);
+    const result = await executeWhatShouldIKnow(memoryDb(), { packages: [], task: "bump tauri to 2.13.0" }, live);
     expect(asked).toBe(false);
     expect(result.task_dependencies.map((d) => d.package)).toEqual(["tauri"]);
     expect(result.task_dependencies[0].latest).toBeUndefined();
@@ -204,10 +204,10 @@ describe("what_should_i_know project_path", () => {
       ensureVulnerabilities: async () => null,
       getResolvedDeps: () => DEPS,
     };
-    const here = await executeWhatShouldIKnow(memoryDb(), { task: "bump left-pad" }, server);
+    const here = await executeWhatShouldIKnow(memoryDb(), { packages: [], task: "bump left-pad" }, server);
     expect(here.task_dependencies).toEqual([]);
 
-    const there = await executeWhatShouldIKnow(memoryDb(), { task: "bump left-pad", project_path: dir }, server);
+    const there = await executeWhatShouldIKnow(memoryDb(), { packages: [], task: "bump left-pad", project_path: dir }, server);
     expect(there.project_path && path.resolve(there.project_path)).toBe(path.resolve(dir));
     expect(there.task_dependencies.map((d) => `${d.package}@${d.installed.join(",")}`)).toEqual(["left-pad@1.3.0"]);
   });
@@ -215,7 +215,7 @@ describe("what_should_i_know project_path", () => {
   it("rejects a project_path that is not a directory", async () => {
     const server: BriefingLiveIntel = { isEnabled: () => false, getProjectRoot: () => "d:/proj", ensureVulnerabilities: async () => null };
     await expect(
-      executeWhatShouldIKnow(memoryDb(), { task: "x", project_path: path.join(dir, "missing") }, server),
+      executeWhatShouldIKnow(memoryDb(), { packages: [], task: "x", project_path: path.join(dir, "missing") }, server),
     ).rejects.toThrow(/not a directory/);
   });
 });

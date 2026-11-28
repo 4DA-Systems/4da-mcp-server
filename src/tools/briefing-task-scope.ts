@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * Which of this project's dependencies a task touches, and what is known
  * about each — the core of the what_should_i_know briefing.
  *
@@ -20,6 +22,7 @@ import { presentedSeverity } from "../live/severity-scope.js";
 import { collapseAliases } from "./vulnerability-scan-format.js";
 import { compareVersions } from "../live/version-compare.js";
 import { quoteThirdParty } from "../untrusted-text.js";
+import { forbiddenKey } from "./briefing-confirm.js";
 
 /** A dependency the task names, with every installed copy. */
 export interface TaskPackage {
@@ -105,12 +108,24 @@ export function detectTaskPackages(
   const byKey = new Map<string, ResolvedDependency[]>();
   for (const dep of deps) {
     if (!dep.name) continue;
-    for (const key of nameKeys(dep)) byKey.set(key, [...(byKey.get(key) ?? []), dep]);
+    // Round 18, N6: also by forbiddenKey's fold (one function): PEP 503's runs, crates' `-`/`_`, case.
+    for (const key of new Set([...nameKeys(dep), forbiddenKey(dep.name)])) byKey.set(key, [...(byKey.get(key) ?? []), dep]);
   }
+  /** The installed copies a task word names: by its own spelling, by the fold, or (Go) a package path under a module. */
+  const lookup = (token: string): ResolvedDependency[] | undefined => {
+    const direct = byKey.get(token) ?? byKey.get(forbiddenKey(token));
+    if (direct || !token.includes("/")) return direct;
+    const parts = token.split("/");
+    for (let k = parts.length - 1; k >= 2; k--) {
+      const under = byKey.get(forbiddenKey(parts.slice(0, k).join("/")))?.filter((d) => d.ecosystem === "Go");
+      if (under && under.length > 0) return under;
+    }
+    return undefined;
+  };
 
   const found = new Map<string, { deps: ResolvedDependency[]; at: number }>();
   tokens.forEach((token, i) => {
-    const matches = byKey.get(token);
+    const matches = lookup(token);
     if (!matches) return;
     if (COMMON_WORDS.has(token) && !quoted.has(token)) {
       const window = [...tokens.slice(Math.max(0, i - 2), i), ...tokens.slice(i + 1, i + 3)];

@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * what_should_i_know and the version a task names (black-box re-run of 96c16d2, 2026-11-14):
  * "add lodash 4.17.20 to package.json" came back safe_to_delegate, with lodash judged at `latest`
  * (4.18.1) instead of the 4.17.20 the task writes, which four advisories affect; "pin axios to
- * 0.21.1" did not see axios at all. The versions a task names are read here in every common form
- * and judged by dependency_check itself (the same engine), at that exact version or constraint:
+ * 0.21.1" did not see axios at all. This reader looks, best effort, for versions a task writes in the forms below, judged by
+ * dependency_check itself (the same engine), at that exact version or constraint, ONLY for names the briefing knows
+ * on its own: a dependency of the project, or a name on its bundled lists (round 10, #94/#95). For any other name a
+ * version in prose is not read: the caller's declared `version` is what is checked (what_should_i_know.ts, K1):
  *
  *   name@1.2.3 / name@^1.2 (npm, Go `module@v1.2.3`), name==1.2.3 / name~=3.1 / name>=2,<3 (PyPI),
  *   "name to 1.2.3", "name from 1.0 to 1.2", "pin name 1.2.3", "add name 4.17.20",
@@ -15,12 +19,13 @@
  * A named version that is not `proceed` keeps the briefing from safe_to_delegate.
  */
 
+import type { CheckedItem } from "../check-ledger.js";
 import type { LiveIntelligence } from "../live/index.js";
 import type { CheckEcosystem } from "../live/release-metadata.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
 import { POPULAR_PYPI } from "../live/popular-pypi.js";
-import { asName, nameClean, nameOnlyReview, NO_SUCH_RELEASE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
+import { asName, installedNames, screenFor, type TaskWordSeen, MAX_READ_PACKAGES, nameClean, nameOnlyReview, NO_SUCH_RELEASE, NOT_READ_WHOLE, projectEcosystems, proseEcosystem, readTaskItems, statedEcosystem, taskVersionText, tomlEcosystem, type NameCheckLive } from "./briefing-new-packages.js";
 import {
   checkableSpec,
   ENGLISH_TASK_WORDS,
@@ -35,11 +40,15 @@ import {
   specText,
 } from "./briefing-names.js";
 import { COMMON_WORDS } from "./briefing-task-scope.js";
+import { oneEditApart } from "./briefing-confirm.js";
+import { boundWords, knownPublicName, offlineNearMiss, screenedOut, spansHolding, touchedNames, type Withheld } from "./briefing-task-screen.js";
 import { executeDependencyCheck } from "./dependency-check.js";
 
 export interface RequestedVersion {
   name: string;
   ecosystem: CheckEcosystem;
+  /** Sent for a declaration (round 7, C6): the item dependency_check would get, `to` exactly as declared or written. */
+  declared?: true;
   /** The version or constraint the task names, as written. */
   to: string;
   /** The installed version, when the project has exactly one copy of it. */
@@ -65,6 +74,10 @@ export interface RequestedVersionFinding extends RequestedVersion {
   critical?: string[];
 }
 
+/** How many names a list paired with a list of versions is read for ("a, b, c to 1.0, 2.0, 3.0"). */
+const PAIRED_LIST = 20;
+/** How many withheld words an answer names one by one; the rest are counted (a 199,000-character task made a 0.66 MB answer). */
+const MAX_HELD_SHOWN = 30;
 /** How many named versions a briefing checks; past it the rest are NOT CHECKED, by name (what-should-i-know.ts). */
 export const MAX_REQUESTED = 8;
 const CHECK_BUDGET_MS = 10_000;
@@ -200,21 +213,39 @@ export interface TaskVersions {
   unread: string[];
   /** Packages a manager this server does not read installs (`gem install rails`): named NOT CHECKED (round 10, W14). */
   foreign?: string[];
+  /**
+   * Words the briefing withheld from the task before reading it (a credential shape, a package the
+   * task's own command takes from a private registry, git or a path, an over-long word), each as it
+   * is shown (redacted) and why: never looked up, never sent (briefing-task-screen.ts).
+   */
+  withheld?: TaskWordWithheld[];
+  /** More names or versions than a briefing reads: the rest of the task was not read. */
+  truncated?: true;
+}
+
+/** A word of the task the briefing did not look up: how it is shown, and why. */
+export interface TaskWordWithheld {
+  shown: string;
+  reason: string;
+  /** It stands where a package stands (an install command's operand, a package name): it weighs on the level. Never output. */
+  standing?: true;
 }
 
 /** The (package, version) pairs a task names, in the order named (uncapped: the briefing checks MAX_REQUESTED and names the rest NOT CHECKED). */
+/** What the reader takes for (package, version) pairs (screened), before the lookup rule readTaskVersions applies. */
 export function detectRequestedVersions(task: string, deps: readonly ResolvedDependency[]): RequestedVersion[] {
-  return readTaskVersions(task, deps).requested;
+  const screen = screenFor(task, deps);
+  return readVersionsOf(screen.text, deps).requested.filter((r) => screenedOut(screen, r.name, [r.ecosystem, ...(r.alternatives ?? [])]) === null);
 }
 
 /**
- * Every version-like token in the task is tied to the nearest word before it that can be a package,
+ * A version-like token this reader finds in the task is tied, best effort, to the nearest word before it that can be a package,
  * over connector words ("to", "at", "version", "==", "->", "back", "the ... package"), or after it in
  * "version X of name". The last version tied to a package is its target ("from 1.0 to 1.2",
  * "4.18.1 -> 4.17.20"). Wording the parser was not written for used to drop the version and judge
  * latest instead ("add event-stream at version 3.3.6" came back safe_to_delegate; blind audit round
- * 3, B3); now a dotted version tied to nothing is reported as unread, which keeps the briefing from
- * safe_to_delegate.
+ * 3, B3); now a dotted version tied to nothing is listed as unread. That list is information, not a hold: the level
+ * rests on the declaration, checked at its `version`.
  */
 /** Tokens of a (normalized) task: arrows, and words that keep package and version punctuation (a joined constraint whole). */
 const TOKEN = new RegExp("(?:->|=>|→)|[@A-Za-z0-9`'\"(^~<>=][\\w./@*=<>~^!`'\"+:" + SPEC_JOINERS + "-]*", "g");
@@ -234,6 +265,198 @@ const POPULAR = new Set<string>([...POPULAR_NPM, ...POPULAR_PYPI.map(normalizePy
 const popularName = (lower: string) => POPULAR.has(lower) || POPULAR.has(normalizePypiName(lower));
 
 export function readTaskVersions(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
+  // Credentials, URLs, over-long words and whatever the task takes from a private registry, an index,
+  // git, a path or a URL are blanked before anything is read (briefing-task-screen.ts; audit 2026-11-25, E1/E2/F-M3).
+  // What may then be looked up is gateTaskNames's, after the project's own private rules.
+  const screen = screenFor(task, deps);
+  const read = readVersionsOf(screen.text, deps);
+  const all = readTaskItems(normalizeVersionSyntax(screen.text), deps);
+  const notes: string[] = [];
+  if (all.truncated || read.truncated) notes.push(`every package after the first ${MAX_READ_PACKAGES} the task names (not read: the task names more packages than a briefing reads)`);
+  const withheld: TaskWordWithheld[] = [];
+  const seen = new Set<string>();
+  let beyond = 0;
+  const holdWord = (shown: string, reason: string, standing = true) => {
+    const key = `${shown}\n${reason}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (withheld.length < MAX_HELD_SHOWN) withheld.push({ shown, reason, ...(standing ? { standing: true as const } : {}) });
+    else beyond++;
+  };
+  const requested = read.requested.filter((r) => {
+    const why = screenedOut(screen, r.name, [r.ecosystem, ...(r.alternatives ?? [])]);
+    if (why && !screen.names.has(r.name.toLowerCase())) holdWord(r.name, why);
+    return why === null;
+  });
+  for (const p of all.packages) {
+    const why = screenedOut(screen, p.name, [p.ecosystem, ...(p.alternatives ?? [])]);
+    if (why && !screen.names.has(p.name.toLowerCase())) holdWord(p.name, why);
+  }
+  for (const u of all.unreadWords) holdWord(u.shown, u.reason);
+  // A credential, URL or address is named (redacted) only where a reader would have taken a name from it:
+  // a name the unscreened task gives that the screened one does not, inside that span. Linear: each
+  // span's pieces are looked up in the set of lost names (re-check, item 3: it was quadratic).
+  let lostTo: Withheld[] = [];
+  if (screen.withheld.some((w) => !w.always)) {
+    const plain = boundWords(task);
+    const after = new Set([...all.packages.map((p) => p.name.toLowerCase()), ...read.requested.map((r) => r.name.toLowerCase())]);
+    const lost = new Set<string>();
+    for (const n of [...readTaskItems(normalizeVersionSyntax(plain), deps).packages.map((p) => p.name.toLowerCase()), ...readVersionsOf(plain, deps).requested.map((r) => r.name.toLowerCase())]) {
+      if (!after.has(n) && n.length > 1) lost.add(n);
+    }
+    lostTo = spansHolding(task, screen, lost);
+  }
+  for (const w of [...screen.withheld.filter((x) => x.always), ...lostTo].sort((a, b) => a.start - b.start)) holdWord(w.label, w.why, w.standing === true);
+  if (beyond > 0) withheld.push({ shown: `${beyond} more word${beyond === 1 ? "" : "s"}`, reason: "not read or not looked up, as the ones above", standing: true });
+  const foreign = [...new Set([...(read.foreign ?? []), ...notes])];
+  return { requested, unread: read.unread.slice(0, MAX_HELD_SHOWN), ...(foreign.length > 0 ? { foreign } : {}), ...(withheld.length > 0 ? { withheld } : {}) };
+}
+
+/** How many unverified words an answer names one by one; the rest are counted. */
+export const MAX_UNVERIFIED_WORDS = 25;
+
+/**
+ * A name the task gives that this briefing did not look up, from a command, a manifest entry or prose
+ * alike: a plain list, never shaped as tool arguments (fourth blind check of the 2026-11-25 fixes:
+ * anything callable built from free text could be made to carry a secret, `--auth admin:hunter2`).
+ */
+export interface UnverifiedWord {
+  word: string;
+  /** The ecosystem (or ecosystems) the word would be in if it were a package. */
+  read_as: string;
+  /** The version the task writes beside it, as written; absent when it could not be read. */
+  version?: string;
+  /** A remark about the word itself (a near-miss of a popular name). */
+  note?: string;
+  /** How the reader read it: an install command's operand, a manifest snippet's entry, a word after an adding verb. */
+  seen?: TaskWordSeen;
+}
+
+/**
+ * What the briefing itself looks up, applied after the project's own private rules (final design of the
+ * 2026-11-25 fixes): a name only when the project already depends on it, or it is exactly a name of a
+ * bundled list (popular names, names with a known malicious release); never when a span the screen
+ * withheld touches it (its version would otherwise be judged at latest). Every other name is listed once
+ * in `unverified` (a plain list, never tool arguments: fourth blind check), with the version as the task
+ * writes it and the ecosystems it may be in; a near-miss of a popular name carries a note saying so
+ * (fourth blind check, item 4: a note, not a hold). Nothing about them is sent.
+ */
+export function gateTaskNames<
+  P extends { name: string; ecosystem: CheckEcosystem; version?: string; versionUnread?: true; alternatives?: CheckEcosystem[]; guessed?: true; closed?: CheckEcosystem[]; fallbackOnly?: true },
+  R extends RequestedVersion,
+>(
+  task: string,
+  deps: readonly ResolvedDependency[],
+  packages: readonly P[],
+  requested: readonly R[],
+): { packages: P[]; requested: R[]; held: TaskWordWithheld[]; unverified: UnverifiedWord[]; unverifiedTotal: number } {
+  const screen = screenFor(task, deps);
+  const touched = touchedNames(task, screen);
+  const installed = installedNames(deps);
+  // The ecosystems whose bundled lists count: the project's own, and those a command in the task installs
+  // from or a manifest file it names. A language or manager word in prose ("the python side should use
+  // ctx" in an npm project) decides nothing (fifth blind check, item 4).
+  const items = readTaskItems(normalizeVersionSyntax(screen.text), deps);
+  const decided = new Set<CheckEcosystem>([...projectEcosystems(deps), ...items.fixed.map((f) => f.ecosystem)]);
+  const lowered = screen.text.toLowerCase();
+  if (/\bpackage(?:-lock)?\.json\b|\bpnpm-lock\.yaml\b|\byarn\.lock\b/.test(lowered)) decided.add("npm");
+  if (/\brequirements[\w.-]*\.txt\b|\bpyproject\.toml\b|\bpipfile\b|\bsetup\.py\b/.test(lowered)) decided.add("PyPI");
+  if (/\bcargo\.(?:toml|lock)\b/.test(lowered)) decided.add("crates.io");
+  if (/\bgo\.(?:mod|sum)\b/.test(lowered)) decided.add("Go");
+  const held: TaskWordWithheld[] = [];
+  const seen = new Set<string>();
+  let beyondHeld = 0;
+  const hold = (shown: string, reason: string) => {
+    const key = `${shown}\n${reason}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (held.length < MAX_HELD_SHOWN) held.push({ shown, reason, standing: true });
+    else beyondHeld++;
+  };
+  const unverified = new Map<string, UnverifiedWord>();
+  /** A name the briefing does not look up: one plain entry, in every ecosystem it may be in by that registry's grammar. */
+  const offer = (name: string, ecosystems: readonly CheckEcosystem[], version: string | undefined, judgeNearMiss = true, unreadVersion = false) => {
+    const readAs = ecosystems.filter((e) => asName(name, e) !== null);
+    if (readAs.length === 0) return;
+    // C2: a candidate is a (name, ecosystem) pair. A name a command or manifest reads in one ecosystem and another
+    // command reads in another is two entries, each settled only by its own answer ("pip install colorsx && npm
+    // install colorsx"); a word the task gives no ecosystem for is one entry with its possible ecosystems.
+    const lower = name.toLowerCase();
+    const key = `${[...readAs].sort().join("|")}\0${lower}`;
+    const written = unreadVersion ? undefined : version;
+    const had = unverified.get(key);
+    if (!had) unverified.set(key, { word: name, read_as: readAs.join(" or "), ...(written ? { version: written } : {}), seen: items.seen.get(lower) ?? "prose" });
+    else if (!had.version && written) had.version = written;
+    // A near-miss of a popular name, judged offline: a note about the spelling, not a hold.
+    const entry = unverified.get(key)!;
+    for (const ecosystem of judgeNearMiss && !entry.note ? readAs : []) {
+      const of = offlineNearMiss(name, ecosystem);
+      // Only a true one-edit neighbour gets the note: "prisma" was told "one edit from prismjs" (two edits away).
+      if (of && oneEditApart(name, of)) {
+        entry.note = `one edit from ${of}: check the spelling`;
+        break;
+      }
+    }
+  };
+  /** The ecosystems an item may be looked up in by the briefing, or null (handed back, or held). */
+  const gate = (shown: string, name: string, own: CheckEcosystem[], version: string | undefined, unreadVersion = false): CheckEcosystem[] | null => {
+    if (touched.has(name.toLowerCase())) {
+      hold(shown, NOT_READ_WHOLE);
+      return null;
+    }
+    const allowed = own.filter((e) => installed(name, e) || (decided.has(e) && knownPublicName(name, e)));
+    // Decided in an ecosystem (a dependency there, or a bundled-list name there): its namesakes in the other
+    // ecosystems are not listed. Listing them made 33 of 190 ordinary tasks review_needed, and following them
+    // judged the wrong registry ("use crossenv": PyPI's crossenv, proceed; third blind check, item 4).
+    if (allowed.length > 0) return allowed;
+    // A bundled-list name of an ecosystem the project does not use and the task names no manager of is no
+    // evidence: judged there it vanished ("use loguru ..." in an npm project answered safe_to_delegate where
+    // 6.5.1 said npm took loguru down as malware; fourth blind check, item 3). It is listed for the project's own.
+    offer(name, own, version, true, unreadVersion);
+    return null;
+  };
+  const keptPackages: P[] = [];
+  for (const p of packages) {
+    // When the task names no manager or file, every ecosystem the project uses that may have the name.
+    const own: CheckEcosystem[] = p.fallbackOnly ? [p.ecosystem] : [p.ecosystem, ...(p.alternatives ?? [])];
+    // A version the task writes that could not be read: never looked up at latest, listed with no `to`.
+    if (p.versionUnread) {
+      if (touched.has(p.name.toLowerCase())) hold(p.name, NOT_READ_WHOLE);
+      else offer(p.name, own, undefined, true, true);
+      continue;
+    }
+    const allowed = gate(p.name, p.name, own, p.version, p.versionUnread === true);
+    if (!allowed) continue;
+    const [ecosystem, ...alternatives] = allowed;
+    const out = { ...p, ecosystem };
+    if (alternatives.length > 0) out.alternatives = alternatives;
+    else delete out.alternatives;
+    keptPackages.push(out);
+  }
+  const keptRequested: R[] = [];
+  for (const r of requested) {
+    const own: CheckEcosystem[] = r.fallbackOnly ? [r.ecosystem] : [r.ecosystem, ...(r.alternatives ?? [])];
+    const allowed = gate(`${r.name} ${r.to}`, r.name, own, r.to === "latest" ? undefined : r.to);
+    if (!allowed) continue;
+    const [ecosystem, ...alternatives] = allowed;
+    const out = { ...r, ecosystem };
+    if (alternatives.length > 0) out.alternatives = alternatives;
+    else {
+      delete out.alternatives;
+      delete out.fallbackOnly;
+      delete out.preferOnTie;
+    }
+    keptRequested.push(out);
+  }
+  if (beyondHeld > 0) held.push({ shown: `${beyondHeld} more name${beyondHeld === 1 ? "" : "s"}`, reason: "not read whole, as the ones above", standing: true });
+  // Every word, unsliced: the caller's declarations settle words past the first MAX_UNVERIFIED_WORDS as well.
+  const words = [...unverified.values()];
+  return { packages: keptPackages, requested: keptRequested, held, unverified: words, unverifiedTotal: words.length };
+}
+
+
+/** The versions a task names, read from text the screen has already blanked. */
+function readVersionsOf(task: string, deps: readonly ResolvedDependency[]): TaskVersions {
   task = normalizeVersionSyntax(task);
   // The versions the clause reader bound to a name ("pull in node-ipc 10.1.1", "replace request with
   // axios 0.21.0", "add lodash 4.17.21 and crossenv 6.1.1"), and the versions of what a swap takes out.
@@ -296,7 +519,8 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     // The versions after the connector.
     const versions: number[] = [];
     let v = i + 1;
-    while (v < raw.length && VERSIONISH.test(cleanToken(raw[v])) && !ignored.some((s) => overlaps(v, s))) {
+    // At most PAIRED_LIST of each: every pairing of two long lists is checked, so their product is bounded (re-check, item 3).
+    while (v < raw.length && versions.length < PAIRED_LIST && VERSIONISH.test(cleanToken(raw[v])) && !ignored.some((s) => overlaps(v, s))) {
       versions.push(v);
       if (joinedAfter(v)) v += 1;
       else if (v + 2 < raw.length && LIST_JOINERS.has(words[v + 1])) v += 2;
@@ -306,7 +530,7 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     // The names before it, back to a verb.
     const names: Array<{ name: string; ecosystem: CheckEcosystem; guessed?: true }> = [];
     let k = i - 1;
-    while (k >= 0) {
+    while (k >= 0 && names.length < PAIRED_LIST) {
       const w = words[k];
       if (TIE_BOUNDARIES.has(w) || RUNTIMES.has(w) || SETTING_NOUNS.has(w) || ENGLISH_TASK_WORDS.has(w)) break;
       // Explicit: the list shape says these are packages ("debug" is a common word, not here).
@@ -346,7 +570,13 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
       ...(npmName === who.name ? { alternatives: span.alternatives, ...(span.fallbackOnly ? { fallbackOnly: true as const } : { preferOnTie: "npm" as const }) } : {}),
     };
   };
+  let truncated = false;
   for (let i = 0; i < raw.length; i++) {
+    // As many names as the clause reader reads, and as many unread versions: the rest is said, not read (item 3).
+    if (found.size >= MAX_READ_PACKAGES || unread.length >= MAX_READ_PACKAGES) {
+      truncated = true;
+      break;
+    }
     if (paired.has(i)) continue;
     const token = cleanToken(raw[i]);
     if (ignored.some((s) => overlaps(i, s))) continue;
@@ -394,6 +624,8 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
     for (let k = i - 1, steps = 0; k >= 0 && steps < 6; k--, steps++) {
       const w = words[k];
       if (/[,;]/.test(gapAfter(k))) break;
+      // An option (`--network-timeout 100000`) is no package: its value is not a version of anything.
+      if (at0(k) > 0 && task[at0(k) - 1] === "-") break;
       if (CONNECTORS.has(w) || VERSIONISH.test(cleanToken(raw[k]))) continue;
       // "lodash in package.json to 4.17.20": the file the version goes in, and its preposition, are skipped.
       if (isManifestFile(raw[k])) continue;
@@ -433,16 +665,17 @@ export function readTaskVersions(task: string, deps: readonly ResolvedDependency
   }
   const requested = [...found.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...r }) => r);
   const notRead = foreign.filter((f) => f.name).map((f) => `${f.name} (${f.registry}: not read by this server)`);
-  return { requested, unread: [...new Set(unread)], ...(notRead.length > 0 ? { foreign: [...new Set(notRead)] } : {}) };
+  // A version is shown at most 100 characters long: a chain of constraints is one token, however long.
+  return { requested, unread: [...new Set(unread.map((u) => (u.length > 100 ? `${u.slice(0, 100)}...` : u)))], ...(notRead.length > 0 ? { foreign: [...new Set(notRead)] } : {}), ...(truncated ? { truncated: true as const } : {}) };
 }
 
 /**
  * dependency_check's verdict for each named version, within the briefing's budget. Offline or past
  * the budget a version is `unknown`: never read as safe.
  */
-export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date): Promise<RequestedVersionFinding[]> {
+export async function checkRequestedVersions(liveIntel: NameCheckLive | null, requested: RequestedVersion[], now?: Date, onAnswer?: (results: readonly CheckedItem[], sent: ReadonlyArray<{ ecosystem: string; name: string; to: string; declared?: boolean }>) => void): Promise<RequestedVersionFinding[]> {
   if (requested.length === 0) return [];
-  const unknown = ({ alternatives: _a, fallbackOnly: _f, preferOnTie: _p, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
+  const unknown = ({ alternatives: _a, fallbackOnly: _f, preferOnTie: _p, declared: _d, ...r }: RequestedVersion, why: string): RequestedVersionFinding => ({
     ...r,
     verdict: "unknown",
     resolved: null,
@@ -454,18 +687,22 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
     return requested.map((r) => unknown(r, "the registry lookups are not available in this session"));
   }
   const deadline = Date.now() + CHECK_BUDGET_MS;
-  /** One dependency_check run within what is left of the budget; null past it. */
-  const run = async (list: RequestedVersion[]) => {
+  /** One dependency_check run of at most 25 items within what is left of the budget; null past it. */
+  const runOnce = async (list: RequestedVersion[]) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
         executeDependencyCheck(
           null,
           // In the form dependency_check reads for that ecosystem (briefing-names.ts checkableSpec; round 10, W3).
-          { items: list.map((r) => ({ ecosystem: r.ecosystem, package: r.name, to: checkableSpec(r.ecosystem, r.to) ?? r.to, ...(r.from ? { from: r.from } : {}) })) },
+          { items: list.map((x) => ({ ecosystem: x.ecosystem, package: x.name, to: x.declared ? x.to : (checkableSpec(x.ecosystem, x.to) ?? x.to), ...(x.from ? { from: x.from } : {}) })) },
           liveIntel as LiveIntelligence,
           now ? { now } : {},
-        ),
+        ).then((answer) => {
+          // Each answer as dependency_check gave it, for the check ledger of what the caller confirmed (briefing-confirm.ts).
+          onAnswer?.(answer.results as readonly CheckedItem[], list.map((x) => ({ ecosystem: x.ecosystem, name: x.name, to: x.to, ...(x.declared ? { declared: true } : {}) })));
+          return answer;
+        }),
         new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
         }),
@@ -474,10 +711,23 @@ export async function checkRequestedVersions(liveIntel: NameCheckLive | null, re
       if (timer) clearTimeout(timer);
     }
   };
+  /**
+   * The run in chunks of at most 25 (dependency_check's own limit), in parallel, each within the budget: a chunk
+   * the budget did not reach leaves only its items unanswered ("did not finish in time"), never the whole run
+   * (C4: a 26th declared entry made every row unknown, the bundled malware's included).
+   */
+  const run = async (list: RequestedVersion[]) => {
+    const chunks: RequestedVersion[][] = [];
+    for (let k = 0; k < list.length; k += 25) chunks.push(list.slice(k, k + 25));
+    const answers = await Promise.all(chunks.map((c) => runOnce(c)));
+    const first = answers.find((a) => a !== null);
+    if (!first) return null;
+    return { ...first, results: answers.flatMap((a, k) => (a ? a.results : chunks[k].map(() => undefined))) as typeof first.results };
+  };
   type Answer = NonNullable<Awaited<ReturnType<typeof run>>>;
   const finding = (r: RequestedVersion, item: Answer["results"][number] | undefined): RequestedVersionFinding => {
-    const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, ...own } = r;
-    if (!item) return unknown(own, "no answer");
+    const { alternatives: _alternatives, fallbackOnly: _fallbackOnly, preferOnTie: _preferOnTie, declared: _declared, ...own } = r;
+    if (!item) return unknown(own, "the lookups did not finish in time");
     const advisories = item.signals.find((s) => s.id === "advisories")?.value as { malicious_package?: unknown; critical_affecting_to?: string[] } | null | undefined;
     const rc = item.range_check;
     const out: RequestedVersionFinding = {

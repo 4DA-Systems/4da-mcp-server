@@ -20,8 +20,10 @@ import type { ResolvedDependency } from "../live/types.js";
 import { detectAllNewPackages } from "../tools/briefing-new-packages.js";
 import { readTaskVersions } from "../tools/briefing-requested-versions.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
+import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 const NPM = [dep("lodash", "4.17.20"), dep("react", "18.2.0")];
 const RUST = [dep("tokio", "1.40.0", "crates.io")];
@@ -161,11 +163,13 @@ describe("1. the command and the specifier fix the ecosystem, for every reader",
     expect(r.summary).not.toMatch(/flask[^;]*\(proceed/);
   });
 
-  it("gem install rails -v 5.0.0 in an npm project: named NOT CHECKED, never safe_to_delegate", async () => {
+  // Round 11, P6: said as a command this briefing does not read; its package is not offered.
+  it("gem install rails -v 5.0.0 in an npm project: said as a command not read, never safe_to_delegate", async () => {
     const r = await brief("gem install rails -v 5.0.0");
     expect(r.new_packages ?? []).toEqual([]);
     expect(r.requested_versions ?? []).toEqual([]);
-    expect(r.summary).toContain("rails (RubyGems: not read by this server)");
+    expect(r.summary).not.toContain("rails (RubyGems: not read by this server)");
+    expect(r.delegation_assessment.reason).toContain("a command this briefing does not read (gem)");
     expect(r.delegation_assessment.level).not.toBe("safe_to_delegate");
   });
 
@@ -213,11 +217,16 @@ describe("3. Cargo's `=` pin is kept when the briefing asks dependency_check", (
   it('add serde_yaml = "0.8" and smallvec = "=1.6.0": the exact pin is read as exactly 1.6.0', async () => {
     const task = 'add serde_yaml = "0.8" and smallvec = "=1.6.0"';
     expect(requested(task, RUST)).toContain("crates.io:smallvec@=1.6.0");
+    // Final design of the 2026-11-25 fixes: neither crate is on a bundled list, so the briefing hands both back,
+    // each at the pin the task writes (Cargo's `=` kept), and dependency_check judges them there.
     const r = await brief(task, RUST);
-    const smallvec = r.requested_versions?.find((v) => v.name === "smallvec");
-    expect(smallvec).toMatchObject({ verdict: "avoid", resolved: "1.6.0" });
+    // Round 7, C7: no version in the entry; the agent asks dependency_check at the pin the task writes.
+    expect(waitingWords(r)).toContainEqual({ word: "smallvec", read_as: "crates.io" });
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    const check = (await executeDependencyCheck(null, { items: [{ ecosystem: "crates.io", package: "smallvec", to: "=1.6.0" }] }, stubIntel(RUST, {}, readyScan()) as never)) as { results: Array<{ package: string; verdict: string; to: string; reason: string }> };
+    const smallvec = check.results.find((v) => v.package === "smallvec");
+    expect(smallvec).toMatchObject({ verdict: "avoid", to: "1.6.0" });
     expect(smallvec?.reason).not.toMatch(/1\.16\.5|\^1\.6\.0/);
-    expect(r.delegation_assessment.level).toBe("human_only");
   });
 });
 

@@ -18,14 +18,16 @@
  * plan's summary does not count it as fixed.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { HELD_UNCLEAN_REASON, type FixPathSources, type PackageReleaseFacts } from "../live/fix-paths.js";
 import { byDeadline } from "../live/held-dependencies.js";
 import type { LiveIntelligence } from "../live/index.js";
 import { prepareLockfileParents, type LockfileFormat, type ParentEdge } from "../live/lockfile-parents.js";
-import { advisoryAffects, cleanReleases, type AdvisoryRanges } from "../live/osv-ranges.js";
+import { advisoryAffects, cleanReleases, isPrereleaseVersion, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { npmRangeAdmits } from "../live/range-satisfies.js";
 import { computeSemverDistance } from "../live/semver-utils.js";
+import { isShellSafeName } from "../live/shell-safe.js";
 import { compareVersions } from "../live/version-compare.js";
 import { npmPick } from "./dependency-check-resolution.js";
 import { overrideHint, type FixPathInput, type FixPathStep } from "./upgrade-planner-fixpaths.js";
@@ -110,6 +112,10 @@ async function sharedCopy(step: FixPathStep, dir: string, sources: FixPathSource
     byDeadline(sources.releaseFacts("npm", name), deadline, null),
     byDeadline(sources.packageAdvisories("npm", name), deadline, null),
   ]);
+  // pnpm at a workspace root and Yarn Berry keep the locked copy for an edge whose range admits the target too.
+  const full = fullRefresh(index.format, name);
+  const locked = keepsLocked(index.format, lockfile) && !(step.upgradeCommands ?? []).some((c) => full !== null && c.command === full) && !(index.format === "yarn-berry" && (step.upgradeCommands ?? []).some((c) => c.command === `yarn up -R ${name}`));
+  const lockKept: Holder[] = [];
   const holders: Holder[] = [];
   const seen = new Set<string>();
   for (const e of edges.slice(0, MAX_HOLDERS)) {
@@ -125,15 +131,27 @@ async function sharedCopy(step: FixPathStep, dir: string, sources: FixPathSource
       const reqs = await byDeadline(sources.parentRequirements("npm", e.parent, movedTo, name), deadline, null);
       if (reqs !== null && reqs.length === 0) continue;
       const requirement = reqs?.length === 1 ? reqs[0] : null;
-      if (requirement !== null && npmRangeAdmits(requirement, target) === true) continue;
+      if (requirement !== null && npmRangeAdmits(requirement, target) === true) {
+        if (locked) lockKept.push({ name: e.parent, version: e.parentVersion!, requirement, keeps: installed, movedTo });
+        continue;
+      }
       const keeps = requirement === null ? null : npmRangeAdmits(requirement, installed) === true ? keptCopy(index.format, requirement, installed, facts) : keptCopy("package-lock", requirement, installed, facts);
       holders.push({ name: e.parent, version: e.parentVersion!, requirement, keeps, movedTo });
       continue;
     }
     const requirement = await requirementOf(e, name, sources, deadline);
-    // A requirement that admits the target shares the upgraded copy.
-    if (requirement !== null && npmRangeAdmits(requirement, target) === true) continue;
+    // A requirement that admits the target shares the upgraded copy (npm, Yarn 1, pnpm outside a
+    // workspace root); pnpm at a workspace root and Yarn Berry keep the locked one for it.
+    if (requirement !== null && npmRangeAdmits(requirement, target) === true) {
+      if (locked && !e.bundled) lockKept.push({ name: e.parent, version: e.parentVersion!, requirement, keeps: installed });
+      continue;
+    }
+    // Under pnpm and Yarn Berry an unread requirement keeps the locked copy as well: said below, never assumed shared.
     holders.push({ name: e.parent, version: e.parentVersion!, requirement, keeps: e.bundled ? installed : keptCopy(index.format, requirement, installed, facts) });
+  }
+  if (holders.length === 0 && lockKept.length > 0) {
+    const unexamined = Math.max(0, edges.length - MAX_HOLDERS);
+    return lockedCopies(step, { name, installed, target, unexamined }, lockKept, index.format, lockDir(lockfile, liveIntel), facts, listed);
   }
   if (holders.length === 0) return;
   const more = Math.max(0, edges.length - MAX_HOLDERS);
@@ -178,6 +196,100 @@ async function sharedCopy(step: FixPathStep, dir: string, sources: FixPathSource
   const one = holders.length + more === 1;
   const instruction = `after upgrading ${name}, the ${one ? "copy" : "copies"} of ${name} that ${one ? `${holders[0].name} keeps remains` : `${holders.length + more} other packages keep remain`} (${copies.length > 0 ? copies.join(", ") : "not established"}): ${inside !== null && inside.length > 0 ? `refresh ${one ? "it" : "them"}, or upgrade ${one ? "that package" : "those packages"}, to move to ${inside[inside.length - 1]} or later` : `move ${one ? "it" : "them"} by hand, with ${override} or by upgrading ${one ? "that package" : "those packages"}`}, then run vulnerability_scan`;
   step.upgradeInstructions = [...(step.upgradeInstructions ?? []).filter((i) => i.instruction !== instruction), { dir: where, instruction }];
+}
+
+/**
+ * Whether the package manager of `lockfile` keeps the locked copy for a requiring edge the step does
+ * not name, even when that edge's range admits the target. Measured 2026-11-26 (scripts off): Yarn
+ * Berry 3.2.4 / 4.9.1 always (one resolution per descriptor: redux-toolkit's "nanoid@npm:^3.1.23"
+ * stayed on 3.3.4 after `yarn workspace docs add "nanoid@^3.3.18"`); pnpm 7.33.7 / 10.34.6 at a
+ * workspace root (vue core: json5's edge stayed on minimist 1.2.5 after the root's
+ * `pnpm update minimist --no-save`, with or without `--depth Infinity`), but not in a project that
+ * is no workspace, where the root's own update or `pnpm up` moved the json5 edge too.
+ */
+function keepsLocked(format: LockfileFormat, lockfile: string): boolean {
+  return format === "yarn-berry" || (format === "pnpm" && fs.existsSync(path.join(path.dirname(lockfile), "pnpm-workspace.yaml")));
+}
+
+/**
+ * The manager's own refresh of every edge of `name`, which leaves every manifest as it is: Yarn
+ * Berry's `yarn up -R` (each descriptor to the newest release it admits); pnpm's
+ * `update -r ... --depth Infinity --no-save` (every importer, every depth; without --no-save it
+ * rewrote the root's ^1.2.0 to ^1.2.8). Null for a name that cannot be carried in a command.
+ */
+function fullRefresh(format: LockfileFormat, name: string): string | null {
+  if (!isShellSafeName(name, "npm")) return null;
+  if (format === "yarn-berry") return `yarn up -R ${name}`;
+  if (format === "pnpm") return `pnpm update -r ${name} --depth Infinity --no-save`;
+  return null;
+}
+
+function lockDir(lockfile: string, liveIntel: Intel): string {
+  return relativeDir(path.dirname(lockfile), liveIntel.getProjectRoot() ?? process.cwd());
+}
+
+/**
+ * Other packages hold the same locked copy through a range that admits the target, and their
+ * manager keeps that copy when only the declared entry moves. When each of their requirements
+ * resolves to a release at or above the target that no advisory affects (the release a refresh
+ * installs: the newest it admits), the row also runs the manager's refresh of every edge, after the
+ * step; otherwise the row says which copy stays and is a hand edit, not counted as fixed.
+ */
+function lockedCopies(
+  step: FixPathStep,
+  copy: { name: string; installed: string; target: string; unexamined: number },
+  kept: Holder[],
+  format: LockfileFormat,
+  dir: string,
+  facts: PackageReleaseFacts | null,
+  listed: AdvisoryRanges[] | null,
+): void {
+  const { name, installed, target, unexamined } = copy;
+  const manager = format === "yarn-berry" ? "Yarn Berry" : "at a pnpm workspace root pnpm";
+  const shown = kept.slice(0, MAX_NAMED).map((h) => `${h.name} ${h.version}${h.movedTo ? `, which this plan moves to ${h.movedTo},` : ""} ("${h.requirement}")`);
+  const rest = kept.length - shown.length + unexamined;
+  const named = `${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}`;
+  const one = kept.length + unexamined === 1;
+  const command = fullRefresh(format, name);
+
+  // What a refresh installs for each of their requirements: the newest release it admits.
+  let why: string | null = null;
+  const resolves = new Set<string>();
+  if (!facts || !listed || unexamined > 0 || command === null) {
+    why = `whether a refresh of ${one ? "its" : "their"} requirement reaches a clean release was not established${unexamined > 0 ? ` (${unexamined} of them were not read)` : ""}`;
+  } else {
+    const releases = facts.versions.filter((v) => !isPrereleaseVersion(v, "npm") && !facts.withdrawn.includes(v));
+    for (const req of new Set(kept.map((h) => h.requirement!))) {
+      const newest = releases.filter((v) => npmRangeAdmits(req, v) === true).sort((a, b) => compareVersions(b, a, "npm"))[0];
+      if (!newest) {
+        why = `no release ${one ? "its" : "their"} requirement "${req}" admits was found`;
+        break;
+      }
+      if (compareVersions(newest, target, "npm") < 0) {
+        why = `a refresh of ${one ? "its" : "their"} requirement resolves to ${name} ${newest}, below the fix ${target}`;
+        break;
+      }
+      const ids = [...new Set(listed.filter((a) => !a.maintenance && advisoryAffects(a, newest, "npm")).map((a) => a.id))].sort();
+      if (ids.length > 0) {
+        why = `a refresh of ${one ? "its" : "their"} requirement resolves to ${name} ${newest}, which ${ids.length === 1 ? "an advisory affects" : `${ids.length} advisories affect`} (${ids.slice(0, MAX_IDS).join(", ")}${ids.length > MAX_IDS ? ` and ${ids.length - MAX_IDS} more` : ""})`;
+        break;
+      }
+      resolves.add(newest);
+    }
+  }
+  if (why === null && command !== null) {
+    const to = [...resolves].sort((a, b) => compareVersions(a, b, "npm"));
+    step.refreshCommands = [...(step.refreshCommands ?? []).filter((c) => !(c.dir === dir && c.command === command)), { dir, command }];
+    step.reasons.push(
+      `${named} also ${one ? "holds" : "hold"} ${name} ${installed}: ${manager} keeps that locked copy when only the declared entry moves, so this row also runs \`${command}\`, which resolves their requirement to ${name} ${to.join(", ")} (no advisory affects ${to.length === 1 ? "it" : "them"})`,
+    );
+    return;
+  }
+  step.reasons.push(
+    `Other packages that use this copy of ${name} keep one on its old line after this upgrade: ${named} ${one ? "keeps" : "keep"} ${name} ${installed}, the copy ${one ? "its lockfile entry holds" : "their lockfile entries hold"} (${manager} keeps a locked copy when only the declared entry moves), and ${why}. Upgrading ${name} moves only this project's own copy, so this row is not counted as fixed and is a hand edit, not in run_order`,
+  );
+  const instruction = `after upgrading ${name}, the copy of ${name} ${installed} that ${one ? `${kept[0].name} keeps remains` : `${kept.length + unexamined} other packages keep remains`}: move it by hand (an override, or an upgrade of ${one ? "that package" : "those packages"}), then run vulnerability_scan`;
+  step.upgradeInstructions = [...(step.upgradeInstructions ?? []).filter((i) => i.instruction !== instruction), { dir, instruction }];
 }
 
 /** A holder's requirement on `name`: the lockfile's, else the holder release's own from the registry. */

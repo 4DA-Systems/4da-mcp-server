@@ -200,23 +200,22 @@ describe("vulnerability_scan — sandbox@3.1.2 graded as the app grades it", () 
     expect(sandbox.severity).toBe("high");
     expect(sandbox.advisory_severity).toBe("critical");
     expect(sandbox.severity_note).toContain("transitive-only");
-    expect(out.by_severity).toMatchObject({ critical: 0, high: 1 });
-    expect(out.advisory_by_severity).toMatchObject({ critical: 1, high: 0 });
+    // PADDLE_LOCK has no `snapshots:` section, so it reads as PARTIAL and the counts are under found_in_checked_dependencies (audit 2026-11-25, F2).
+    expect(out.found_in_checked_dependencies.by_severity).toMatchObject({ critical: 0, high: 1 });
+    expect(out.found_in_checked_dependencies.by_advisory_severity).toMatchObject({ critical: 1, high: 0 });
     expect(out._meta.severity_rule).toContain("caps critical at high");
   });
 
-  it("drops to medium when the app's dependency_instances says is_dev = 1", async () => {
+  it("stays high when the app's dependency_instances says is_dev = 1: the app's row alone never lowers a grade (audit 2026-11-25, G-2)", async () => {
     const out = await scanPaddle(inventoryDb({ isDev: 1 }));
     const sandbox = out.vulnerabilities.find((v: { package: string }) => v.package === "sandbox");
 
-    // Graded down, not dropped: the default scan keeps known-dev transitives.
     expect(sandbox).toBeDefined();
-    expect(sandbox.dev_scope_known).toBe(true);
-    expect(sandbox.is_dev).toBe(true);
-    expect(sandbox.severity).toBe("medium");
+    expect(sandbox.dev_scope_known).toBe(false);
+    expect(sandbox.severity).toBe("high");
     expect(sandbox.advisory_severity).toBe("critical");
-    expect(out.by_severity).toMatchObject({ critical: 0, high: 0, medium: 1 });
-    expect(out.advisory_by_severity).toMatchObject({ critical: 1 });
+    expect(out.found_in_checked_dependencies.by_severity).toMatchObject({ critical: 0, high: 1 });
+    expect(out.found_in_checked_dependencies.by_advisory_severity).toMatchObject({ critical: 1 });
   });
 
   it("does not read the app's placeholder row (is_dev = 0, scope 'unknown') as a determination", async () => {

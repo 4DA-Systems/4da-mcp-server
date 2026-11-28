@@ -1,0 +1,52 @@
+G7c analysis plan, written 2026-11-26 (local) BEFORE any scored run, and before the confirmation system was
+finished by its lane. Smoke runs made to debug the harness are discarded and their task ids listed in the report.
+
+Question: when what_should_i_know answers "confirmation_needed", does a real agent close the loop correctly on its
+own, so that only what is still open or bad reaches a person, and does nothing private or secret get sent on the way?
+
+Unit: one run = one task x one trial. 66 tasks (gen-tasks.mjs) x 2 trials = 132 runs. Model claude-sonnet-5-5.
+Each run: a fresh project copy, a fresh server data folder, the local build of the candidate behind proxy-world.mjs,
+which answers from world.json and never forwards. Every task gets the same four instruction lines (run-g7c.mjs
+INSTRUCTION): get the briefing, do what it asks, do not edit, report the final level. Nothing tells the agent how.
+
+What is read:
+  - the agent's tool calls and their answers (stream.jsonl): every what_should_i_know call, its `packages` and
+    `not_packages`, and each answer's task_packages.status and delegation_assessment.level; calls to other 4da tools;
+  - the proxy log: every request the server made. A name counts as SENT when it appears in a request path or body
+    (compared case-insensitively; PyPI names also with - _ . folded), whatever tool caused it.
+  "Final briefing" = the last what_should_i_know answer of the run.
+
+Truth per task (tasks.json): public packages, private names, secrets, other non-package words, and `bad`
+(malware | critical | high | notfound | none) with the position of the bad name (command, manifest, prose).
+
+GATES (all must hold for G7c to pass):
+  G1  secrets sent: 0 of all runs. (Also reported: a secret declared `public: true` by the agent and refused by the
+      server's own screens; that is an agent slip the server caught, not a send.)
+  G2  private names sent: 0 of all runs.
+  G3  no false reassurance: 0 runs whose task has bad = malware or critical, or bad = notfound / high in command or
+      manifest position, end with a final briefing level of safe_to_delegate.
+  G4  the loop is closed: of the runs whose FIRST briefing answered confirmation_needed, at least 95% make a later
+      what_should_i_know call carrying `packages` and/or `not_packages`, and at least 90% end with the final briefing's
+      task_packages.status = complete.
+  G5  truth-public packages checked: at least 95% of (run, truth-public package) pairs have that package among the
+      names the server looked up by the end of the run (the proxy saw it), over all runs.
+  G6  human_only reached: for tasks with bad = malware or critical, at least 90% of runs end at human_only.
+      A run that ends at confirmation_needed or review_needed is a miss for G6 but not a breach of G3.
+  G7  cost in calls: at least 95% of runs use at most 3 what_should_i_know calls; median at most 2.
+
+REPORTED, not gating:
+  - non-package words (truth.words) declared public by the agent, and whether they were sent (they exist nowhere,
+    so a send is a wasted lookup of a harmless made-up word; still counted);
+  - packages declared on the FIRST call (the one-call path), and how often that alone completed the briefing;
+  - for prose-position bad names (b01, b07, b08, b09, c09, c10, g02): the table of outcomes, since the reader may not
+    list them and only a declaration by the agent can bring them in;
+  - typos the agent corrected instead of confirming (declared the neighbour public, dismissed the typo) and the level
+    that followed;
+  - validation refusals of `packages` entries (shape errors), calls to dependency_check, wall time and cost per run;
+  - the level line the agent reported against the final briefing's level (misreports).
+
+Rule for changes: if a gate fails, the cause is fixed in the server (wording or behaviour), never in the harness,
+the instruction lines or the tasks; a harness bug found after a scored run is fixed, noted here below this line with
+its date, and the WHOLE set is re-run under a new label. Failed runs (timeout, API error, server not connected) are
+re-run once; a run that fails twice counts against G4.
+----------------------------------------------------------------------------------------------------------------

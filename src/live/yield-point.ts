@@ -34,13 +34,19 @@ export function yieldIfDue(): Promise<void> | undefined {
  * whenever a slice is due (`runStepsYielding`). One body for both, so the two cannot disagree on a
  * result. The first call's lockfile resolution held the server for 2.3 s on a 150,000-entry
  * pnpm-lock.yaml, and a `ping` sent meanwhile waited for all of it (pre-publish round 10, W11).
+ *
+ * A step may also yield a promise of work running outside the event loop's turn (a child
+ * process): `runStepsYielding` waits for it to settle before the next step, with the event loop
+ * free meanwhile; `runSteps` does not wait and goes on without it. The work bounds itself (it must
+ * settle, and never reject); the step after it reads what it left, or does without (`cargo tree`,
+ * cargo-platform.ts; audit 2026-11-25, F-M2).
  */
-export type Steps<T> = Generator<void, T, void>;
+export type Steps<T> = Generator<void | Promise<void>, T, void>;
 
 /** How many lines or entries a loop handles between two pause points (a power of two, for `& STEP_MASK`). */
 export const STEP_MASK = 2047;
 
-/** Run `steps` to completion now, never pausing. */
+/** Run `steps` to completion now, never pausing (a yielded promise is not waited for). */
 export function runSteps<T>(steps: Steps<T>): T {
   for (;;) {
     const r = steps.next();
@@ -49,9 +55,10 @@ export function runSteps<T>(steps: Steps<T>): T {
 }
 
 /**
- * Run `steps`, giving the event loop a turn whenever a slice is due (yieldIfDue). `current` is
- * asked after every turn given: false when the work was superseded meanwhile (a caller that could
- * not wait did it synchronously), and the run stops there, returning `superseded`.
+ * Run `steps`, giving the event loop a turn whenever a slice is due (yieldIfDue), and waiting for a
+ * promise a step yields. `current` is asked after every turn given: false when the work was
+ * superseded meanwhile (a caller that could not wait did it synchronously), and the run stops
+ * there, returning `superseded`.
  */
 export async function runStepsYielding<T, S>(steps: Steps<T>, current: () => boolean, superseded: S): Promise<T | S> {
   for (;;) {
@@ -63,6 +70,15 @@ export async function runStepsYielding<T, S>(steps: Steps<T>, current: () => boo
       return superseded;
     }
     if (r.done) return r.value;
+    if (r.value) {
+      await r.value.catch(() => undefined);
+      last = performance.now();
+      if (!current()) {
+        steps.return(undefined as unknown as T);
+        return superseded;
+      }
+      continue;
+    }
     const turn = yieldIfDue();
     if (turn) {
       await turn;

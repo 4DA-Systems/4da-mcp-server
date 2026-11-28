@@ -121,7 +121,7 @@ async function call(tool: string, args: Record<string, unknown>): Promise<Record
   }
 }
 
-const TASK = { task: "add a date picker to the settings page" };
+const TASK = { packages: [], task: "add a date picker to the settings page" };
 
 const PKG_JSON = JSON.stringify({ name: "app", version: "1.0.0", dependencies: { lodash: "4.17.20", minimist: "1.2.5" } }, null, 2);
 const REQUIREMENTS = "requests==2.25.0\nurllib3==1.26.4\n";
@@ -293,12 +293,13 @@ describe("an npm lockfile that is not valid JSON is said as unreadable, never as
     expect(health.summary).not.toMatch(/are private|is private/);
     const brief = await call("what_should_i_know", TASK);
     expect(brief.delegation_assessment.level).toBe("unknown");
-    expect(brief.delegation_assessment.reason).toMatch(/^UNREADABLE: 1 lockfile could not be read.*package-lock\.json/);
+    // Round 20b: one text for a lockfile that could not be read (SCAN_LOCKFILE_UNREADABLE), with its path and error.
+    expect(brief.delegation_assessment.reason).toMatch(/^The lockfile package-lock\.json \(.*\) could not be read, so its dependencies were not checked\./);
   });
 
   it("a task naming a withheld package says its lockfile could not be read, not that it is private", async () => {
     liveFor({ "package.json": PKG_JSON, "package-lock.json": GARBAGE, "requirements.txt": REQUIREMENTS });
-    const brief = await call("what_should_i_know", { task: "upgrade lodash to 4.17.21" });
+    const brief = await call("what_should_i_know", { packages: [], task: "upgrade lodash to 4.17.21" });
     expect(brief.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(brief.private_dependencies.map((p: { package: string; unreadable_file?: string }) => [p.package, path.basename(p.unreadable_file ?? "")])).toEqual([["lodash", "package-lock.json"]]);
     expect(brief.summary).toContain("NOT CHECKED (unreadable lockfile): the task touches lodash 4.17.20");
@@ -327,7 +328,7 @@ describe("what_should_i_know is never safe_to_delegate over a lockfile it did no
         expect(brief.lockfiles_not_read.map((f: { path: string }) => f.path)).toEqual([lock]);
         expect(["unreadable", "partial"]).toContain(brief.lockfiles_not_read[0].reason);
         expect(brief.summary).toContain(lock);
-        expect(brief.summary).toMatch(/^(UNREADABLE|PARTIAL): /);
+        expect(brief.summary).toMatch(/^(?:The lockfile \S+ \(.*\) could not be read|PARTIAL: )/);
         expect(brief.delegation_assessment.reason).toContain(lock);
         const scan = await call("vulnerability_scan", {});
         expect(scan.coverage.complete).toBe(false);

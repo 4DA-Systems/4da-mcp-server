@@ -42,6 +42,7 @@ export function extractSteps(plan: unknown): { source: "run_order" | "row_comman
 export function mergeOverride(pkg: Record<string, unknown>, snippet: string): Record<string, unknown>;
 export function findLockfiles(root: string): string[];
 export function yarnFlavorOf(lockText: string): "classic" | "berry";
+export function yarnFlavorFor(copy: string, cwd: string): "classic" | "berry";
 export function lockfileVersions(base: string, text: string): Map<string, Set<string>>;
 export function inventory(root: string): Inventory;
 export function lockfileCopies(base: string, text: string): Map<string, Map<string, number>>;

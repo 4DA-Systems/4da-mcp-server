@@ -30,6 +30,7 @@ import { readTaskVersions } from "../tools/briefing-requested-versions.js";
 import { executeWhatShouldIKnow, type BriefingLiveIntel } from "../tools/what-should-i-know.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
+import { waitingWords, nearMissHint } from "./helpers/a1127-task-packages.js";
 
 const NPM_PROJECT = [dep("react", "18.2.0"), dep("request", "2.88.2"), dep("lodash", "4.17.20")];
 const PY_PROJECT = [dep("requests", "2.32.3", "PyPI"), dep("flask", "3.0.0", "PyPI")];
@@ -184,7 +185,7 @@ afterEach(() => {
 });
 
 const brief = (task: string, deps: ResolvedDependency[] = NPM_PROJECT, over: Partial<BriefingLiveIntel> = {}, vulns: VulnerabilityEntry[] = []) =>
-  executeWhatShouldIKnow(db, { task }, stubIntel(deps, over, readyScan(vulns)));
+  executeWhatShouldIKnow(db, { packages: [], task }, stubIntel(deps, over, readyScan(vulns)));
 
 describe("B1 in the briefing: the malware after a prose item is found (each was safe_to_delegate)", () => {
   it.each([
@@ -194,10 +195,19 @@ describe("B1 in the briefing: the malware after a prose item is found (each was 
     ["add uuid, ctx", PY_PROJECT, "ctx"],
     ["add json and ctx", PY_PROJECT, "ctx"],
     ["add zod, lodahs", NPM_PROJECT, "lodahs"],
-  ])("%s: human_only on %s", async (task, deps, bad) => {
+  ])("%s: never safe on %s (a listed malicious name is human_only, a near-miss is noted offline)", async (task, deps, bad) => {
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is listed in task_packages.to_confirm (not sent by the briefing),
+    // and a near-miss of a popular name is judged offline: review_needed, did you mean.
     const r = await brief(task, deps);
-    expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
-    expect(r.delegation_assessment.level).toBe("human_only");
+    if (bad === "electorn" || bad === "lodahs") {
+      // Fourth blind check of the 2026-11-25 fixes, item 4: a spelling note, review_needed, never a hold.
+      expect(waitingWords(r)?.find((w) => w.word === bad)?.hint).toMatch(/^one edit from /);
+      expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    } else {
+      expect(r.new_packages?.find((p) => p.name === bad)).toMatchObject({ malicious: true, verdict: "avoid" });
+      expect(r.delegation_assessment.level).toBe("human_only");
+    }
   });
 });
 
@@ -257,9 +267,15 @@ describe("the summary carries the worst verdict of every checked item", () => {
 describe("nothing past a cap is dropped without a word", () => {
   it("a list beside a known package keeps its clean bare names (superstruct, valibot, io-ts, is-even were dropped)", async () => {
     for (const n of ["valibot", "superstruct", "io-ts", "is-even"]) stub.npm[n] = { latest: "1.0.0", versions: ["1.0.0"] };
+    // Re-check of the 2026-11-25 fixes, item 2: a word in prose nothing knows is not looked up at all; it is
+    // held (task_packages.not_read) and the task is review_needed. An install command's operand is looked up.
+    // Final design of the 2026-11-25 fixes: the briefing looks a name up only when the project uses it or it is
+    // exactly a name of a bundled list; any other name is listed in task_packages.to_confirm (not sent by the briefing),
+    // and a near-miss of a popular name is judged offline: review_needed, did you mean.
     const r = await brief("add zod, valibot, superstruct, io-ts and is-even");
-    expect(r.new_packages?.map((p) => p.name)).toEqual(["zod", "valibot", "superstruct", "io-ts", "is-even"]);
-    for (const n of ["valibot", "superstruct", "io-ts", "is-even"]) expect(r.summary).toContain(`${n} (proceed)`);
+    expect(r.new_packages?.map((p) => p.name)).toEqual(["zod"]);
+    expect(waitingWords(r)?.map((w) => w.word)).toEqual(["valibot", "superstruct", "io-ts", "is-even"]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
   it("versions past eight are NOT CHECKED by name, never silently cut (the sixth was dropped)", async () => {
@@ -291,15 +307,18 @@ describe("false positives are gone, blockers stay", () => {
     expect(r.delegation_assessment.level).toBe("safe_to_delegate");
   });
 
-  it("use blueprints: a word after `use` stands only on a finding about the name (it was review_needed)", async () => {
+  it("use blueprints: a word nothing knows after `use` is not looked up, and said (re-check of the 2026-11-25 fixes, item 2)", async () => {
     const r = await brief("use blueprints");
     expect(r.new_packages).toBeUndefined();
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(waitingWords(r)).toEqual([{ word: "blueprints", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
   it("use lodahs: a malware name after `use` still stands", async () => {
+    // A near-miss noted offline (one edit from lodash), never safe (fourth blind check, item 4).
     const r = await brief("use lodahs");
-    expect(r.delegation_assessment.level).toBe("human_only");
+    expect(waitingWords(r)).toMatchObject([{ word: "lodahs", hint: nearMissHint("lodash") }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 });
 

@@ -171,6 +171,7 @@ function judgedResult(p: Plan, { extra, bad, nameCheck }: PlanFacts, a: AnswerIn
   const signals: Signal[] = [
     advisories,
     ...(nameCheck ? [nameCheck] : []),
+    ...[a.findings.caseVariants.get(item)].filter((s): s is Signal => s !== undefined),
     releaseAgeSignal(item, to, advisories, now, holdWaivers.get(item)),
     publishTrustSignal(item, to, trustBaseline(index!, item)),
     installScriptSignal(item, to, item.from ? index!.releases[item.from] ?? null : null),

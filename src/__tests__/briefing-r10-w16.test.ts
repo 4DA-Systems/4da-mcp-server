@@ -19,6 +19,7 @@ import { readTaskVersions } from "../tools/briefing-requested-versions.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
 
 const NPM = [dep("lodash", "4.17.20"), dep("react", "18.2.0")];
 const MIXED = [...NPM, dep("requests", "2.32.3", "PyPI")];
@@ -134,7 +135,8 @@ describe("3. an ecosystem with no such release, or a namesake's near-miss, is no
     const r = await brief("add pandas 2.2.3", MIXED);
     expect(r.requested_versions).toMatchObject([{ name: "pandas", ecosystem: "PyPI", verdict: "proceed" }]);
     for (const p of r.new_packages ?? []) expect(p).toMatchObject({ ecosystem: "PyPI", verdict: "proceed" });
-    expect(r.delegation_assessment.level).not.toBe("review_needed");
+    // Decided on PyPI (a popular name there): npm's namesake is not listed (third blind check, item 4).
+    expect(waitingWords(r)).toBeUndefined();
   });
 
   it("malware from an ecosystem that has the name and release still wins in a mixed project", async () => {

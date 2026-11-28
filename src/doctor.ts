@@ -7,7 +7,7 @@
  * 2. A SQLite driver opens a database (node:sqlite, else better-sqlite3)
  * 3. The data folder, the server's own database, the cache and the app's
  *    database, each named by its path with its state (dataFolderChecks)
- * 4. LLM providers are configured (optional)
+ * 4. The embedding provider for semantic recall, when one is configured (optional)
  * 5. OSV.dev and the registries answer, through the configured proxy
  *
  * Usage:
@@ -18,6 +18,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  dataFolderWriteProblem,
   desktopAppDbPaths,
   explicitDbPathProblem,
   FourDADatabase,
@@ -29,7 +30,7 @@ import {
   standaloneDbPath,
 } from "./db.js";
 import { closeServerCacheDb, getServerCacheDb, serverCacheState } from "./live/cache.js";
-import { NODE_SQLITE_MIN, openDatabase, sqliteDriverStatus } from "./sqlite-driver.js";
+import { openDatabase, sqliteDriverStatus } from "./sqlite-driver.js";
 import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { checkLookupReachability } from "./doctor-network.js";
@@ -92,17 +93,26 @@ export function dataFolderChecks(): Check[] {
   // The database the tools use: FOURDA_DB_PATH, else the desktop app's, else the own store.
   const selected = getDefaultDbPath();
   const standaloneMode = isOwnStorePath(selected);
-  const rest = [ownStoreCheck(standaloneMode), cacheCheck(), appDatabaseCheck(selected, standaloneMode)];
+  // An app database is in use only when it is there, readable and the desktop app's own (not set up, or
+  // this server's own format, and the server runs on its own store).
+  const app = standaloneMode ? null : FourDADatabase.validateDatabase(selected);
+  const appInUse = Boolean(app?.valid && !app.standalone);
+  const rest = [ownStoreCheck(standaloneMode, appInUse), cacheCheck(), appDatabaseCheck(selected, standaloneMode)];
   const made = existed ? "" : fs.existsSync(dir) ? " (created by this check)" : " (created on first use)";
+  const unwritable = notFolder ? null : dataFolderWriteProblem();
   const folder: Check = {
     name: "Data folder",
-    status: notFolder ? "fail" : "pass",
-    detail: notFolder ? `${dir} exists but is not a folder: the server cannot keep its files there` : `${dir}${made}`,
+    status: notFolder || unwritable ? "fail" : "pass",
+    detail: notFolder
+      ? `${dir} exists but is not a folder: the server cannot keep its files there`
+      : unwritable
+        ? `${unwritable}: the server cannot keep its files there`
+        : `${dir}${made}`,
   };
   return [folder, ...rest];
 }
 
-function ownStoreCheck(standaloneMode: boolean): Check {
+function ownStoreCheck(standaloneMode: boolean, appInUse: boolean): Check {
   const name = "Own database";
   const own = standaloneDbPath();
   // Made only when the tools use it: in standalone mode, or beside the app's database for a record its schema cannot hold.
@@ -130,7 +140,8 @@ function ownStoreCheck(standaloneMode: boolean): Check {
   // Deep integrity_check: --doctor is an explicit diagnostic where a slow full scan is expected.
   const deep = FourDADatabase.validateDatabase(own, { deep: true });
   if (!deep.valid) return { name, status: "fail", detail: `${own}: ${deep.error ?? "cannot be read"}` };
-  const role = standaloneMode ? "" : " (beside the app's database, for records its schema cannot hold)";
+  // "Beside the app's database" only when one is in use; otherwise this is the database the tools use.
+  const role = appInUse ? " (beside the app's database, for records its schema cannot hold)" : "";
   const ready = `${deep.tables?.length ?? 0} tables, ready${role}`;
   if (before) {
     return {
@@ -205,6 +216,9 @@ function appDatabaseCheck(selected: string, standaloneMode: boolean): Check {
   // Read only, with the deep integrity_check (the startup path uses the cheap probe).
   const v = FourDADatabase.validateDatabase(selected, { deep: true });
   if (!v.valid) return { name, status: configured ? "fail" : "warn", detail: v.error ?? `${selected} cannot be read` };
+  // An app database that is not set up (or another server's store) is not used: the server runs on
+  // its own store, and the note says why (audit 2026-11-25, G-1).
+  if (v.standalone && v.note) return { name, status: "warn", detail: v.note };
   if (v.standalone) {
     return { name, status: "pass", detail: `${selected}: a database of this server's own format, not the desktop app's (${v.tables?.length ?? 0} tables)` };
   }
@@ -212,6 +226,16 @@ function appDatabaseCheck(selected: string, standaloneMode: boolean): Check {
     ? " It holds a live_cache table an old version of this server (before 6.1) created there; nothing reads it now, and the server never removes anything from the app's database."
     : "";
   return { name, status: "pass", detail: `${selected}: ${v.tables?.length ?? 0} tables, read-only${leftover}` };
+}
+
+/**
+ * The colour codes for the check marks: none unless stdout is a terminal, and none when NO_COLOR is
+ * set to anything (https://no-color.org). Piped into a file or a client's log, `--doctor` printed
+ * raw escape codes (audit 2026-11-25).
+ */
+export function doctorColors(isTTY: boolean, env: NodeJS.ProcessEnv): { colors: Record<"pass" | "warn" | "fail", string>; reset: string } {
+  if (!isTTY || (env.NO_COLOR ?? "") !== "") return { colors: { pass: "", warn: "", fail: "" }, reset: "" };
+  return { colors: { pass: "\x1b[32m", warn: "\x1b[33m", fail: "\x1b[31m" }, reset: "\x1b[0m" };
 }
 
 export async function runDoctor(): Promise<void> {
@@ -246,7 +270,7 @@ export async function runDoctor(): Promise<void> {
       ? (sqlite.problem ?? "no SQLite driver")
       : sqlite.driver.name === "node:sqlite"
         ? `node:sqlite (built into Node ${process.versions.node}) opened an in-memory database`
-        : `better-sqlite3 opened an in-memory database (${passedOver || `node:sqlite needs Node ${NODE_SQLITE_MIN}+`})`,
+        : `better-sqlite3 opened an in-memory database (${passedOver || "node:sqlite needs Node 22.13+ or 23.4+"})`,
   });
 
   // 3. The data folder and every database the tools use, by path. Opening them needs a driver.
@@ -292,8 +316,7 @@ export async function runDoctor(): Promise<void> {
 
   // Print results
   const icons = { pass: "\u2713", warn: "!", fail: "\u2717" };
-  const colors = { pass: "\x1b[32m", warn: "\x1b[33m", fail: "\x1b[31m" };
-  const reset = "\x1b[0m";
+  const { colors, reset } = doctorColors(Boolean(process.stdout.isTTY), process.env);
 
   for (const check of checks) {
     const icon = icons[check.status];

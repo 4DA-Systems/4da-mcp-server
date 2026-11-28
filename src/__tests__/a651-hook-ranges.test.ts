@@ -22,6 +22,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { installsIn, respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE, type LedgerEntry } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 let home: string;
 beforeEach(() => {
@@ -32,7 +34,7 @@ afterEach(() => rmSync(home, { recursive: true, force: true }));
 const NOW = Date.parse("2026-11-24T12:00:00Z");
 function ledger(entries: Array<Partial<LedgerEntry> & { package: string; version: string; verdict: string }>) {
   const t = new Date(NOW - 60_000).toISOString();
-  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ t, ecosystem: "npm", ...e })).join("\n") + "\n");
+  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", ...e })).join("\n") + "\n");
 }
 function decide(command: string): "allow" | "deny" {
   const out = respond({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: home, tool_input: { command } }, { FOURDA_MCP_HOME: home }, NOW);

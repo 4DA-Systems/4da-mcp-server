@@ -33,7 +33,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { stripTrailingCommas } from "./bun-lockfile.js";
-import { anySignatureChanged, signatureMap, type FileSignature } from "./file-signature.js";
+import { anySignatureChanged, fileSignature, signatureMap, type FileSignature } from "./file-signature.js";
 import { pushAll } from "../array-utils.js";
 import { exactVersion, MAX_LOCKFILE_LINE, parsePnpmKey, textLines } from "./js-lockfile-readers.js";
 import { readRuleFile } from "./text-file.js";
@@ -916,10 +916,18 @@ function within(dir: string, scope: string | null): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/** A file path compared as the file system does (Windows: case-insensitive). */
+const fileKey = (f: string): string => (process.platform === "win32" ? path.resolve(f).toLowerCase() : path.resolve(f));
+
 /** The first setting that applies to `dir` (null: only the user's, the system's, the environment's). */
 function settingFor(list: readonly ScopedSetting[], dir: string | null): PrivateSetting | null {
   const hit = list.find((s) => (dir === null ? s.scope === null : within(path.resolve(dir), s.scope)));
   return hit ? { url: hit.url, from: hit.from } : null;
+}
+
+/** Round 22 (S1): the first setting that applies to `dir`, with the folder of the file that holds it (null: user-level or environment). */
+function scopedSettingFor(list: readonly ScopedSetting[], dir: string): ScopedSetting | null {
+  return list.find((s) => within(path.resolve(dir), s.scope)) ?? null;
 }
 
 /** The environment the rules depend on, as one string. */
@@ -947,6 +955,10 @@ export function ancestorsOf(dir: string): string[] {
 /** The rules for one project: what its files, the user's files and the environment say is private. */
 export class PrivatePackageRules {
   private readonly npmScopes = new Map<string, string>();
+  /** Round 22 (S1): the folder whose file maps each scope, or null for the environment or a user-level file. */
+  private readonly npmScopeDirs = new Map<string, string | null>();
+  /** Round 23 (W3): which manager's configuration holds each npm scope rule (npm: an .npmrc or npm_config_*; yarn; bun; pnpm). */
+  private readonly npmScopeOf = new Map<string, "npm" | "yarn" | "bun" | "pnpm">();
   private readonly goPatterns: Array<{ key: string; value: string; from: string }> = [];
   private readonly listed: Array<{ ecosystem: string | null; pattern: string; re: NameMatcher; rePypi: NameMatcher; reCrates: NameMatcher }> = [];
   /** FOURDA_PUBLIC_MIRRORS: hosts the user declares mirror only the public registries; their packages are checked. */
@@ -1036,6 +1048,12 @@ export class PrivatePackageRules {
     const bunfigs = [...inDirs("bunfig.toml"), ...global([xdg ? path.join(xdg, ".bunfig.toml") : null, home ? path.join(home, ".bunfig.toml") : null])];
     // pnpm v10+ reads `registry` and `registries` from pnpm-workspace.yaml (pnpmWorkspaceRegistries).
     const pnpmWorkspaces = inDirs("pnpm-workspace.yaml");
+    // Round 23 (W2): a manager's own user-level file is user-level by what it is, even where the
+    // ancestor walk reaches it as a project folder's file (a project under the home folder).
+    const userLevel = new Set(
+      [...global([npmEnv.userconfig || (home ? path.join(home, ".npmrc") : null), ...npmGlobalConfigFiles(env)]), ...global([home ? path.join(home, yarnName) : null]), ...global([xdg ? path.join(xdg, ".bunfig.toml") : null, home ? path.join(home, ".bunfig.toml") : null])].map((f) => fileKey(f.file)),
+    );
+    const ruleDir = (file: string, scope: string | null): string | null => (userLevel.has(fileKey(file)) ? null : scope);
     const goFile = goEnvPath(env);
     const pipFiles = pipConfigFiles(env);
     // uv finds `uv.toml` and `pyproject.toml` in the project and the directories above it; pipenv the Pipfile.
@@ -1104,39 +1122,63 @@ export class PrivatePackageRules {
 
     // npm, yarn, bun.
     const npmDefaults: ScopedSetting[] = [];
-    for (const { scope, from } of npmEnv.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, from);
+    for (const { scope, from } of npmEnv.scopes) if (!this.npmScopes.has(scope)) {
+      this.npmScopes.set(scope, from);
+      this.npmScopeDirs.set(scope, null);
+      this.npmScopeOf.set(scope, "npm");
+    }
     if (npmEnv.registry) npmDefaults.push({ ...npmEnv.registry, scope: null });
     const seen = new Set<string>();
     for (const { file, scope } of npmrcs) {
       if (seen.has(file)) continue;
       seen.add(file);
       const rc = npmrcRead(read(file, "npm", scope));
-      for (const s of rc.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      for (const s of rc.scopes) if (!this.npmScopes.has(s)) {
+        this.npmScopes.set(s, file);
+        this.npmScopeDirs.set(s, ruleDir(file, scope));
+        this.npmScopeOf.set(s, "npm");
+      }
       if (rc.defaultRegistry && !isPublicNpmRegistry(rc.defaultRegistry)) npmDefaults.push({ url: rc.defaultRegistry, from: file, scope });
     }
     for (const { file, scope } of yarnrcs) {
       if (seen.has(file)) continue;
       seen.add(file);
       const text = read(file, "npm", scope);
-      for (const s of yarnrcPrivateScopes(text)) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      for (const s of yarnrcPrivateScopes(text)) if (!this.npmScopes.has(s)) {
+        this.npmScopes.set(s, file);
+        this.npmScopeDirs.set(s, ruleDir(file, scope));
+        this.npmScopeOf.set(s, "yarn");
+      }
       const server = yarnrcRegistry(text);
       if (server && !isPublicNpmRegistry(server)) npmDefaults.push({ url: server, from: file, scope });
     }
     const yarnEnv = yarnEnvConfig(env, (text) => parseFlow(text).value);
-    for (const { scope, from } of yarnEnv.scopes) if (!this.npmScopes.has(scope)) this.npmScopes.set(scope, from);
+    for (const { scope, from } of yarnEnv.scopes) if (!this.npmScopes.has(scope)) {
+      this.npmScopes.set(scope, from);
+      this.npmScopeDirs.set(scope, null);
+      this.npmScopeOf.set(scope, "yarn");
+    }
     if (yarnEnv.registry) npmDefaults.push({ ...yarnEnv.registry, scope: null });
     for (const { file, scope } of bunfigs) {
       if (seen.has(file)) continue;
       seen.add(file);
       const bunfig = bunfigRegistries(read(file, "npm", scope));
-      for (const s of bunfig.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      for (const s of bunfig.scopes) if (!this.npmScopes.has(s)) {
+        this.npmScopes.set(s, file);
+        this.npmScopeDirs.set(s, ruleDir(file, scope));
+        this.npmScopeOf.set(s, "bun");
+      }
       if (bunfig.registry && !isPublicNpmRegistry(bunfig.registry)) npmDefaults.push({ url: bunfig.registry, from: file, scope });
     }
     for (const { file, scope } of pnpmWorkspaces) {
       if (seen.has(file)) continue;
       seen.add(file);
       const workspace = pnpmWorkspaceRegistries(read(file, "npm", scope));
-      for (const s of workspace.scopes) if (!this.npmScopes.has(s)) this.npmScopes.set(s, file);
+      for (const s of workspace.scopes) if (!this.npmScopes.has(s)) {
+        this.npmScopes.set(s, file);
+        this.npmScopeDirs.set(s, ruleDir(file, scope));
+        this.npmScopeOf.set(s, "pnpm");
+      }
       if (workspace.registry && !isPublicNpmRegistry(workspace.registry)) npmDefaults.push({ url: workspace.registry, from: file, scope });
       // A registry setting this reader cannot follow fails closed: pnpm may fetch any name from a
       // registry it names, so npm under this folder is registry-private (pre-publish round 10, W10).
@@ -1216,6 +1258,48 @@ export class PrivatePackageRules {
    * repository text (a spec, a folder name) that can spell any rule's wording (round 3 of the hook
    * review, item 2).
    */
+  /**
+   * Round 22 (S1): why a name is private, for the check ledger (the privacy decision itself is not
+   * changed by this). "listed": FOURDA_PRIVATE_PACKAGES names it. "named": a rule that names this
+   * package or its scope (an npm scope mapped to a registry, a GOPRIVATE pattern), with the folder
+   * whose file holds it, or "environment" for an environment or user-level rule. "registry-wide":
+   * anything else, above all an ecosystem's default registry, index or proxy on a host this server
+   * does not know as public (every name is then private, public ones too), with that folder and host
+   * when one is known.
+   */
+  privateRuleKind(ecosystem: string, name: string, dirs: string[]): { rule: "listed" | "named" | "registry-wide"; dir: string | null; host: string | null; config?: string } {
+    if (this.listedCovers(ecosystem, name)) return { rule: "listed", dir: null, host: null };
+    if (ecosystem === "npm" && name.startsWith("@")) {
+      const scope = name.slice(0, name.indexOf("/") > 0 ? name.indexOf("/") : undefined).toLowerCase();
+      if (this.npmScopes.has(scope)) {
+        const d = this.npmScopeDirs.get(scope) ?? null;
+        return { rule: "named", dir: d === null ? "environment" : path.resolve(d), host: null, config: this.npmScopeOf.get(scope) ?? "npm" };
+      }
+    }
+    if (ecosystem === "Go" && this.goPatterns.some((g) => goPrivateMatch(g.value, name))) return { rule: "named", dir: "environment", host: null, config: "go" };
+    for (const d of dirs) {
+      const setting =
+        ecosystem === "npm"
+          ? scopedSettingFor(this.npmDefaults, d)
+          : ecosystem === "PyPI"
+            ? (scopedSettingFor(this.pythonIndexes, d) ?? this.pipIndex ?? this.pipExtraFrom)
+            : ecosystem === "crates.io"
+              ? this.cargoMirrorFor(d)
+              : ecosystem === "Go"
+                ? this.goProxy
+                : null;
+      if (!setting) continue;
+      const scoped = (setting as { scope?: string | null }).scope;
+      return { rule: "registry-wide", dir: typeof scoped === "string" ? path.resolve(scoped) : "environment", host: hostOf(setting.url) };
+    }
+    return { rule: "registry-wide", dir: null, host: null };
+  }
+
+  /** Q3: whether the user's own list (FOURDA_PRIVATE_PACKAGES) covers this name: private in every project. */
+  listedCovers(ecosystem: string, name: string): boolean {
+    return this.listed.some((l) => (l.ecosystem === null || l.ecosystem === ecosystem) && (ecosystem === "PyPI" ? l.rePypi.test(pep503(name)) : ecosystem === "crates.io" ? l.reCrates.test(normName("crates.io", name)) : l.re.test(name)));
+  }
+
   registryRuleCovers(ecosystem: string, name: string): boolean {
     for (const l of this.listed) {
       if (l.ecosystem !== null && l.ecosystem !== ecosystem) continue;
@@ -1409,24 +1493,29 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
   };
   for (const lock of ["package-lock.json", "npm-shrinkwrap.json"]) {
     const file = path.join(dir, lock);
+    // The lockfile reader's own parse of this file as it is now (rememberNpmLockLocations): the
+    // locations it kept, so the file is not read and parsed a second time (audit 2026-11-25, F-M1).
+    const kept = recallNpmLockLocations(file);
+    if (kept) {
+      for (let i = 0; i < kept.length; i++) {
+        const [name, version, location] = kept[i];
+        take(file, name, version, location);
+        if ((i & STEP_MASK) === STEP_MASK) yield;
+      }
+      continue;
+    }
     const text = textOf(file);
     if (text === null) continue;
+    let doc: NpmLockDoc;
     try {
-      const doc = JSON.parse(text) as { packages?: Record<string, { name?: string; version?: string; resolved?: string }>; dependencies?: Record<string, { version?: string; resolved?: string }> };
-      for (const [key, entry] of Object.entries(doc.packages ?? {})) {
-        const at = key.lastIndexOf("node_modules/");
-        const name = entry.name ?? (at >= 0 ? key.slice(at + "node_modules/".length) : "");
-        if (name && typeof entry.resolved === "string") take(file, name, entry.version ?? null, entry.resolved);
-      }
-      const walk = (deps: Record<string, { version?: string; resolved?: string; dependencies?: unknown }> | undefined) => {
-        for (const [name, entry] of Object.entries(deps ?? {})) {
-          if (typeof entry?.resolved === "string") take(file, name, entry.version ?? null, entry.resolved);
-          // v1 writes a tarball dependency's URL as its version: that URL is where it is installed from (any version of the name).
-          else if (typeof entry?.version === "string" && /^https?:\/\//i.test(entry.version)) take(file, name, null, entry.version);
-          walk(entry?.dependencies as typeof deps);
-        }
-      };
-      if (!doc.packages) walk(doc.dependencies);
+      doc = JSON.parse(text) as NpmLockDoc;
+    } catch {
+      notJson(file, text, RESOLVED_VALUE, RESOLVED_KEY);
+      continue;
+    }
+    yield;
+    try {
+      yield* npmLockLocationsSteps(doc, (name, version, location) => take(file, name, version, location));
     } catch {
       notJson(file, text, RESOLVED_VALUE, RESOLVED_KEY);
     }
@@ -1456,6 +1545,99 @@ export function* npmLockPrivateSourcesSteps(dir: string, mirrorHosts: ReadonlySe
   const pnpmText = textOf(pnpm);
   if (pnpmText !== null && !(yield* pnpmLockSources(pnpmText, (name, version, location) => take(pnpm, name, version, location)))) out.push(unreadEntry(pnpm, LINE_TOO_LONG));
   return out;
+}
+
+type NpmLockDoc = {
+  packages?: Record<string, { name?: string; version?: string; resolved?: string }>;
+  dependencies?: Record<string, { version?: string; resolved?: string; dependencies?: unknown }>;
+};
+
+/**
+ * Every location a parsed package-lock.json / npm-shrinkwrap.json names an install from, with the
+ * package and version: `resolved` of each `packages` entry (v2, v3), else of each v1 `dependencies`
+ * entry, nested ones included (v1 writes a tarball dependency's URL as its version: that URL is
+ * where it is installed from, any version of the name). Pauses every STEP_MASK + 1 entries. Throws
+ * on a document of the wrong shape, as the private-source pass always has (it is then not JSON to it).
+ */
+export function* npmLockLocationsSteps(doc: unknown, visit: (name: string, version: string | null, location: string) => void): Steps<void> {
+  const lock = doc as NpmLockDoc;
+  let n = 0;
+  for (const [key, entry] of Object.entries(lock.packages ?? {})) {
+    const at = key.lastIndexOf("node_modules/");
+    const name = entry.name ?? (at >= 0 ? key.slice(at + "node_modules/".length) : "");
+    if (name && typeof entry.resolved === "string") visit(name, entry.version ?? null, entry.resolved);
+    if ((++n & STEP_MASK) === 0) yield;
+  }
+  if (lock.packages) return;
+  function* walk(deps: NpmLockDoc["dependencies"]): Steps<void> {
+    for (const [name, entry] of Object.entries(deps ?? {})) {
+      if (typeof entry?.resolved === "string") visit(name, entry.version ?? null, entry.resolved);
+      else if (typeof entry?.version === "string" && /^https?:\/\//i.test(entry.version)) visit(name, null, entry.version);
+      if ((++n & STEP_MASK) === 0) yield;
+      yield* walk(entry?.dependencies as NpmLockDoc["dependencies"]);
+    }
+  }
+  yield* walk(lock.dependencies);
+}
+
+/** A location that is private for some set of public mirrors: http(s), on a host that is neither the public registry nor a code host. */
+function npmLocationMaybePrivate(location: string): boolean {
+  if (!/^https?:\/\//i.test(location)) return false;
+  const host = hostOf(location);
+  return !!host && !isPublicNpmHost(host) && !CODE_HOSTS.test(host);
+}
+
+/**
+ * The locations the lockfile reader kept from its own parse of a package-lock.json, by file, with
+ * the stat signature the file had when it was read (taken before the read: a file changed during it
+ * does not match afterwards, and is read again). Only locations that can be private under some
+ * mirror set are kept (none, for a project installed from the public registry), so this costs no
+ * memory the answer itself does not hold.
+ */
+const npmLockLocationMemo = new Map<string, { signature: FileSignature; locations: Array<[string, string | null, string]> }>();
+const NPM_LOCATION_MEMO_FILES = 512;
+/**
+ * The most locations kept for one file. A lockfile that installs more from hosts that may be
+ * private (a company registry for everything) is not kept, and the pass reads it again, pausing as
+ * it goes: kept for 20 such files of 185,000 entries, the locations would outweigh the parse they save.
+ */
+const MAX_KEPT_LOCATIONS = 20_000;
+
+/** Steps for the npm lockfile reader: keep what the private-source pass needs from `doc`, read from `file` at `signature`. */
+export function* rememberNpmLockLocationsSteps(file: string, signature: FileSignature, doc: unknown): Steps<void> {
+  const key = path.resolve(file);
+  npmLockLocationMemo.delete(key);
+  const locations: Array<[string, string | null, string]> = [];
+  let tooMany = false;
+  try {
+    yield* npmLockLocationsSteps(doc, (name, version, location) => {
+      if (tooMany || !npmLocationMaybePrivate(location)) return;
+      if (locations.length >= MAX_KEPT_LOCATIONS) {
+        tooMany = true;
+        locations.length = 0;
+      } else locations.push([name, version, location]);
+    });
+  } catch {
+    // A shape the pass reads as not JSON: nothing is kept, so it reads the file itself and says so.
+    return;
+  }
+  if (tooMany) return;
+  npmLockLocationMemo.set(key, { signature, locations });
+  if (npmLockLocationMemo.size > NPM_LOCATION_MEMO_FILES) npmLockLocationMemo.delete(npmLockLocationMemo.keys().next().value as string);
+}
+
+/** The locations kept for `file` as it is now, taken: the next pass over it (a rule change) reads the file. */
+function recallNpmLockLocations(file: string): Array<[string, string | null, string]> | null {
+  const key = path.resolve(file);
+  const kept = npmLockLocationMemo.get(key);
+  if (!kept) return null;
+  npmLockLocationMemo.delete(key);
+  return kept.signature === fileSignature(file) ? kept.locations : null;
+}
+
+/** Tests only: forget the kept locations. */
+export function _resetNpmLockLocations(): void {
+  npmLockLocationMemo.clear();
 }
 
 const NOT_JSON = "is not valid JSON";

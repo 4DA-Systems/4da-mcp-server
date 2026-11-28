@@ -21,8 +21,12 @@ import { detectAllNewPackages } from "../tools/briefing-new-packages.js";
 import { readTaskVersions } from "../tools/briefing-requested-versions.js";
 import { checkableSpec } from "../tools/briefing-names.js";
 import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
+import { executeDependencyCheck } from "../tools/dependency-check.js";
 import type { FourDADatabase } from "../db.js";
 import { advisory, dep, installFetchStub, memoryDb, readyScan, stubIntel, type Stub } from "./helpers/briefing-stub.js";
+import { waitingWords, nearMissHint } from "./helpers/a1127-task-packages.js";
+
+/** The dependency_check call an agent makes for the unverified words (fourth blind check: the answer itself holds no arguments). */
 
 const NPM = [dep("lodash", "4.17.20")];
 const RUST = [dep("tokio", "1.40.0", "crates.io")];
@@ -95,7 +99,7 @@ afterEach(() => {
   else process.env.FOURDA_OFFLINE = priorOffline;
 });
 
-const brief = (task: string, deps: ResolvedDependency[] = NPM) => executeWhatShouldIKnow(db, { task }, stubIntel(deps, {}, readyScan()));
+const brief = (task: string, deps: ResolvedDependency[] = NPM) => executeWhatShouldIKnow(db, { packages: [], task }, stubIntel(deps, {}, readyScan()));
 /** The OSV.dev requests that name `pkg`. */
 const osvAsks = (pkg: string) => stub.asked.filter((u) => u.startsWith("https://api.osv.dev/v1/query") && u.includes(`"name":"${pkg}"`));
 
@@ -152,14 +156,22 @@ describe("2. a Cargo table entry is one package in one ecosystem", () => {
   });
 
   it("the briefing: one row, the same verdict in new_packages and requested_versions (they were avoid and unknown)", async () => {
+    // Final design of the 2026-11-25 fixes: smallvec is on no bundled list, so the briefing hands it back once,
+    // as crates.io's, at the constraint the entry writes; dependency_check judges it there.
     const r = await brief(`add ${ENTRY}`, NPM_AND_RUST);
-    expect(r.new_packages).toMatchObject([{ name: "smallvec", ecosystem: "crates.io", verdict: "avoid" }]);
-    expect(r.requested_versions).toMatchObject([{ name: "smallvec", ecosystem: "crates.io", verdict: "avoid" }]);
-    expect(r.summary).toContain("Task adds smallvec >=1.6.0,<1.6.1 (avoid)");
-    expect(r.summary).not.toContain("Task writes smallvec");
-    expect(r.summary).not.toContain("unknown");
+    expect(r.new_packages).toBeUndefined();
+    expect(waitingWords(r)).toMatchObject([{ word: "smallvec", read_as: "crates.io" }]);
+    // Round 7, C7: the entry carries no version; the agent asks dependency_check at the constraint the entry writes.
+    expect(JSON.stringify(r.task_packages.to_confirm)).not.toContain(">=1.6.0");
+    const check = (await executeDependencyCheck(null, { items: [{ ecosystem: "crates.io", package: "smallvec", to: ">=1.6.0, <1.6.1" }] }, stubIntel(NPM_AND_RUST, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
+    expect(check.results).toMatchObject([{ verdict: "avoid" }]);
     expect(stub.asked.some((u) => u === "https://registry.npmjs.org/smallvec")).toBe(false);
   });
+});
+
+/** dependency_check items for every waiting entry, at latest (round 7, C7: entries carry no version). */
+const follow = (r: unknown) => ({
+  items: (waitingWords(r) ?? []).map((w) => ({ ecosystem: w.read_as as "npm", package: w.word, to: "latest" })),
 });
 
 describe("3. name-version pairs with no verb are read, and each version stays with its own name", () => {
@@ -187,7 +199,8 @@ describe("3. name-version pairs with no verb are read, and each version stays wi
     expect(requested("ship acme-billing 2.3.1, acme-auth 1.4.0")).toEqual([]);
     const r = await brief("ship acme-billing 2.3.1, acme-auth 1.4.0");
     expect(stub.asked.some((u) => u.includes("acme-"))).toBe(false);
-    expect(r.delegation_assessment.level).toBe("review_needed");
+    // Round 7, C10: a version in prose tied to no package holds nothing; the level follows from the rest.
+    expect(r.delegation_assessment.reason).not.toMatch(/could not tie/);
   });
 
   it("an English word before `to` is still no package", () => {
@@ -239,43 +252,44 @@ describe("4. a popular name that leads an add list is a package; English after t
   });
 });
 
-describe("5. a loose name is looked up once", () => {
-  it("use blueprints: one OSV.dev request for blueprints, and still nothing to report", async () => {
+describe("5. a word in prose is looked up only when it is a listed name (final design of the 2026-11-25 fixes)", () => {
+  it("use blueprints: nothing asked, handed back for dependency_check", async () => {
     const r = await brief("use blueprints");
-    expect(osvAsks("blueprints")).toHaveLength(1);
-    expect(stub.asked.some((u) => u.includes("/v1/vulns/GHSA-blueprints-old"))).toBe(false);
+    expect(osvAsks("blueprints")).toHaveLength(0);
     expect(r.new_packages).toBeUndefined();
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(waitingWords(r)).toEqual([{ word: "blueprints", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
-  it("use pinguinlib: a malware name after `use` still stands, from one lookup", async () => {
+  it("use pinguinlib: a name on no list is not asked by the briefing; dependency_check on the unverified word finds the malware", async () => {
     stub.npm.pinguinlib = { latest: "0.0.1-security", versions: ["0.0.1-security"] };
     stub.osv.push(advisory("MAL-2026-pinguinlib", "pinguinlib", "CRITICAL", {}, "npm", true));
     const r = await brief("use pinguinlib");
-    expect(r.new_packages).toMatchObject([{ name: "pinguinlib", malicious: true, verdict: "avoid" }]);
+    expect(osvAsks("pinguinlib")).toHaveLength(0);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(waitingWords(r)).toEqual([{ word: "pinguinlib", read_as: "npm" }]);
+    const cmd = await brief("npm install pinguinlib");
+    const check = (await executeDependencyCheck(null, follow(cmd), stubIntel(NPM, {}, readyScan()) as never)) as { results: Array<{ verdict: string }> };
+    expect(check.results).toMatchObject([{ verdict: "avoid" }]);
+  });
+
+  it("use crossenv: a listed malicious name is looked up and human_only", async () => {
+    const r = await brief("use crossenv");
+    expect(r.new_packages?.find((p) => p.name === "crossenv")).toMatchObject({ malicious: true, verdict: "avoid" });
     expect(r.delegation_assessment.level).toBe("human_only");
-    expect(osvAsks("pinguinlib")).toHaveLength(1);
   });
 
-  // Near-misses of popular names are never loose: they get the full check, name_check included.
-  it.each(["use crossenv", "use lodahs"])("%s: still human_only", async (task) => {
-    const name = task.split(" ")[1];
-    const r = await brief(task);
-    expect(r.new_packages?.find((p) => p.name === name)).toMatchObject({ malicious: true, verdict: "avoid" });
-    expect(r.delegation_assessment.level).toBe("human_only");
+  it("use lodahs: a near-miss of lodash, noted offline, never asked", async () => {
+    const r = await brief("use lodahs");
+    expect(waitingWords(r)).toMatchObject([{ word: "lodahs", hint: nearMissHint("lodash") }]);
+    expect(osvAsks("lodahs")).toHaveLength(0);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 
-  it("a loose name whose advisories could not be read is unknown, never clean", async () => {
-    const real = globalThis.fetch;
-    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => (String(input).startsWith("https://api.osv.dev/") ? new Response("busy", { status: 503 }) : real(input, init)));
-    const r = await brief("use blueprints");
-    expect(r.new_packages).toMatchObject([{ name: "blueprints", verdict: "unknown" }]);
-    expect(r.delegation_assessment.level).toBe("review_needed");
-  });
-
-  it("a name nobody publishes after `use` is prose (use memoizers)", async () => {
+  it("use memoizers: handed back, never dropped as prose", async () => {
     const r = await brief("use memoizers");
     expect(r.new_packages).toBeUndefined();
-    expect(r.delegation_assessment.level).toBe("safe_to_delegate");
+    expect(waitingWords(r)).toEqual([{ word: "memoizers", read_as: "npm" }]);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
   });
 });

@@ -33,14 +33,18 @@
  * connection/request, so 2025-era hosts (classic `initialize` handshake) and
  * 2026-07-28 hosts (stateless `server/discover`) are both supported.
  */
+// First, before any other module runs: below Node.js 22 the process stops here with one line (node-gate.ts).
+import "./node-gate.js";
+import { screenJsonRpc, screenText, screenToolResult, screenWireText } from "./output-screen.js";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { StdioGate } from "./stdio-gate.js";
+import { BRIEFING_FAILED } from "./tools/briefing-confirm.js";
 import type { Server } from "@modelcontextprotocol/server";
 import { FourDAServer, ownHandler } from "./mcp-server.js";
 import { parseCliArgs } from "./cli-args.js";
 import { installProcessGuards } from "./process-guards.js";
 import { warnUnreadableEnvFlags } from "./env-flags.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -73,6 +77,9 @@ import { checkBuildStaleness } from "./build-staleness.js";
 import { configureProxy } from "./proxy.js";
 import { shutdown } from "./shutdown.js";
 import { closeServerCacheDb } from "./live/cache.js";
+import { lockfileCandidates } from "./live/lockfile-parsers.js";
+import { mapEcosystem } from "./live/version-resolver.js";
+import { callBudgetMs, secondsText, settleWithin } from "./call-budget.js";
 import { ledgerWritesSettled, startLedger } from "./check-ledger.js";
 import { systemDirectoryProblem } from "./tools/project-scope.js";
 import { MAX_DEPTH, MAX_PROJECTS } from "./project-tree.js";
@@ -202,8 +209,35 @@ async function resolveInSteps(step: { db: FourDADatabase; live: LiveIntelligence
   const cwd = resolveProjectDir();
   const tree = projectTreeFor(cwd);
   if (tree.entries.length === 0) return { cwd, tree, resolved: false };
-  const resolved = await step.live.initFromProjectTreeYielding(cwd, treeResolutionGroups(tree.entries), tree.discovery);
+  const groups = treeResolutionGroups(tree.entries);
+  loading = { projects: groups.length, bytes: lockfileBytes(groups) };
+  const resolved = await step.live.initFromProjectTreeYielding(cwd, groups, tree.discovery);
   return { cwd, tree, resolved };
+}
+
+/** What the init in steps is reading, for the answer of a call whose budget ended first. */
+let loading: { projects: number; bytes: number } | null = null;
+
+/** The size of the lockfiles the groups resolve from (stat calls only). */
+function lockfileBytes(groups: ReturnType<typeof treeResolutionGroups>): number {
+  let bytes = 0;
+  for (const file of new Set(groups.flatMap((g) => lockfileCandidates(g.dir, mapEcosystem(g.language))))) {
+    try {
+      bytes += statSync(file).size;
+    } catch {
+      // Not there.
+    }
+  }
+  return bytes;
+}
+
+/** A call whose budget ended while the project's lockfiles were still being read (the init goes on). */
+function stillReadingAnswer(): { content: Array<{ type: "text"; text: string }>; isError: true } {
+  const what = loading ? ` (${Math.max(1, Math.round(loading.bytes / 1048576)).toLocaleString("en-US")} MB in ${loading.projects} project${loading.projects === 1 ? "" : "s"})` : "";
+  const error =
+    `NOT CHECKED: this project's lockfiles${what} were still being read when this call's ${secondsText(callBudgetMs())} ran out, ` +
+    "so nothing was checked and nothing was stored. The server goes on reading them and answers pings meanwhile: call again in a minute for the full answer.";
+  return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
 }
 
 function finishInit(step: { db: FourDADatabase; live: LiveIntelligence }, prepared: PreparedTree | null = null): void {
@@ -420,30 +454,40 @@ export function buildServer(): Server {
     // a tool result: it used to come back as `isError` content like a tool
     // that ran and failed.
     const entry = toolEntry(name);
-    if (!entry) throw unknownToolError(name);
+    // Round 14, X1: the name is the caller's; an error names it by shape where it has a credential's.
+    if (!entry) throw unknownToolError(screenText(name));
 
     // Arguments are checked against the published schema before anything
     // runs, so a wrong type or a misspelled parameter comes back as a
     // correctable error rather than a Node exception or a silent no-op.
     const problem = validateToolArgs(name, entry.definition.inputSchema, (args ?? {}) as Record<string, unknown>);
     if (problem) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({ error: problem }) }],
+      return screenToolResult(name, {
+        content: [{ type: "text" as const, text: JSON.stringify({ error: problem }) }],
         isError: true,
-      };
+      });
     }
 
     try {
       // The first call's init gives the event loop a turn before and inside it (prepareDatabase),
       // so a ping sent with it is answered first (pre-publish round 10, W9). An error it meets is
       // met again, and answered, by databaseFor.
-      await prepareDatabase().catch(() => undefined);
+      // An init still running when the call's budget ends (20 lockfiles of 62 MB took over a minute,
+      // audit 2026-11-25, F-M1) is not finished synchronously here: the call says so plainly and the
+      // init goes on, so a later call gets the whole answer.
+      const prepared = (async () => {
+        await prepareDatabase().catch(() => undefined);
+        return true;
+      })();
+      const ready = await settleWithin(prepared, startedAt + callBudgetMs() - Date.now(), () => false);
+      if (!ready) return stillReadingAnswer();
       const { database, note: unavailableNote } = databaseFor(name);
       // A changed .npmrc, .yarnrc.yml, go env file or environment re-reads which names are private (stat calls only).
       liveIntel?.refreshPrivateRules();
       const result = await dispatchTool(name, database, args as Record<string, unknown> | undefined, { startedAt });
       const note = database?.takeCreationNote() ?? unavailableNote;
-      return note ? withDatabaseNote(result, note) : result;
+      // Round 14, X1: every result leaves through the output screen (output-screen.ts).
+      return screenToolResult(name, note ? withDatabaseNote(result, note) : result);
     } catch (error) {
       // A database that turns out damaged mid-session (SQLITE_CORRUPT on a
       // page the open did not touch) gets the same guidance as one that
@@ -454,16 +498,17 @@ export function buildServer(): Server {
           : error instanceof Error
             ? error.message
             : String(error);
-      return {
+      return screenToolResult(name, {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             // One shape for every tool error: `{"error": "..."}`, compact, as the argument check writes it.
-            text: JSON.stringify({ error: errorMessage }),
+            // Round 18b: a briefing that failed is said to be no assessment, never read as a level.
+            text: JSON.stringify({ error: name === "what_should_i_know" ? `${BRIEFING_FAILED} ${errorMessage}` : errorMessage }),
           },
         ],
         isError: true,
-      };
+      });
     }
   }));
 
@@ -608,6 +653,7 @@ async function main() {
 
   if (validation.valid && validation.standalone) {
     // The own store's schema is completed by the first open, whatever a killed or concurrent first start left.
+    if (validation.note) console.error(`[4DA] ${validation.note}`);
     console.error(`[4DA] Standalone mode: the server's own database is ${validation.path}.`);
   } else if (validation.valid) {
     console.error(`[4DA] The 4DA app's database: ${validation.path} (${validation.tables?.length ?? 0} tables, read-only).`);
@@ -629,11 +675,12 @@ async function main() {
   // `server/discover` opening gets the stateless modern protocol.
   // Parse errors and requests before initialize are answered here, per JSON-RPC and MCP (stdio-gate.ts).
   // A JSON-RPC batch is served on a 2025-03-26 connection and answered as one array (stdio-gate.ts).
+  // Round 15, A2: every JSON-RPC message the server writes (any method's result or error) passes the output screen.
   const gate = new StdioGate((message) => {
-    process.stdout.write(`${JSON.stringify(message)}\n`);
+    process.stdout.write(`${JSON.stringify(screenJsonRpc(message))}\n`);
   });
   const output = gate.output((text) => {
-    process.stdout.write(text);
+    process.stdout.write(screenWireText(text));
   });
   output.on("error", () => undefined);
   process.stdin.pipe(gate);

@@ -300,6 +300,7 @@ function assembleAlignment(
 export function executeCheckDecisionAlignment(
   db: FourDADatabase,
   params: CheckDecisionAlignmentParams,
+  options: { lexicalOnly?: boolean } = {},
 ): AlignmentResult | Promise<AlignmentResult> {
   const rawDb = db.getRawDb();
 
@@ -321,7 +322,8 @@ export function executeCheckDecisionAlignment(
   }
 
   const query = [params.technology, params.pattern].filter(Boolean).join(" ");
-  const config = getEmbeddingConfig();
+  // lexicalOnly: what_should_i_know's decision-conflict check, which sends no task text for embedding (C1).
+  const config = options.lexicalOnly ? null : getEmbeddingConfig();
 
   // No provider -> synchronous lexical retrieval (classic behaviour).
   if (!config) {

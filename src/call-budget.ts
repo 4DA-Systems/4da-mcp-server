@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * One time budget per tool call.
  *
  * Every lookup had its own timeout (15 s for OSV, up to 30 s for a registry
@@ -16,9 +18,12 @@
  *   dependency_health, upgrade_planner) size their own waits from what is left
  *   (`withinCallBudget`), and answer with what they have: the parts that did
  *   not finish are NOT CHECKED, as they are for any OSV outage, never clean.
- * - Whatever is still running when the budget ends is cut off by the
- *   dispatcher (`raceCallBudget`), which answers in the tool's place: every
- *   item `unknown`, or NOT CHECKED, with the budget that was actually spent.
+ * - When the budget ends while a call is waiting on a lookup, the dispatcher
+ *   (`raceCallBudget`) answers in the tool's place: every item `unknown`, or
+ *   NOT CHECKED, with the budget that was actually spent. It cannot cut a
+ *   synchronous step: the readers check the deadline themselves between stages
+ *   and between lines (briefing-snippets.ts, briefing-command-check.ts), and their
+ *   cost is bounded by measurement (the CPU tests), not by the dispatcher.
  *
  * Nothing is aborted. The lookups a late call started run on to their own
  * timeouts and fill the caches, so the same call made again answers from
@@ -138,6 +143,64 @@ export function runWithCallBudget<T>(startedAt: number, work: () => Promise<T>):
  * facts a call reads as one snapshot, such as whether a lockfile changed: a scan stat-ed the same
  * lockfile thousands of times, a sixth of a fully cached scan (blind audit round 6).
  */
+/**
+ * Round 10, G4: the per-word scans of one call (the near-miss check) are bounded. A call runs at most
+ * WORD_SCAN_CAP of them on distinct words not seen before, and none once its synchronous budget is spent
+ * (WORD_SCAN_RESERVE_MS before the deadline). Past either, the scan is not run and the call is marked: the briefing
+ * then says which bound it reached ("split the task") and holds review_needed. Without that sentence nothing more is
+ * promised: the reading of the task stays best effort. Outside a call: no bound.
+ */
+export const WORD_SCAN_CAP = 4_000;
+const WORD_SCAN_RESERVE_MS = 4_000;
+const scans = new WeakMap<object, { n: number; cut: "cap" | "snippets" | "deadline" | null; words?: Set<string> }>();
+export function mayScanWord(word?: string): boolean {
+  const budget = current.getStore();
+  if (!budget) return true;
+  let s = scans.get(budget);
+  if (!s) scans.set(budget, (s = { n: 0, cut: null }));
+  // Round 15 (A2 note): the cap counts the call's own distinct words, whatever earlier calls left in a memo.
+  if (word !== undefined) {
+    const seen = (s.words ??= new Set<string>());
+    if (seen.has(word)) return !s.cut;
+    if (!s.cut && seen.size < WORD_SCAN_CAP) seen.add(word);
+  }
+  if (s.cut) return false;
+  if (s.n >= WORD_SCAN_CAP) s.cut = "cap";
+  else if (budget.deadline - Date.now() < WORD_SCAN_RESERVE_MS) s.cut = "deadline";
+  if (s.cut) return false;
+  s.n++;
+  return true;
+}
+/**
+ * Round 11, P4: the task readers (snippets, commands) mark the call the same way: past their own cap on the number
+ * of snippets read (noteReadCut("snippets")), or when the synchronous budget is spent (readingStopped, checked in every
+ * reader's outer loop). Outside a call neither ever stops anything.
+ */
+export function noteReadCut(kind: "cap" | "snippets" | "deadline"): void {
+  const budget = current.getStore();
+  if (!budget) return;
+  let s = scans.get(budget);
+  if (!s) scans.set(budget, (s = { n: 0, cut: null }));
+  s.cut ??= kind;
+}
+export function readingStopped(): boolean {
+  const budget = current.getStore();
+  if (!budget) return false;
+  const s = scans.get(budget);
+  if (s?.cut) return true;
+  if (budget.deadline - Date.now() < WORD_SCAN_RESERVE_MS) {
+    noteReadCut("deadline");
+    return true;
+  }
+  return false;
+}
+
+/** Why the running call stopped scanning words or reading the task (mayScanWord, noteReadCut), or null. */
+export function wordScanCut(): "cap" | "snippets" | "deadline" | null {
+  const budget = current.getStore();
+  return budget ? (scans.get(budget)?.cut ?? null) : null;
+}
+
 export function callMemo<T>(key: string, compute: () => T): T {
   const memo = current.getStore()?.memo;
   if (!memo) return compute();

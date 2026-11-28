@@ -41,7 +41,15 @@ describe("the gate on contradicted claims", () => {
 
   it("thresholds.json holds both limits, at what the 6.5.0 code measured over the 15 projects", () => {
     const thresholds = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "bench", "plan-exec", "thresholds.json"), "utf8"));
-    expect(thresholds).toMatchObject({ max_planned_but_remained: 24, max_new_vulnerable_copies: 26, max_lowering_steps: 1, max_failed_steps: 0 });
+    // Since the corpus grew to 23 (2026-11-26) the 15 are held as a group, at the same numbers: 0.77,
+    // one lowering, 0 failed, and 24 + 26 = 50 copies, recounted as 28 / 22 (a copy that lands below
+    // its row's target is planned but remained, not new), with the sum held at 50 on its own.
+    const original = thresholds.groups.original;
+    expect(original.ids).toHaveLength(15);
+    expect(original).toMatchObject({ min_net_cleared_ratio: 0.77, max_planned_but_remained: 28, max_new_vulnerable_copies: 22, max_planned_and_new_copies: 50, max_lowering_steps: 1, max_failed_steps: 0 });
+    expect(original.recount).toMatch(/is a recount, not a loosening/);
+    expect(original.recount).toMatch(/http-server @babel\/traverse .*uptime-kuma minimatch .*h3 minimatch/);
+    expect(thresholds).toMatchObject({ max_failed_steps: 0 });
     expect(thresholds.about).toMatch(/never raise them to pass/);
   });
 });

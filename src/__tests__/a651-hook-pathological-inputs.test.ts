@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { respond } from "../../hooks/manifest-edit.mjs";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 const LIMIT_MS = 500;
@@ -28,7 +30,7 @@ const BIG = 60_000;
 // Made when the table is built (the table writes the manifests the Write cases name).
 const home = mkdtempSync(join(tmpdir(), "a651-patho-home-"));
 const dir = mkdtempSync(join(tmpdir(), "a651-patho-proj-"));
-writeFileSync(join(home, "check-ledger.jsonl"), JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "zz", version: "1.0.0", verdict: "proceed" }) + "\n");
+writeFileSync(join(home, "check-ledger.jsonl"), JSON.stringify({ sv: "6.6.0", t: new Date().toISOString(), ecosystem: "npm", package: "zz", version: "1.0.0", verdict: "proceed" }) + "\n");
 afterAll(() => {
   rmSync(home, { recursive: true, force: true });
   rmSync(dir, { recursive: true, force: true });
@@ -159,9 +161,9 @@ function expectWithin(r: Run, limit: number): void {
 describe("a call that could not be read in time is held, never let through", () => {
   it("over the read budget, an install command or a manifest edit is denied as not read", () => {
     const out = respond(bash("npm i left-pad"), { FOURDA_MCP_HOME: home }, Date.now(), -1);
-    expect(out).toContain("could not be read (reading it took over 2 s)");
+    expect(out).toContain("could not be read (reading it did not finish inside the hook's time budget)");
     const edit = respond(write("package.json", '{"dependencies":{}}'), { FOURDA_MCP_HOME: home }, Date.now(), -1);
-    expect(edit).toContain("could not be read (reading it took over 2 s)");
+    expect(edit).toContain("could not be read (reading it did not finish inside the hook's time budget)");
   });
 
   it("a command that names no package manager is not held for being slow", () => {
@@ -169,7 +171,11 @@ describe("a call that could not be read in time is held, never let through", () 
   });
 
   it("within the budget nothing changes", () => {
-    expect(respond(bash("npm i left-pad"), { FOURDA_MCP_HOME: home }, Date.now())).toBe("");
+    // Within the budget it is read (since wave 2 a name alone is the request "latest", held for its verdict), never held as not read.
+    // Round 17 (L1 c): in a folder that is not inside a workspace (this file's project holds a pnpm-workspace.yaml).
+    const plain = mkdtempSync(join(tmpdir(), "a651-plain-"));
+    expect(respond({ ...bash("npm i left-pad"), cwd: plain }, { FOURDA_MCP_HOME: home }, Date.now())).not.toContain("could not be read");
+    rmSync(plain, { recursive: true, force: true });
   });
 });
 

@@ -66,7 +66,7 @@ function read(file: string): string | null {
 
 /** `[[package]]` tables, each with every sub-table that follows it. */
 function packageBlocks(content: string): string[] {
-  return content.split(/^\[\[package\]\]\s*$/m).slice(1);
+  return content.split(/^\[\[package\]\][ \t\r]*$/m).slice(1);
 }
 
 function headField(block: string, key: string): string | null {
@@ -122,7 +122,7 @@ export function pythonSpecAdmits(spec: string, version: string): boolean | null 
  */
 export function parsePep508(requirement: string): { name: string; spec: string; extra: boolean; marker: boolean } | null {
   const [head, marker = ""] = requirement.split(";");
-  const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(head);
+  const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*(.*)$/.exec(head);
   if (!m) return null;
   if (m[2].trim().startsWith("@")) return null; // a direct URL reference: no specifier to read
   const spec = m[2].trim().replace(/^\(\s*/, "").replace(/\s*\)$/, "").replace(/\s+/g, "");
@@ -154,7 +154,7 @@ function poetryParents(content: string, name: string): PythonParent[] {
     const parent = headField(block, "name");
     const version = headField(block, "version");
     if (!parent || !version) continue;
-    const table = /^\[package\.dependencies\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1];
+    const table = /^\[package\.dependencies\][ \t\r]*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(block)?.[1];
     if (!table) continue;
     // One entry per key: `x = ">=1"`, `x = {version = ">=1", markers = "..."}`, or an array of those (possibly over lines).
     const entries = table.split(/^(?=[A-Za-z0-9"'][^=\n]*=)/m);
@@ -230,7 +230,7 @@ export function uvManifestNames(content: string): Set<string> {
   const rest = content.slice(at).replace(/^\[manifest\][ \t]*\r?\n/, "");
   const end = rest.search(/^\[/m);
   const table = end < 0 ? rest : rest.slice(0, end);
-  for (const list of table.matchAll(/^(?:constraints|overrides)\s*=\s*\[([\s\S]*?)\]\s*$/gm)) {
+  for (const list of table.matchAll(/^(?:constraints|overrides)\s*=\s*\[([\s\S]*?)\][ \t\r]*$/gm)) {
     for (const n of list[1].matchAll(/\bname\s*=\s*"([^"]+)"/g)) out.add(normalizePythonName(n[1]));
   }
   return out;

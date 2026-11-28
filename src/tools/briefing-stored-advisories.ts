@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * Advisory-database rows in the 4DA feed about a package a task touches.
  *
  * Only the feed's advisory sources count (`cve`, `osv`). A row is about a package only when the
@@ -53,7 +55,7 @@ function statedSubjects(content: string | null): Subject[] {
   const out: Subject[] = [];
   const first = /^(\S+) \(([^)\n]+)\)\s*\n/.exec(text);
   if (first) out.push({ name: first[1], ecosystem: first[2] });
-  for (const m of text.matchAll(/^Affected: (\S+) \(([^)\n]+)\)\s*$/gm)) out.push({ name: m[1], ecosystem: m[2] });
+  for (const m of text.matchAll(/^Affected: (\S+) \(([^)\n]+)\)[ \t\r]*$/gm)) out.push({ name: m[1], ecosystem: m[2] });
   return out;
 }
 

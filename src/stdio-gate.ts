@@ -34,6 +34,20 @@ import { StringDecoder } from "node:string_decoder";
 import { Transform, Writable, type TransformCallback } from "node:stream";
 import { pushAll } from "./array-utils.js";
 import { callBudgetMs } from "./call-budget.js";
+import { hasCredentialShape } from "./output-screen.js";
+
+/**
+ * Round 17, C5(a): a request whose id is a string of a credential's shape is not run. Its id cannot be echoed (no
+ * response carries a credential shape, THE CONTRACT 4), so it is answered with id null and this message, on both
+ * transports (stdio here, HTTP in http-transport.ts readBody).
+ */
+export const CREDENTIAL_ID_REFUSED = "Invalid Request: the request id has a credential's shape, so it is not echoed and the request was not run; send it again with another id.";
+/** The answer to a request whose id has a credential's shape, or null. */
+export function credentialIdRefusal(message: unknown): Record<string, unknown> | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) return null;
+  const id = (message as { id?: unknown }).id;
+  return typeof id === "string" && hasCredentialShape(id) ? { jsonrpc: "2.0", id: null, error: { code: -32600, message: CREDENTIAL_ID_REFUSED } } : null;
+}
 
 const PROTOCOL_CLAIM = "io.modelcontextprotocol/protocolVersion";
 /** One line's limit, as the SDK's reader: past it the line is refused and discarded whole. */
@@ -70,6 +84,8 @@ export class StdioGate extends Transform {
   private buffer = "";
   /** True while the rest of an over-long line is read and thrown away, up to its newline. */
   private discarding = false;
+  /** True once the stream's first character has been read (a leading byte-order mark is dropped). */
+  private startSeen = false;
   private readonly decoder = new StringDecoder("utf8");
   private opened = false;
   /** The id of the `initialize` request, until its answer names the negotiated version. */
@@ -145,6 +161,13 @@ export class StdioGate extends Transform {
 
   private consume(text: string): void {
     let rest = text;
+    // One UTF-8 byte-order mark before the first message (a client that writes its stream as
+    // "UTF-8 with BOM", as .NET and PowerShell can) is not part of it: left in, `initialize` did not
+    // parse and was answered -32700 (audit 2026-11-25). Only the first character of the stream.
+    if (!this.startSeen && rest.length > 0) {
+      this.startSeen = true;
+      if (rest.charCodeAt(0) === 0xfeff) rest = rest.slice(1);
+    }
     while (rest.length > 0) {
       const at = rest.indexOf("\n");
       if (this.discarding) {
@@ -304,6 +327,8 @@ export class StdioGate extends Transform {
     if (!isObject(message)) {
       return { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request: a message must be a JSON object." } };
     }
+    const credentialId = credentialIdRefusal(message);
+    if (credentialId) return credentialId;
     // A message that is not JSON-RPC 2.0, or a request whose id is null (MCP: "MUST NOT be null"):
     // the SDK dropped both without a word (blind audit round 3).
     // A request whose id is an object, an array or a boolean was dropped the same way (blind audit

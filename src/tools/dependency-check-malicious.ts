@@ -23,6 +23,7 @@
  * counting 1, over the bundled popular-npm.ts list), when there is one: "did you mean lodash?".
  */
 
+import { mayScanWord } from "../call-budget.js";
 import { advisoryKnownToAffect, type AdvisoryRanges } from "../live/osv-ranges.js";
 import { isSecurityHoldingRelease } from "../live/osv-scanner.js";
 import { POPULAR_NPM } from "../live/popular-npm.js";
@@ -108,8 +109,26 @@ const POPULAR = new Set(POPULAR_NPM);
  * dropped, else the most popular one two edits away (names of 6 or more). Null for a popular
  * name itself and for anything else. Deterministic and offline.
  */
+/**
+ * Round 10, G4: the answer for each distinct name is kept (a pure function of the name), so a task that repeats a
+ * word thousands of times pays the edit-distance scan over the popular list once per word, not once per occurrence.
+ * Bounded: past 20,000 names the memo starts over.
+ */
+const CLOSEST = new Map<string, string | null>();
 export function closestPopularNpm(name: string): string | null {
   const n = name.trim().toLowerCase();
+  // Past the call's cap of distinct words or its deadline the check is not made (the call is marked; call-budget.ts
+  // mayScanWord). Counted per call before the memo, so one call's bound does not depend on earlier calls.
+  if (n.length >= 4 && !POPULAR.has(n) && !mayScanWord(`npm\0${n}`)) return null;
+  const known = CLOSEST.get(n);
+  if (known !== undefined) return known;
+  const found = closestPopularNpmUncached(n);
+  if (CLOSEST.size >= 20_000) CLOSEST.clear();
+  CLOSEST.set(n, found);
+  return found;
+}
+
+function closestPopularNpmUncached(n: string): string | null {
   if (n.length < 4 || POPULAR.has(n)) return null;
   const nearest = (max: number) => {
     let best: string | null = null;

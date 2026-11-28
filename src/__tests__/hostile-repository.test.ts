@@ -97,8 +97,11 @@ describe(".gitignore matching: no pattern can make it backtrack", () => {
       }).ms;
     };
     cost(50); // warm-up
-    const small = cost(50);
-    const large = cost(200);
+    // The smallest of five runs each: a runner that pauses this process mid-measurement (seen on a hosted
+    // macOS runner, 35x once) lengthens one run, never the shortest one.
+    const best = (n: number) => Math.min(...Array.from({ length: 5 }, () => cost(n)));
+    const small = best(50);
+    const large = best(200);
     expect(large).toBeLessThan(Math.max(small, 1) * 12);
   });
 });
@@ -414,7 +417,7 @@ describe.skipIf(!fs.existsSync(serverEntry))("the built server, started inside a
     expect(resultText(results[1])).toMatch(/NOT CHECKED/);
     // The 8 KB constraint is refused by its length, immediately, with what was too long.
     expect(results[2].isError).toBe(true);
-    expect(resultText(results[2])).toMatch(/items\[0\]\.to is 8,003 characters long; the limit is 256\. It starts /);
+    expect(resultText(results[2])).toMatch(/items\[0\]\.to is 8,003 characters long; the limit is 256\. Nothing of it was read or sent/);
     expect(resultText(results[2]).length).toBeLessThan(400);
     expect(timings[5].ms).toBeLessThan(5_000);
   }, 240_000);

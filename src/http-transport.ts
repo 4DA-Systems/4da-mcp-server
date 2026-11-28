@@ -26,8 +26,11 @@
  * - Stateless (no session tracking)
  */
 
+import { screenText, screenWireText } from "./output-screen.js";
+import { StringDecoder } from "node:string_decoder";
 import { createServer, IncomingMessage, ServerResponse, type Server as HttpServer } from "node:http";
 import { readFileSync } from "node:fs";
+import { isIPv4 } from "node:net";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -40,9 +43,10 @@ import {
 } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { extractAuthClaims, getAuthSecret, type TeamClaims } from "./auth.js";
+import { nodeServerProblem } from "./http-transport-floor.js";
 import { runWithAuthContext } from "./auth-context.js";
 import { envFlag } from "./env-flags.js";
-import { batchCancellation, batchRefusedMessage } from "./stdio-gate.js";
+import { batchCancellation, batchRefusedMessage, credentialIdRefusal } from "./stdio-gate.js";
 import { abortBackgroundWork } from "./shutdown.js";
 
 const DEFAULT_PORT = 4840;
@@ -84,10 +88,14 @@ function normalizeHostname(host: string): string {
   return host.trim().replace(/^\[|\]$/g, "").split("%")[0].toLowerCase();
 }
 
-/** Loopback bind addresses — everything else reaches the network. */
+/**
+ * Loopback bind addresses — everything else reaches the network. Only `localhost`, `::1` and a
+ * dotted-quad IPv4 address in 127.0.0.0/8: `127.evil.example` is a hostname that resolves wherever
+ * its owner says, and was treated as loopback, so authentication was not forced (audit 2026-11-25).
+ */
 export function isLoopbackBind(host: string): boolean {
   const h = normalizeHostname(host);
-  return h === "localhost" || h === "::1" || /^127\./.test(h);
+  return h === "localhost" || h === "::1" || (isIPv4(h) && h.startsWith("127."));
 }
 
 /**
@@ -280,11 +288,19 @@ async function batchRefusal(req: IncomingMessage): Promise<{ refusal: Record<str
   } catch {
     return { refusal: null, body: replay };
   }
-  if (!Array.isArray(parsed)) return { refusal: null, body: replay };
+  // Round 17, C5(a): a request whose id has a credential's shape is not run (one answer, id null).
+  if (!Array.isArray(parsed)) {
+    const credentialId = credentialIdRefusal(parsed);
+    return { refusal: credentialId, body: replay };
+  }
+  // Round 19: a batch on a revision without batches is refused as such (batchRefusedMessage), whatever its ids hold.
   const revision = requestRevision(req.headers["mcp-protocol-version"], parsed);
   if (revision >= FIRST_REVISION_WITHOUT_BATCHES) {
     return { refusal: { jsonrpc: "2.0", id: null, error: { code: -32600, message: batchRefusedMessage("http") } }, body: replay };
   }
+  // A served batch (2025-03-26 and earlier) holding a credential-shaped id is refused whole.
+  const credentialId = parsed.map(credentialIdRefusal).find((x) => x !== null);
+  if (credentialId) return { refusal: credentialId, body: replay };
   // Members that are not JSON-RPC objects stay as they are: the SDK refuses such a batch whole.
   if (!parsed.every(isPlainObject)) return { refusal: null, body: replay };
   const read = batchCancellation(parsed, () => null);
@@ -351,6 +367,69 @@ function addBatchAnswers(res: ServerResponse, answers: Array<Record<string, unkn
   }) as ServerResponse["end"];
 }
 
+/** Every chunk a response writes, screened for credential shapes (JSON lines and event-stream `data:` lines). */
+export function screenResponse(res: ServerResponse): void {
+  // Round 16, C2: every chunk type (string in any encoding, Buffer, Uint8Array, any ArrayBufferView), decoded as one
+  // UTF-8 stream; only whole lines are screened and written, the rest is carried to the next chunk, so a token split
+  // over two writes is still screened whole. A token never spans a line end, and the body is JSON lines or an event
+  // stream, so whole lines are the unit. The body's length can change: Content-Length is dropped (chunked encoding).
+  const write = res.write.bind(res) as (...a: unknown[]) => boolean;
+  const end = res.end.bind(res) as (...a: unknown[]) => ServerResponse;
+  const writeHead = res.writeHead.bind(res) as (...a: unknown[]) => ServerResponse;
+  const setHeader = res.setHeader.bind(res) as (name: string, value: unknown) => ServerResponse;
+  const decoder = new StringDecoder("utf8");
+  let carry = "";
+  const text = (chunk: unknown, encoding: unknown): string => {
+    if (chunk === undefined || chunk === null) return "";
+    if (typeof chunk === "string") return decoder.write(Buffer.from(chunk, typeof encoding === "string" && Buffer.isEncoding(encoding) ? encoding : "utf8"));
+    if (ArrayBuffer.isView(chunk)) return decoder.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+    if (chunk instanceof ArrayBuffer) return decoder.write(Buffer.from(chunk));
+    return decoder.write(Buffer.from(String(chunk), "utf8"));
+  };
+  const headerValue = (v: unknown): unknown => (typeof v === "string" ? screenText(v) : Array.isArray(v) ? v.map(headerValue) : v);
+  const isLength = (k: unknown) => typeof k === "string" && k.toLowerCase() === "content-length";
+  res.setHeader = ((name: string, value: unknown) => (isLength(name) ? res : setHeader(name, headerValue(value)))) as ServerResponse["setHeader"];
+  // Round 17, C5(c): trailers are headers too.
+  const addTrailers = res.addTrailers.bind(res) as (headers: unknown) => void;
+  res.addTrailers = ((headers: unknown) =>
+    addTrailers(Array.isArray(headers) ? headers.map((pair) => (Array.isArray(pair) ? pair.map(headerValue) : pair)) : headers && typeof headers === "object" ? Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, headerValue(v)])) : headers)) as ServerResponse["addTrailers"];
+  if (res.hasHeader("content-length")) res.removeHeader("content-length");
+  res.writeHead = ((...args: unknown[]) => {
+    const out = args.map((a, i) => {
+      if (i === 0) return a;
+      if (typeof a === "string") return screenText(a);
+      if (Array.isArray(a)) {
+        const flat: unknown[] = [];
+        for (let j = 0; j + 1 < a.length; j += 2) if (!isLength(a[j])) flat.push(a[j], headerValue(a[j + 1]));
+        return flat;
+      }
+      if (a && typeof a === "object") return Object.fromEntries(Object.entries(a).filter(([k]) => !isLength(k)).map(([k, v]) => [k, headerValue(v)]));
+      return a;
+    });
+    if (res.hasHeader("content-length")) res.removeHeader("content-length");
+    return writeHead(...out);
+  }) as ServerResponse["writeHead"];
+  res.write = ((chunk: unknown, ...rest: unknown[]) => {
+    const encoding = typeof rest[0] === "string" ? rest[0] : undefined;
+    const callback = rest.find((r) => typeof r === "function");
+    const all = carry + text(chunk, encoding);
+    const cut = all.lastIndexOf("\n");
+    carry = cut < 0 ? all : all.slice(cut + 1);
+    const ready = cut < 0 ? "" : screenWireText(all.slice(0, cut + 1));
+    return callback ? write(ready, "utf8", callback) : write(ready, "utf8");
+  }) as ServerResponse["write"];
+  res.end = ((chunk?: unknown, ...rest: unknown[]) => {
+    const fnFirst = typeof chunk === "function";
+    const encoding = !fnFirst && typeof rest[0] === "string" ? rest[0] : undefined;
+    const callback = fnFirst ? chunk : rest.find((r) => typeof r === "function");
+    const all = carry + (fnFirst ? "" : text(chunk, encoding)) + decoder.end();
+    carry = "";
+    const last = all === "" ? undefined : screenWireText(all);
+    if (last === undefined) return callback ? end(callback) : end();
+    return callback ? end(last, "utf8", callback) : end(last, "utf8");
+  }) as ServerResponse["end"];
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
@@ -411,6 +490,8 @@ export async function startHttpServer(
   const { port, host } = options;
   const policy = resolveSecurityPolicy(host);
   enforceBindPolicy(host, policy);
+  const transportProblem = nodeServerProblem();
+  if (transportProblem) throw new Error(transportProblem);
 
   const mcpHandler = createMcpHandler(factory);
   const handleMcpRequest = toNodeHandler(mcpHandler, {
@@ -420,6 +501,8 @@ export async function startHttpServer(
   });
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    // Round 15, A2: every byte of every response passes the output screen (output-screen.ts), whatever wrote it.
+    screenResponse(res);
     // DNS rebinding protection — every request, before routing or auth.
     const rejection = evaluateRequestGuard(req.headers, policy);
     if (rejection) {

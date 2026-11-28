@@ -110,7 +110,8 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
     annotations: { title: "Dependency health", ...READ_NETWORK },
   },
   upgrade_planner: {
-    summary: "Prioritized upgrade plan for one project (project_path): the 4DA app's work order when computed (per-line targets, manifest vs lockfile fix), else the smallest version that fixes each vulnerability. Call when the user asks what to upgrade.",
+    summary:
+      'Ranked upgrade plan for one project (project_path), computed by this server from its lockfiles on disk: the smallest version that fixes each vulnerability, whether a lockfile refresh or a parent upgrade reaches it, the commands and run_order. With the 4DA app attached, app_plan_check compares the app\'s stored plan; only project_path "*" returns the app\'s plan across every project (unverified), and its summary starts NOT CHECKED when it cannot. Call when the user asks what to upgrade.',
     definition: upgradePlannerTool,
     category: "security",
     tags: ["upgrade", "dependencies", "recommendations", "versions"],
@@ -136,7 +137,7 @@ export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = {
 
   // --- Intelligence (mixed) ---
   what_should_i_know: {
-    summary: "Pre-task briefing for a task in one project: the dependencies and package families it names, installed versions, confirmed vulnerabilities, releases since, your decisions, a delegation verdict. Call BEFORE a non-trivial task, especially one that changes dependencies.",
+    summary: "Pre-task briefing (npm, PyPI, crates.io and Go packages only): advisories and a verdict. Call BEFORE a non-trivial task with its packages and each `version`; public: false for private registries, indexes, git, paths. On confirmation_needed: task_packages.next_step.",
     definition: whatShouldIKnowTool,
     category: "intelligence",
     tags: ["briefing", "advisories", "pre-task", "delegation"],

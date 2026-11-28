@@ -216,8 +216,11 @@ const MAX_LISTED_NOT_COVERED = 25;
  * Measured on langchain (108 lockfiles, up to 3 levels down; 2026-10-10):
  * the walk plus every project scan takes about 2 s. Depth 4 covers it with a
  * level to spare; 256 projects is 2.4x its count.
+ * Round 20: depth 8. A monorepo with an example app at depth 5 left 10% of ordinary briefings incomplete; the walk
+ * visits the same folders at any depth (it is bounded by MAX_WALK_DIRS), so on a 5,060-folder tree depth 4 cost 719 ms
+ * of CPU and depth 8 625 ms (61 projects instead of 21; MAX_PROJECTS still bounds them).
  */
-export const MAX_DEPTH = 4;
+export const MAX_DEPTH = 8;
 export const MAX_PROJECTS = 256;
 /** Directories visited in total, scanned or not: the hard cap on the walk itself. */
 const MAX_WALK_DIRS = 20_000;
@@ -272,6 +275,8 @@ export interface TreeDiscovery {
   skipped: Array<{ path: string; reason: SkipReason }>;
   /** Every lockfile found but not scanned (`skipped` may list fewer). */
   skippedCount: number;
+  /** Round 19, Q2: `skippedCount` by reason (every one counted, not only the listed ones). */
+  skippedByReason?: Partial<Record<SkipReason, number>>;
   /**
    * Of `skippedCount`, the files holding a merge conflict (reason `merge_conflict`, added by the
    * live layer: withMergeConflicts). lockfileProblemNotes words them, so discoveryNote does not.
@@ -851,6 +856,7 @@ function walkProjectTree(
   const budget = startWalkBudget(ignore);
   const skipped: TreeDiscovery["skipped"] = [];
   let skippedCount = 0;
+  const skippedByReason: Partial<Record<SkipReason, number>> = {};
   let visited = 0;
   let walkTruncated = false;
   let ignoredVisited = 0;
@@ -870,6 +876,7 @@ function walkProjectTree(
   };
   const noteSkipped = (lockPath: string, reason: SkipReason) => {
     skippedCount++;
+    skippedByReason[reason] = (skippedByReason[reason] ?? 0) + 1;
     if (skipped.length < MAX_LISTED_SKIPS) skipped.push({ path: lockPath, reason });
   };
   // Listed whether or not .gitignore names the file: a manifest nobody commits still declares what gets installed.
@@ -1081,6 +1088,7 @@ function walkProjectTree(
       maxProjects: limits.maxProjects,
       skipped,
       skippedCount,
+      skippedByReason,
       walkTruncated,
       ...(budget.stopped ? { walkStopped: "time_budget" as const } : {}),
       ...(ignoredWalkTruncated ? { ignoredWalkTruncated } : {}),
@@ -1114,7 +1122,7 @@ export function discoveryFor(root: string): TreeDiscovery {
 }
 
 /** A lockfile problem as the notes read it (lockfile-types.ts LockfileProblem). */
-export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true; mergeConflict?: true };
+export type LockfileProblemLike = { file: string; error: string; skipped?: number; partial?: true; conflict?: true; refused?: true; notCrossChecked?: true; mergeConflict?: true; behindManifest?: true; interior?: true };
 
 /**
  * The kinds, kept apart: a file that could not be read (UNREADABLE), one read
@@ -1155,7 +1163,7 @@ export function withMergeConflicts(discovery: TreeDiscovery | null, conflicted: 
 }
 
 /** Whether `file` has a lockfile's name (not a manifest's, such as package.json or pyproject.toml). */
-function isLockfileName(file: string): boolean {
+export function isLockfileName(file: string): boolean {
   const base = file.split(/[\\/]/).pop() ?? file;
   return /^(?:package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|deno\.lock|Cargo\.lock|poetry\.lock|uv\.lock|pdm\.lock|Pipfile\.lock|go\.sum|Gemfile\.lock|gems\.locked|composer\.lock)$/.test(base);
 }
@@ -1183,12 +1191,22 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
     );
   }
   const skippedEntries = partial.filter((p) => !p.partial);
-  const damaged = partial.filter((p) => p.partial);
+  // Whole as far as it goes and only lacking what its manifest declares: older than the manifest,
+  // never "not read to the end" (audit 2026-11-25; the error names the manifest and the names).
+  const behind = partial.filter((p) => p.partial && p.behindManifest);
+  const interior = partial.filter((p) => p.partial && !p.behindManifest && p.interior);
+  const damaged = partial.filter((p) => p.partial && !p.behindManifest && !p.interior);
   if (skippedEntries.length > 0) {
     notes.push(`PARTIAL: ${skippedEntries.length} lockfile${skippedEntries.length === 1 ? " was" : "s were"} read with entries skipped: ${listed(skippedEntries)}.`);
   }
   if (damaged.length > 0) {
     notes.push(`PARTIAL: ${damaged.length} lockfile${damaged.length === 1 ? " was" : "s were"} NOT read to the end: ${listed(damaged)}.`);
+  }
+  if (interior.length > 0) {
+    notes.push(`PARTIAL: ${interior.length} lockfile${interior.length === 1 ? " lacks an entry" : "s lack entries"} another package needs: ${listed(interior)}.`);
+  }
+  if (behind.length > 0) {
+    notes.push(`PARTIAL: ${behind.length} lockfile${behind.length === 1 ? " is older than its manifest" : "s are older than their manifests"}: ${listed(behind)}.`);
   }
   if (refused.length > 0) {
     notes.push(`REFUSED: ${refused.length} requirements include${refused.length === 1 ? " was" : "s were"} not read: ${listed(refused)}.`);
@@ -1199,7 +1217,7 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
     );
   }
   if (uncrossed.length > 0) {
-    notes.push(`NOT CROSS-CHECKED: ${uncrossed.length} lockfile${uncrossed.length === 1 ? " was" : "s were"} not cross-checked against the package.json files: ${listed(uncrossed)}.`);
+    notes.push(`NOT CROSS-CHECKED: ${uncrossed.length} lockfile${uncrossed.length === 1 ? " was" : "s were"} not cross-checked against the manifests that declare its dependencies: ${listed(uncrossed)}.`);
   }
   return notes;
 }
@@ -1211,8 +1229,10 @@ export function lockfileProblemNotes(problems: LockfileProblemLike[], show: (fil
  * cannot disagree about a lockfile (they did for a conflicted go.sum: review of 6.5.1, 2026-11-24).
  */
 export function incompleteLockfiles(problems: LockfileProblemLike[]): string[] {
-  if (lockfileProblemNotes(problems).length === 0) return [];
-  return [...new Set(problems.map((p) => p.file))];
+  // A lockfile read whole and only not compared with its manifest left nothing unread: a note, not a gap.
+  const gaps = problems.filter((p) => !(p.notCrossChecked && !p.refused && !p.conflict && !p.mergeConflict));
+  if (lockfileProblemNotes(gaps).length === 0) return [];
+  return [...new Set(gaps.map((p) => p.file))];
 }
 
 /** Kept for its importers (upgrade_planner): lockfileProblemNotes. */

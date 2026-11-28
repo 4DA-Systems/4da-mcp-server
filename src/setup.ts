@@ -37,11 +37,14 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -51,6 +54,7 @@ import jsonc from "jsonc-parser";
 import type { JSONPath, Node, ParseError } from "jsonc-parser";
 
 import { parseSetupArgs } from "./cli-args.js";
+import { claudeCodeReport, claudeConfigDir, claudeMcpAdd, readClaudeCodeState } from "./setup-claude-code.js";
 import { NPX_OPTIONS, PACKAGE, pinnedNpx, readPackageVersion } from "./usage.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -72,7 +76,7 @@ function serverCommand(version: string): { command: string; args: string[] } {
 
 /** The Claude Code command printed instead of editing `~/.claude.json`. */
 export function claudeCodeCommand(version: string): string {
-  return `claude mcp add --scope user 4da -- npx ${NPX_OPTIONS.join(" ")} ${PACKAGE}@${version}`;
+  return claudeMcpAdd(version, "user");
 }
 
 /** `claudeCodeCommand` for the running package. */
@@ -88,10 +92,12 @@ export interface SetupContext {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   home: string;
+  /** The directory setup runs in: Claude Code's local- and project-scope servers for it are read. */
+  cwd?: string;
 }
 
 export function currentContext(): SetupContext {
-  return { platform: process.platform, env: process.env, home: homedir() };
+  return { platform: process.platform, env: process.env, home: homedir(), cwd: process.cwd() };
 }
 
 /** An editor whose MCP config file this setup writes. */
@@ -253,6 +259,37 @@ function propertiesOf(objectNode: Node | undefined, match: (key: string) => bool
 }
 
 /**
+ * The first key that an object in the tree holds twice, as a printable path (`"mcpServers"."4da"."args"`),
+ * or null. Walked with an explicit stack: a deeply nested file cannot exhaust the call stack here.
+ */
+function firstDuplicateKey(root: Node | undefined): string | null {
+  interface Step { node: Node; key: string | null; up: Step | null }
+  const named = (step: Step | null, last: string): string => {
+    const keys = [last];
+    for (let s = step; s !== null; s = s.up) if (s.key !== null) keys.unshift(s.key);
+    return keys.map((k) => JSON.stringify(k.length > 80 ? `${k.slice(0, 80)}...` : k)).join(".");
+  };
+  const stack: Step[] = root ? [{ node: root, key: null, up: null }] : [];
+  while (stack.length > 0) {
+    const step = stack.pop()!;
+    if (step.node.type === "object") {
+      const seen = new Set<string>();
+      for (const property of step.node.children ?? []) {
+        const name = property.children?.[0]?.value;
+        if (typeof name !== "string") continue;
+        if (seen.has(name)) return named(step, name);
+        seen.add(name);
+        const value = property.children?.[1];
+        if (value) stack.push({ node: value, key: name, up: step });
+      }
+    } else if (step.node.type === "array") {
+      (step.node.children ?? []).forEach((child, i) => stack.push({ node: child, key: `[${i}]`, up: step }));
+    }
+  }
+  return null;
+}
+
+/**
  * Decide what writing `entry` under `<key>["4da"]` does to a config file whose
  * current text is `existing` (null when it does not exist).
  *
@@ -316,6 +353,13 @@ export function planConfig(
       action: "refuse",
       reason: `its "${key}" already has an entry named "${name}", and a "4da" entry beside it would be a second server; rename that entry to "4da" or remove it`,
     };
+  }
+  // A key written twice anywhere (an `args` inside the entry, another server's name): an editor
+  // reads one of them and `modify` would edit the other, so setup said "Written" while the editor
+  // kept the old command (audit 2026-11-25, H-3). Such a file is not written.
+  const duplicate = firstDuplicateKey(tree);
+  if (duplicate !== null) {
+    return { action: "refuse", reason: `it holds the key ${duplicate} twice, and an editor reads only one of them; remove one` };
   }
   const current = servers?.["4da"];
   if (current !== undefined && !isPlainObject(current)) {
@@ -395,30 +439,135 @@ function backupPath(filePath: string): string {
   }
 }
 
+/** How many symbolic links a config path may pass through before it is refused (a loop). */
+const MAX_LINK_HOPS = 40;
+
+/**
+ * Where a config path's content lives: the path itself, or, through each symbolic link in turn,
+ * the file the last one names, whether it exists yet or not. Each link is read (`readlink`), not
+ * resolved whole: `realpath` would turn macOS's /var/... into /private/var/... in every path
+ * reported back, and fails for a link to a file that does not exist yet.
+ */
+export function configTarget(filePath: string): { target: string; viaLink: boolean } {
+  let at = filePath;
+  for (let hop = 0; hop <= MAX_LINK_HOPS; hop++) {
+    let isLink: boolean;
+    try {
+      isLink = lstatSync(at).isSymbolicLink();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { target: at, viaLink: hop > 0 };
+      throw error;
+    }
+    if (!isLink) return { target: at, viaLink: hop > 0 };
+    at = path.resolve(path.dirname(at), readlinkSync(at));
+  }
+  throw new Error(`${filePath} passes through more than ${MAX_LINK_HOPS} symbolic links (a loop?)`);
+}
+
+/** What a config write did, for the report. */
+export interface WriteOutcome {
+  /** The backup made first, when the file existed. */
+  backup: string | null;
+  /** The file written: the config path, or where its symbolic link points. */
+  target: string;
+  /** True when the config path is a symbolic link (written through to `target`). */
+  viaLink: boolean;
+  /** True when `target` did not exist and was created. */
+  created: boolean;
+  /** The file's hard-link count when it was written in place to keep its links; null when it was replaced. */
+  inPlaceLinks: number | null;
+  /** Temp files of earlier interrupted runs that were removed (their process is gone). */
+  removedLeftovers: string[];
+}
+
+/** `<file>.4da-<pid>.tmp` files beside `file` left by a run that is no longer running; removed. */
+function removeStaleTemps(file: string): string[] {
+  const dir = path.dirname(file);
+  const prefix = `${path.basename(file)}.4da-`;
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+    const pid = name.slice(prefix.length, -".tmp".length);
+    if (!/^\d{1,10}$/.test(pid) || Number(pid) === process.pid || processRunning(Number(pid))) continue;
+    const full = path.join(dir, name);
+    try {
+      if (!lstatSync(full).isFile()) continue;
+      rmSync(full);
+      removed.push(full);
+    } catch {
+      // Another run removed it, or it is not ours to remove: nothing to report.
+    }
+  }
+  return removed;
+}
+
+/** Whether a process with this id exists (EPERM: it exists, owned by another user). */
+function processRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /**
  * Write `content` to `filePath`: back up an existing file first, then write a
  * temp file beside it and rename it over the original, so an interrupted run
- * leaves either the old file or the new one, never half of one. A symlinked
- * config (a dotfiles repo) is written through to its target.
+ * leaves either the old file or the new one, never half of one.
+ *
+ * A symlinked config (a dotfiles repo) is written through to where the link
+ * points, and that file is created when it does not exist yet, if its folder
+ * does; the link stays a link (audit 2026-11-25, H-6: a link to a file not yet
+ * made was replaced by a plain file). A file with more than one hard link is
+ * written in place, after the same backup, so every link still names it: a
+ * rename would have given the config path a new file and left the other names
+ * on the old content. That write is not atomic; the backup is kept if it fails.
  *
  * The new file keeps the original's permission bits (a 0600 config holding
- * tokens stays 0600), a file the user cannot write is not replaced, and a write
- * that fails leaves nothing behind: not the temp file, not the backup it made.
- * @returns The backup path, when one was made.
+ * tokens stays 0600), a file the user cannot write is not replaced, and a
+ * replacing write that fails leaves nothing behind: not the temp file, not the
+ * backup it made.
  */
-export function writeConfigAtomic(filePath: string, content: string): string | null {
-  // Only a symlinked file is resolved: resolving the whole path would turn
-  // macOS's /var/... into /private/var/... in every path reported back.
-  const target = existsSync(filePath) && lstatSync(filePath).isSymbolicLink() ? realpathSync(filePath) : filePath;
-  mkdirSync(path.dirname(target), { recursive: true });
+export function writeConfig(filePath: string, content: string): WriteOutcome {
+  const { target, viaLink } = configTarget(filePath);
+  if (viaLink) {
+    // Where a link points is the user's (a dotfiles checkout, perhaps on a drive not mounted now):
+    // its folder is never created here.
+    if (!existsSync(path.dirname(target))) throw new Error(`it is a symbolic link to ${target}, whose folder does not exist`);
+  } else {
+    mkdirSync(path.dirname(target), { recursive: true });
+  }
+  const removedLeftovers = removeStaleTemps(target);
   let backup: string | null = null;
   let mode: number | null = null;
-  if (existsSync(target)) {
+  let links = 1;
+  const existed = existsSync(target);
+  if (existed) {
     // rename() needs only the directory's permission, so it would replace a read-only file.
     accessSync(target, constants.W_OK);
-    mode = statSync(target).mode & 0o7777;
+    const stat = statSync(target);
+    mode = stat.mode & 0o7777;
+    links = stat.nlink;
     backup = backupPath(target);
     copyFileSync(target, backup, constants.COPYFILE_EXCL);
+  }
+  if (links > 1) {
+    // In place: the same file, so every hard link to it sees the new content.
+    try {
+      writeFileSync(target, content, { flag: "r+" });
+      truncateSync(target, Buffer.byteLength(content, "utf8"));
+    } catch (error) {
+      // The backup is the original content now: kept, and named in the error.
+      throw new Error(`${errorMessage(error)}; the file was being written in place, and ${backup} holds it as it was`);
+    }
+    return { backup, target, viaLink, created: false, inPlaceLinks: links, removedLeftovers };
   }
   const temp = `${target}.4da-${process.pid}.tmp`;
   try {
@@ -437,7 +586,15 @@ export function writeConfigAtomic(filePath: string, content: string): string | n
     }
     throw error;
   }
-  return backup;
+  return { backup, target, viaLink, created: !existed, inPlaceLinks: null, removedLeftovers };
+}
+
+/**
+ * `writeConfig`, for callers that need only the backup.
+ * @returns The backup path, when one was made.
+ */
+export function writeConfigAtomic(filePath: string, content: string): string | null {
+  return writeConfig(filePath, content).backup;
 }
 
 // =============================================================================
@@ -452,16 +609,6 @@ function snippet(target: EditorTarget): string {
     .split("\n")
     .map((line) => `    ${line}`)
     .join("\n");
-}
-
-/** Whether `~/.claude.json` already has a user-scope `4da` server. Read-only. */
-function claudeCodeHas4da(configPath: string): boolean {
-  try {
-    const root: unknown = JSON.parse(readFileSync(configPath, "utf-8"));
-    return isPlainObject(root) && isPlainObject(root.mcpServers) && "4da" in root.mcpServers;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -527,19 +674,13 @@ export function runSetup(options: boolean | SetupOptions = {}, ctx: SetupContext
 
   let found = 0;
 
-  // Claude Code: print the command, never edit ~/.claude.json.
+  // Claude Code: read what it has (setup-claude-code.ts) and print the commands; never edit its files.
   const claudeJson = claudeCodeConfigPath(ctx);
   const claudeDir = pathFor(ctx).join(ctx.home, ".claude");
-  if (existsSync(claudeJson) || existsSync(claudeDir)) {
+  if (existsSync(claudeJson) || existsSync(claudeDir) || existsSync(claudeConfigDir(ctx))) {
     found++;
     log("  Found: Claude Code");
-    if (claudeCodeHas4da(claudeJson)) {
-      log(`  Already configured (user scope, ${claudeJson}).`);
-    } else {
-      log("  Claude Code keeps its MCP servers in ~/.claude.json, which it rewrites");
-      log("  itself; setup does not edit it. Add the server with:");
-      log(`    ${claudeCodeCommand(version)}`);
-    }
+    for (const line of claudeCodeReport(readClaudeCodeState(ctx, claudeJson, version), version)) log(line);
     log("");
   }
 
@@ -588,10 +729,17 @@ export function runSetup(options: boolean | SetupOptions = {}, ctx: SetupContext
         }
       } else {
         try {
-          const backup = writeConfigAtomic(target.configPath, plan.content ?? "");
+          const outcome = writeConfig(target.configPath, plan.content ?? "");
           result.written.push(target.configPath);
           log(`  Written: ${target.configPath}`);
-          if (backup) log(`  Backup:  ${backup}`);
+          if (outcome.viaLink) {
+            log(`  It is a symbolic link: ${outcome.created ? "created" : "written"} ${outcome.target}, where it points; the link is kept.`);
+          }
+          if (outcome.inPlaceLinks !== null) {
+            log(`  It has ${outcome.inPlaceLinks} hard links: written in place so each of them keeps naming it.`);
+          }
+          if (outcome.backup) log(`  Backup:  ${outcome.backup}`);
+          for (const leftover of outcome.removedLeftovers) log(`  Removed ${leftover}, left by an earlier run that was stopped mid-write.`);
         } catch (error) {
           result.notWritten.push(target.configPath);
           log(`  Could not write ${target.configPath}: ${errorMessage(error)}`);

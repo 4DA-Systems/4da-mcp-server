@@ -46,7 +46,7 @@ describe("a damaged lockfile that was also not cross-checked", () => {
     stubOsv([]);
     const scan = await scanProject(dir);
     expect(scan.coverage.note).toMatch(/PARTIAL: 1 lockfile was NOT read to the end: yarn\.lock/);
-    expect(scan.coverage.note).toMatch(/NOT CROSS-CHECKED: 1 lockfile was not cross-checked against the package\.json files: yarn\.lock/);
+    expect(scan.coverage.note).toMatch(/NOT CROSS-CHECKED: 1 lockfile was not cross-checked against the manifests that declare its dependencies: yarn\.lock/);
     expect(scan.coverage.partial_lockfiles).toHaveLength(1);
     expect(scan.coverage.not_cross_checked_lockfiles).toHaveLength(1);
   });

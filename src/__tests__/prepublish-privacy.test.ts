@@ -317,8 +317,9 @@ describe("blind audit 2026-11-14: a private name in any spelling, under any gues
 
   it("a public name in an alias form is still looked up: the forms only refuse what is private", async () => {
     const live = monorepo();
-    await executeDependencyCheck(null, { items: [{ ecosystem: "npm", package: "lodash@4.17.21", to: "4.17.21" }] }, live);
-    expect(mentions("lodash").length).toBeGreaterThan(0);
+    const out = await executeDependencyCheck(null, { items: [{ ecosystem: "npm", package: "lodash@4.17.21", to: "4.17.21" }] }, live);
+    // "lodash@4.17.21" is no npm name: refused as written (not_checked "input"; audit 2026-11-25 E3), never withheld as private.
+    expect(out.results[0].not_checked).toBe("input");
   });
 });
 

@@ -20,6 +20,8 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { LEDGER_FILE, LEDGER_PREVIOUS_FILE, ledgerWritesSettled, recordVerdicts, startLedger } from "../check-ledger.js";
 import { serverEntry } from "./helpers/stdio-session.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = path.join(root, "hooks", "manifest-edit.mjs");
@@ -128,7 +130,7 @@ describe("a data folder with a ledger: a server that records verdicts has run th
     const reason = denial(hook(event("PreToolUse", "Edit", lodashEdit("4.17.20"))))!;
     expect(reason).toContain(`No dependency_check verdict at all is recorded in ${home}`);
     expect(reason).toContain("If this stops again after dependency_check has answered for it, do not retry");
-    expect(reason).toContain("older than 6.5.0");
+    expect(reason).toContain("older than this guard needs");
     expect(reason).toContain("FOURDA_MCP_HOME");
     // FOURDA_GUARD is the user's setting, not the agent's (re-check of 0d30b40, S8).
     expect(reason).toContain("FOURDA_GUARD (advise, off) is the user's setting: tell the user, and do not change it yourself");
@@ -136,7 +138,7 @@ describe("a data folder with a ledger: a server that records verdicts has run th
 
   it("other verdicts on record, none for this version: the same note, without the empty-ledger sentence", () => {
     const t = new Date(Date.now() - 60_000).toISOString();
-    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ t, ecosystem: "npm", package: "express", version: "4.21.2", verdict: "proceed" }) + "\n");
+    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", package: "express", version: "4.21.2", verdict: "proceed" }) + "\n");
     const reason = denial(hook(event("PreToolUse", "Edit", lodashEdit("4.17.20"))))!;
     expect(reason).not.toContain("No dependency_check verdict at all");
     expect(reason).toContain("do not retry");
@@ -144,7 +146,7 @@ describe("a data folder with a ledger: a server that records verdicts has run th
 
   it("an unknown answer on record for the version: that answer is named, and the note is left out", () => {
     const t = new Date(Date.now() - 60_000).toISOString();
-    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ t, ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "unknown", reason: "the registry did not answer" }) + "\n");
+    fs.writeFileSync(path.join(home, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "unknown", reason: "the registry did not answer" }) + "\n");
     const reason = denial(hook(event("PreToolUse", "Edit", lodashEdit("4.17.20"))))!;
     expect(reason).toContain("the last dependency_check answer was unknown");
     expect(reason).toContain("the registry did not answer");

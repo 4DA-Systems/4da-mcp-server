@@ -24,12 +24,14 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "manifest-edit.mjs");
 const dir = mkdtempSync(join(tmpdir(), "a651-overbound-"));
 const home = join(dir, "home");
 mkdirSync(home);
-writeFileSync(join(home, LEDGER_FILE), JSON.stringify({ t: new Date().toISOString(), ecosystem: "npm", package: "zzz-unrelated", version: "1.0.0", verdict: "proceed" }) + "\n");
+writeFileSync(join(home, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t: new Date().toISOString(), ecosystem: "npm", package: "zzz-unrelated", version: "1.0.0", verdict: "proceed" }) + "\n");
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const PAD = (n: number) => "b".repeat(n);
@@ -76,9 +78,14 @@ describe("goes ahead: long ordinary commands (item 3, the checker's c5-harmless)
     ["70 KB git commit -F - heredoc mentioning pip install", `git commit -F - <<'EOF'\n${"Docs: run pip install -e . first, then go test.\n".repeat(1500)}EOF`, "Bash"],
     ["75 KB git commit -m prose with ; npm i", `git commit -m "${"We go on; then npm i x and a review. ".repeat(2000)}"`, "Bash"],
     ["70 KB PowerShell Set-Content prose", `Set-Content notes.md '${"We go to a meeting and then review the plan. ".repeat(1600)}'`, "PowerShell"],
-    ["70 KB PowerShell here-string", `$t = @'\n${"npm i x; go get y\n".repeat(4000)}'@\nSet-Content notes.md $t`, "PowerShell"],
   ])("%s", (_label, command, tool) => {
     expect(decide(command, tool)).toBe("allow");
+  });
+
+  // Round 8 (R8-2): a here-string in a variable is text this hook cannot take apart (a later `iex $t`
+  // would run it), and it names installs: held as not read, the Write tool the remedy for text.
+  it("70 KB PowerShell here-string that names installs: held as not read", () => {
+    expect(decide(`$t = @'\n${"npm i x; go get y\n".repeat(4000)}'@\nSet-Content notes.md $t`, "PowerShell")).toBe("deny");
   });
 });
 

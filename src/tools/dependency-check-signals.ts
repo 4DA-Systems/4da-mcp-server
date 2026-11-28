@@ -43,7 +43,9 @@ export interface Signal {
     /** npm, a new dependency whose name is a near-miss of a popular package (dependency-check-nearmiss.ts). */
     | "name_check"
     /** PyPI, a project that declares its Python: whether `to` supports all of it (dependency-check-python.ts). */
-    | "python_support";
+    | "python_support"
+    /** Go, a path with upper-case letters answered clean: its lower-case path's advisories (dependency-check-gocase.ts). */
+    | "module_path_case";
   value: unknown;
   /** This server's sentence about the fact. It quotes no third-party text. */
   evidence: string;
@@ -78,6 +80,11 @@ export interface AdvisoryRef {
    */
   unread?: true;
   /**
+   * With `unread`: the record was read but carries no grade, and the GHSA aliases it would be graded
+   * by could not be read (osv-scanner.ts rateFromAliases): it counts as high (pre-publish audit 2026-11-25, C-2).
+   */
+  gradeUnreadFrom?: string[];
+  /**
    * The malicious-package records (malware.ts) in this advisory's alias group: a MAL- record often
    * comes in under its GHSA alias, which then names the group (blind audit round 5: chalk 5.6.1).
    */
@@ -94,8 +101,16 @@ export type CreatedAtFact =
   | { status: "not_found"; detail: string }
   | { status: "unreachable"; detail: string };
 
-/** Verdict precedence, strongest first. */
+/**
+ * Verdict precedence, strongest first. `wait` stops an install and `review` does not, so a release
+ * inside the age hold answers wait even when another signal asks for review (the review findings are
+ * listed beside the wait in the reason); 6.5.1 answered review, which the guard hook lets through.
+ * Otherwise the order is avoid > review > unknown > wait: a concrete review finding still wins over a
+ * missing source, and a failed lookup still outranks the age hold (a1119).
+ */
 const PRECEDENCE: Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
+/** With a wait among the signals: the verdicts that stop an install first (unknown still above wait). */
+const PRECEDENCE_WITH_WAIT: Verdict[] = ["avoid", "unknown", "wait", "review", "proceed"];
 
 export const WAIT_DAYS = 3;
 export const NEW_DEP_MIN_AGE_DAYS = 30;
@@ -368,9 +383,13 @@ function ownAdvisoriesSignal(item: CheckItem, facts: AdvisoryFacts): Signal {
   };
 }
 
-/** High or critical, or a severity that could not be read: an unread record never counts as less (AdvisoryRef.unread). */
+/**
+ * High or critical, or a severity that could not be read or is not graded: an unread record never
+ * counts as less (AdvisoryRef.unread), and since round 24 (Y3) neither does one read with no grade
+ * the server can read (OSV gives none, its aliases give none): fail closed, said "severity not graded".
+ */
 function isSerious(a: AdvisoryRef): boolean {
-  return a.severity === "critical" || a.severity === "high" || (a.severity === "unknown" && a.unread === true);
+  return a.severity === "critical" || a.severity === "high" || a.severity === "unknown";
 }
 
 function fmt(a: AdvisoryRef): string {
@@ -379,8 +398,12 @@ function fmt(a: AdvisoryRef): string {
     : a.severityFrom
       ? `${a.severity}, per ${a.severityFrom}`
       : a.unread && a.severity === "unknown"
-        ? "severity NOT CHECKED: OSV.dev did not return its record, so it counts as high"
-        : a.severity;
+        ? a.gradeUnreadFrom?.length
+          ? `severity NOT CHECKED: it carries no grade of its own and its alias ${a.gradeUnreadFrom.slice(0, 2).join(", ")} could not be read from OSV.dev, so it counts as high`
+          : "severity NOT CHECKED: OSV.dev did not return its record, so it counts as high"
+        : a.severity === "unknown"
+          ? "severity not graded: neither the record nor its aliases give one, so it counts as high"
+          : a.severity;
   // Counted, and said why: it reads like a notice and is not one by the record's own statement.
   return `${a.id} (${grade}${a.countedNotice ? "; worded as an unmaintained-package notice, but not declared as one or it names a fixed release, so it counts" : ""})`;
 }
@@ -557,9 +580,11 @@ export function newDependenciesSignal(
   const rows = introduced.map((name) => {
     const fact = created.get(name);
     if (!fact) return { name, first_published: null, age_days: null, note: "not checked (per-call lookup cap)" };
-    if (fact.status !== "ok") return { name, first_published: null, age_days: null, note: fact.detail, status: fact.status };
-    const age = fact.createdAt ? Math.round(((ref - Date.parse(fact.createdAt)) / DAY_MS) * 10) / 10 : null;
-    return { name, first_published: fact.createdAt, age_days: age };
+    if (fact.status !== "ok") return { name, first_published: null, age_days: null, note: fact.detail || "publish date unknown", status: fact.status };
+    // Round 23 (V4): no publish date (or one that does not parse) is said so, never printed as undefined or NaN.
+    const raw = fact.createdAt ? Math.round(((ref - Date.parse(fact.createdAt)) / DAY_MS) * 10) / 10 : null;
+    const age = raw !== null && Number.isFinite(raw) ? raw : null;
+    return age === null ? { name, first_published: null, age_days: null, note: "publish date unknown" } : { name, first_published: fact.createdAt, age_days: age };
   });
   const young = rows.filter((r) => r.age_days !== null && r.age_days < NEW_DEP_MIN_AGE_DAYS);
   const missing = rows.filter((r) => "status" in r && r.status === "not_found");
@@ -717,7 +742,7 @@ function proceedReason(signals: Signal[], ecosystem?: CheckEcosystem): string {
 
 /** The item verdict and its one-line reason, from the strongest signal effect. */
 export function decide(signals: Signal[], ecosystem?: CheckEcosystem): { verdict: Verdict; reason: string } {
-  for (const verdict of PRECEDENCE) {
+  for (const verdict of signals.some((s) => s.effect === "wait") ? PRECEDENCE_WITH_WAIT : PRECEDENCE) {
     const hits = signals.filter((s) => s.effect === verdict);
     if (hits.length === 0) continue;
     if (verdict === "proceed") {
@@ -729,7 +754,7 @@ export function decide(signals: Signal[], ecosystem?: CheckEcosystem): { verdict
     const unchecked = verdict === "unknown" ? [] : signals.filter((s) => s.effect === "unknown");
     // Every avoid and review finding is in the reason (README): time 0.3.8 read only "yanked" while
     // RUSTSEC-2026-0009 (a review) affected it too (blind audit 2026-11-14).
-    const findings = verdict === "avoid" ? [...hits, ...signals.filter((s) => s.effect === "review")] : hits;
+    const findings = verdict === "avoid" || verdict === "wait" ? [...hits, ...signals.filter((s) => s.effect === "review")] : hits;
     const reason = findings.map((s) => `${s.id}: ${s.evidence}`).join(" | ");
     return {
       verdict,

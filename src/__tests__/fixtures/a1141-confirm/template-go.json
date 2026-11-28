@@ -1,0 +1,4 @@
+{
+ "go.mod": "module example.com/svc\n\ngo 1.22\n\nrequire (\n\tgithub.com/go-chi/chi/v5 v5.2.0\n\tgithub.com/rs/zerolog v1.33.0\n)\n",
+ "go.sum": "github.com/go-chi/chi/v5 v5.2.0 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\ngithub.com/go-chi/chi/v5 v5.2.0/go.mod h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\ngithub.com/rs/zerolog v1.33.0 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\ngithub.com/rs/zerolog v1.33.0/go.mod h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"
+}

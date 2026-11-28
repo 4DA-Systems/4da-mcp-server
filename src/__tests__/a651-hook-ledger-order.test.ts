@@ -18,6 +18,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE, LEDGER_PREVIOUS_FILE } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 let home: string;
 let project: string;
@@ -33,7 +35,7 @@ afterEach(() => {
 const NOW = Date.parse("2026-11-24T12:00:00Z");
 const MIN = 60_000;
 const e = (minutesAgo: number, fields: Record<string, unknown>) => ({ t: new Date(NOW - minutesAgo * MIN).toISOString(), ecosystem: "npm", package: "lodash", version: "4.17.20", ...fields });
-const lines = (entries: unknown[]) => entries.map((x) => JSON.stringify(x)).join("\n") + "\n";
+const lines = (entries: unknown[]) => entries.map((x) => JSON.stringify({ sv: "6.6.0", ...(x as object) })).join("\n") + "\n";
 const decide = () => (respond({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: project, tool_input: { command: "npm i lodash@4.17.20" } }, { FOURDA_MCP_HOME: home }, NOW) === "" ? "allow" : "deny");
 
 describe("an avoid or wait holds over a later private answer, whatever lies between", () => {
@@ -42,7 +44,7 @@ describe("an avoid or wait holds over a later private answer, whatever lies betw
     ["avoid, unknown (plain), private", { verdict: "avoid" }, { verdict: "unknown" }],
     ["wait, unknown, private", { verdict: "wait" }, { verdict: "unknown" }],
   ])("%s: held", (_label, first, between) => {
-    writeFileSync(join(home, LEDGER_FILE), lines([e(30, first), e(20, between), e(10, { verdict: "unknown", not_checked: "private", project })]));
+    writeFileSync(join(home, LEDGER_FILE), lines([e(30, first), e(20, between), e(10, { verdict: "unknown", not_checked: "private", private_rule: "listed", project })]));
     expect(decide()).toBe("deny");
   });
 

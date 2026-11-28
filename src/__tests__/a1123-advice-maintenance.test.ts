@@ -56,7 +56,7 @@ describe("maintenance notices are worded as the scan treats them", () => {
 
   it("the briefing names the task package's notice as a notice and does not call it unfixed", async () => {
     stubNetwork(net);
-    const briefing = await executeWhatShouldIKnow(appDb().db, { task: "bump the chrono crate" }, await liveFor(dir));
+    const briefing = await executeWhatShouldIKnow(appDb().db, { packages: [], task: "bump the chrono crate" }, await liveFor(dir));
     const chrono = briefing.task_dependencies.find((d) => d.package === "chrono")!;
     expect(chrono.vulnerabilities).toEqual([]);
     expect(chrono.maintenance_notices).toEqual([{ id: "RUSTSEC-2026-0400", installed: "0.4.45", summary: "chrono is unmaintained" }]);
@@ -70,7 +70,7 @@ describe("maintenance notices are worded as the scan treats them", () => {
     stubNetwork(net);
     const { db, raw } = appDb();
     feedRow(raw, { source_type: "osv", source_id: "RUSTSEC-2026-0400", title: "[RUSTSEC-2026-0400] chrono: chrono is unmaintained", content: "chrono (crates.io)\nunmaintained", signal_priority: "critical" });
-    const briefing = await executeWhatShouldIKnow(db, { task: "bump the chrono crate" }, await liveFor(dir));
+    const briefing = await executeWhatShouldIKnow(db, { packages: [], task: "bump the chrono crate" }, await liveFor(dir));
     expect(briefing.scan_status).toBe("unavailable");
     const row = briefing.advisories.find((a) => a.title.includes("RUSTSEC-2026-0400"))!;
     expect(row.priority).toBe("low");

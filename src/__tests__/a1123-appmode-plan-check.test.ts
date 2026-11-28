@@ -297,7 +297,10 @@ describe("a scoped answer is about this project only", () => {
     const result = await planFor(appDb("scoped", plan));
     const text = JSON.stringify(result);
     expect(result.recommendations.map((r) => r.package).sort()).toEqual(["braces", "lodash", "minimist"]);
-    expect(text).not.toContain("qs");
+    // The package name as a JSON string: the temp folder's random suffix can hold the letters "qs"
+    // (CI run 46165583065: ...plancheck-Wqs2HA), and the project's own path is in the answer.
+    expect(text).not.toContain('"qs"');
+    expect(text).not.toMatch(/\bqs@/);
     expect(text).not.toContain("0.0.8");
     expect(text).not.toContain("6.5.2");
     expect(text.toLowerCase()).not.toContain(normalizeProjectPath(other));

@@ -56,8 +56,11 @@ describe("cleanText: what renders as nothing, or reorders what is shown, is remo
 
   it("tab, newline and carriage return stay; so do letters next to the removed ranges", () => {
     expect(cleanText("a\tb\nc\rd")).toBe("a\tb\nc\rd");
-    const kept = [0x20, 0x7e, 0xa0, 0xa1, 0xac, 0xae, 0xe9, 0x061b, 0x061d, 0x180d, 0x180f, 0x200a, 0x2010, 0x2027, 0x202f, 0x205f, 0x2070, 0xfdff, 0xfe10, 0xfefe, 0xff00, 0x1f600, 0xe0080, 0xe00ff, 0xe01f0];
+    const kept = [0x20, 0x7e, 0xa0, 0xa1, 0xac, 0xae, 0xe9, 0x061b, 0x061d, 0x180a, 0x1810, 0x200a, 0x2010, 0x2027, 0x202f, 0x205f, 0x2070, 0xfdff, 0xfe10, 0xfefe, 0xff00, 0x1f600, 0xe1000];
     for (const point of kept) expect(cleanText(cp(point)), `U+${point.toString(16).toUpperCase()}`).toBe(cp(point));
+    // Round 16, C5: the removed set is the Unicode property Default_Ignorable_Code_Point (U+180D, U+180F and
+    // U+E0080-E0FFF are in it; the hand list this replaced kept them).
+    for (const point of [0x180d, 0x180f, 0xe0080, 0xe00ff, 0xe01f0, 0xe0fff]) expect(cleanText(`a${cp(point)}b`), `U+${point.toString(16).toUpperCase()}`).toBe("ab");
   });
 
   it("a payload hidden in tag characters and variation selectors is gone, the visible text intact", () => {

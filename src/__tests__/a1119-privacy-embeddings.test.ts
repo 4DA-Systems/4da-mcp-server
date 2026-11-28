@@ -152,13 +152,13 @@ describe("a remote embedding provider never receives text that names a private p
     expect(toEmbedder()).toEqual([]);
     expect(recall.recall_mode).toBe("ranked_lexical");
     expect(String(recall.semantic_note)).toMatch(/Semantic recall was skipped/);
-    const brief = await call("what_should_i_know", { task: "upgrade @zqacme/ui to 2.0.0" });
+    const brief = await call("what_should_i_know", { task: "upgrade @zqacme/ui to 2.0.0", packages: [] });
     expect(toEmbedder().filter((s) => /zqacme/i.test(s.body))).toEqual([]);
     expect(brief.wisdom_recall_mode).toBe("ranked_lexical");
-    expect(String(brief.wisdom_recall_note)).toMatch(/Semantic recall was skipped/);
-    // A public task is embedded.
-    await call("what_should_i_know", { task: "how do we run the smoke suite" });
-    expect(promptsSent()).toContain("how do we run the smoke suite");
+    expect(String(brief.wisdom_recall_note)).toMatch(/^The task text is not sent for embedding/);
+    // Wave 2, C1: a public task is not embedded either; the briefing sends no task text, ever.
+    await call("what_should_i_know", { task: "how do we run the smoke suite", packages: [] });
+    expect(promptsSent()).not.toContain("how do we run the smoke suite");
   });
 
   it("OpenAI is remote too", async () => {

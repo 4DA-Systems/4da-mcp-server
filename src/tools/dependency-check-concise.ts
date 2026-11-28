@@ -40,7 +40,9 @@ export interface DetailedItem {
   /** not_checked "private" only because this lockfile (or manifest) could not be read. */
   unreadable_file?: string;
   canonical_module_path?: string;
+  go_module?: string;
   retry_after_seconds?: number;
+  advisory_data_age_minutes?: number;
 }
 
 export interface DetailedAnswer {
@@ -90,7 +92,9 @@ export function conciseItem(item: DetailedItem): Record<string, unknown> {
     ...(item.not_checked ? { not_checked: item.not_checked } : {}),
     ...(item.unreadable_file ? { unreadable_file: item.unreadable_file } : {}),
     ...(item.canonical_module_path ? { canonical_module_path: item.canonical_module_path } : {}),
+    ...(item.go_module ? { go_module: item.go_module } : {}),
     ...(item.retry_after_seconds ? { retry_after_seconds: item.retry_after_seconds } : {}),
+    ...(item.advisory_data_age_minutes !== undefined ? { advisory_data_age_minutes: item.advisory_data_age_minutes } : {}),
     ...(value?.affecting_to?.length ? { advisories: value.affecting_to } : {}),
     ...(value?.fixed_by_this_change?.length ? { fixes: value.fixed_by_this_change } : {}),
     ...(value?.malicious_package ? { malicious_package: value.malicious_package } : {}),
@@ -121,6 +125,7 @@ export function shapeDependencyCheck(answer: DetailedAnswer, format: DependencyC
       verdict_rule: meta.verdict_rule,
       untrusted_text: meta.untrusted_text,
       offline: meta.offline,
+      ...(meta.offline_note ? { offline_note: meta.offline_note } : {}),
       osv_cached: meta.osv_cached,
       ...(meta.private_packages ? { private_packages: meta.private_packages } : {}),
       ...(meta.unreadable_lockfile ? { unreadable_lockfile: meta.unreadable_lockfile } : {}),

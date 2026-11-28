@@ -25,6 +25,8 @@ import { LiveIntelligence } from "../live/index.js";
 import { runDependencyCheck } from "../tools/dependency-check.js";
 import { parseTarget } from "../tools/dependency-check-versions.js";
 import { emptyNet, npmDoc, onlineForTests, stubNet } from "./helpers/a1119-check-net.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = join(root, "hooks", "manifest-edit.mjs");
@@ -88,7 +90,7 @@ function callIn(reason: string): { items: Array<Record<string, string>> } {
 
 function ledger(entries: Array<Partial<LedgerEntry> & { package: string; version: string; verdict: string }>, ageMs = 60_000) {
   const t = new Date(Date.now() - ageMs).toISOString();
-  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ t, ecosystem: "npm", ...e })).join("\n") + "\n");
+  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", ...e })).join("\n") + "\n");
 }
 
 /** A package.json on disk and an Edit of lodash's version in it. */
@@ -101,9 +103,9 @@ function lodashEdit(to: string, from = "4.17.21") {
 describe("registration", () => {
   const hooks = JSON.parse(readFileSync(join(root, "hooks", "hooks.json"), "utf8")) as { hooks: Record<string, Array<{ matcher: string; hooks: Array<Record<string, unknown>> }>> };
 
-  it("runs before Edit, MultiEdit, Write, Bash and PowerShell, and a hook that cannot run never blocks", () => {
+  it("runs before Edit, MultiEdit, Write, NotebookEdit, Bash and PowerShell, and a hook that cannot run never blocks", () => {
     const [entry] = hooks.hooks.PreToolUse;
-    expect(entry.matcher.split("|").sort()).toEqual(["Bash", "Edit", "MultiEdit", "PowerShell", "Write"]);
+    expect(entry.matcher.split("|").sort()).toEqual(["Bash", "Edit", "MultiEdit", "NotebookEdit", "PowerShell", "Write"]);
     expect(entry.hooks[0]).toMatchObject({ type: "command", onFailure: "continue" });
     expect(String(entry.hooks[0].command)).toContain("${CLAUDE_PLUGIN_ROOT}/hooks/manifest-edit.mjs");
   });
@@ -150,7 +152,7 @@ describe("an exact version, by what the ledger holds", () => {
         { t: t(2 * HOUR), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "proceed" },
         { t: t(HOUR), ecosystem: "npm", package: "lodash", version: "4.17.20", verdict: "avoid", reason: "a new advisory" },
       ]
-        .map((e) => JSON.stringify(e))
+        .map((e) => JSON.stringify({ sv: "6.6.0", ...e }))
         .join("\n"),
     );
     expect(denied(hook(lodashEdit("4.17.20")))).toContain("a new advisory");
@@ -169,7 +171,7 @@ describe("an exact version, by what the ledger holds", () => {
   });
 
   it("a package a private-registry rule covers goes ahead (it is never looked up), as in 6.5.0; one a project takes from elsewhere is held", () => {
-    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private" }]);
+    ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "private", private_rule: "listed" }]);
     allowed(hook(lodashEdit("4.17.20")));
     // A git, path, workspace or alias source does not apply to the registry release (a651-hook-withheld.test.ts).
     ledger([{ package: "lodash", version: "1.0.0", verdict: "unknown", not_checked: "local_source" }]);
@@ -238,14 +240,31 @@ describe("it fails open", () => {
   });
 
   it("input it does not understand: exit 0, no output", () => {
-    for (const payload of ["not json", "", "[]", "null", { hook_event_name: "PreToolUse" }, { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: "x" }, { tool_name: "Bash", tool_input: { command: "npm i lodash@4.17.20" } }, pre("Read", { file_path: "package.json" }), pre("Bash", { command: 42 }), pre("Edit", { file_path: 7 })]) {
+    for (const payload of ["", "[]", "null", { hook_event_name: "PreToolUse" }, { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: "x" }, { tool_name: "Bash", tool_input: { command: "npm i lodash@4.17.20" } }, pre("Read", { file_path: "package.json" }), pre("Edit", { file_path: 7 })]) {
       expect(hook(payload), JSON.stringify(payload)).toEqual({ status: 0, stdout: "" });
     }
   });
 
-  it("garbage and torn lines in the ledger are skipped; the good ones still count", () => {
-    writeFileSync(join(home, LEDGER_FILE), `not json\n{"t":"x"}\n{"t":"${new Date().toISOString()}","ecosystem":"npm","package":"lodash","version":"4.17.20","verdict":"proceed"}\n{"t":"2026`);
+  // Round 26b (F10): a Bash command that is not a string is held, not ignored.
+  it("a Bash command that is not a string is held", () => {
+    expect(hook(pre("Bash", { command: 42 })).stdout).toContain("deny");
+  });
+
+  // Round 13: a payload that does not parse at all is held where a ledger exists (eleventh independent check, S31).
+  it("a payload that does not parse is held", () => {
+    expect(hook("not json").stdout).toContain("could not read it");
+  });
+
+  it("garbage and torn lines in the ledger are skipped; the good ones after them still count", () => {
+    writeFileSync(join(home, LEDGER_FILE), `not json\n{"t":"x"}\n{"t":"2026\n{"sv":"6.6.0","t":"${new Date().toISOString()}","ecosystem":"npm","package":"lodash","version":"4.17.20","verdict":"proceed"}\n`);
     allowed(hook(lodashEdit("4.17.20")));
+  });
+
+  // Round 14 (R9, S35): a line cut before its package could have been any package's answer: the
+  // lines before it no longer count (a proceed before it does not stand in for it).
+  it("a torn line after a proceed, cut before its package: the proceed no longer counts", () => {
+    writeFileSync(join(home, LEDGER_FILE), `{"t":"${new Date().toISOString()}","ecosystem":"npm","package":"lodash","version":"4.17.20","verdict":"proceed"}\n{"t":"2026`);
+    denied(hook(lodashEdit("4.17.20")));
   });
 
   it("an edit that changes no dependency version, or a file that is not a manifest, says nothing", () => {
@@ -311,7 +330,7 @@ describe("edits are applied to the file as the tool will apply them", () => {
 describe("a very large manifest is answered, not timed out", () => {
   it("a Write of 40,000 dependencies against a full ledger names the first 25 and counts the rest", () => {
     const t = new Date().toISOString();
-    writeFileSync(join(home, LEDGER_FILE), Array.from({ length: 4000 }, (_, i) => JSON.stringify({ t, ecosystem: "npm", package: `other-${i}`, version: "1.0.0", verdict: "proceed" })).join("\n"));
+    writeFileSync(join(home, LEDGER_FILE), Array.from({ length: 4000 }, (_, i) => JSON.stringify({ sv: "6.6.0", t, ecosystem: "npm", package: `other-${i}`, version: "1.0.0", verdict: "proceed" })).join("\n"));
     const deps = Object.fromEntries(Array.from({ length: 40_000 }, (_, i) => [`pkg-${i}`, `1.0.${i}`]));
     const reason = denied(hook(pre("Write", { file_path: join(project, "package.json"), content: JSON.stringify({ name: "app", dependencies: deps }, null, 2) })));
     expect(callIn(reason).items).toHaveLength(25);
@@ -431,29 +450,20 @@ describe("install commands", () => {
     "npm install",
     "npm ci",
     "pnpm install",
-    "npm install lodash",
-    "npm install lodash@latest",
-    "npm install lodash@next",
+    // A package named without a version, `@latest`, a dist-tag or a version-less alias is read since wave 2
+    // (the request "latest", or the tag): a1125-w2-hook-bare-names.test.ts.
     "npm install github:lodash/lodash",
     "npm install ./local-pkg",
-    "npm install my-lodash@npm:lodash",
-    "npm install --registry https://npm.example.com lodash@4.17.20",
+    "npm install --registry https://npm.corp lodash@4.17.20",
     "npm install $PKG",
     "npm install lodash@$(cat version)",
     "npm install `echo lodash@4.17.20`",
     "pip install -r requirements.txt",
-    "pip install requests",
-    "pip install requests>=2.31",
-    "pip install --index-url https://pypi.example.com/simple requests==2.31.0",
-    "uv add --index https://pypi.example.com/simple requests==2.31.0",
-    "cargo add serde",
-    "cargo add mycrate@1.0.0 --registry corp",
+    // (round 16, J3: an index is the project's own only when private by shape: .corp, .internal ...)
+    "pip install --index-url https://pypi.internal/simple requests==2.31.0",
+    // (round 18, M5: uv's --index adds to PyPI, so `uv add --index https://pypi.internal/simple requests==2.31.0` is judged)
     "cargo add mycrate@1.0.0 --git https://example.com/repo",
-    "poetry add requests@latest",
-    "poetry add requests@^2.31 --source corp",
-    "go get github.com/spf13/cobra@latest",
     "go get ./...",
-    "go install golang.org/x/tools/gopls@v0.16.2",
     "cat <<EOF > package.json",
     "echo npm install lodash@4.17.20",
     // A subshell `(npm install lodash@4.17.20)` is read since 6.5.1 (a651-hook-command-prefixes-and-aliases).
@@ -462,15 +472,22 @@ describe("install commands", () => {
     expect(installsIn(command, "bash")).toEqual([]);
   });
 
-  it("a command it does not read goes ahead, run as Claude Code runs the hook", () => {
-    for (const command of ["npm ci", "npm install $PKG", "pip install --index-url https://pypi.example.com/simple requests==2.31.0"]) allowed(hook(bash(command)));
+  it("a command that installs nothing new from the public registry goes ahead, run as Claude Code runs the hook", () => {
+    for (const command of ["npm ci", "pip install --index-url https://pypi.internal/simple requests==2.31.0"]) allowed(hook(bash(command)));
+  });
+
+  // Round 8 (R8-2): an install the hook cannot read (a variable) is held as not read, no longer let through.
+  it("an install it cannot read is held as not read", () => {
+    expect(hook(bash("npm install $PKG")).stdout).toContain("could not be read");
   });
 
   it("the tokenizer reads redirections and separators, and refuses what it cannot read exactly", () => {
     expect(simpleCommands("a b > out.txt; c 2>/dev/null && d >> log || e &", "bash")).toEqual([["a", "b"], ["c"], ["d"], ["e"]]);
     expect(simpleCommands("a 'b c' \"d e\"", "bash")).toEqual([["a", "b c", "d e"]]);
     expect(simpleCommands("a \\\n  b", "bash")).toEqual([["a", "b"]]);
-    for (const line of ["a $X", "a \"$X\"", "a `b`", "a $(b)", "a 'open", "a <<EOF", "a \\x"]) expect(simpleCommands(line, "bash"), line).toBeNull();
+    for (const line of ["a $X", "a \"$(b)\"", "a `b`", "a $(b)", "a 'open", "a <<EOF", "a \\x"]) expect(simpleCommands(line, "bash"), line).toBeNull();
+    // Round 29: a plain variable inside double quotes is an opaque NUL in its word, no reader's verb or package.
+    expect(simpleCommands('a "$X"', "bash")).toEqual([["a", "\u0000"]]);
     expect(simpleCommands("C:\\tools\\npm.cmd install x@1.0.0", "powershell")).toEqual([["C:\\tools\\npm.cmd", "install", "x@1.0.0"]]);
     for (const line of ["npm i `", "npm i $v", "npm i a,b", "npm --% i x"]) expect(simpleCommands(line, "powershell"), line).toBeNull();
   });
@@ -499,7 +516,7 @@ describe("the ledger the server writes is the one the hook reads", () => {
         { ecosystem: "npm", package: "lodash", to: "4.18.1", verdict: "proceed" },
         { ecosystem: "PyPI", package: "Django", to: "5.1", verdict: "proceed" },
         { ecosystem: "Go", package: "github.com/spf13/cobra", to: "v1.10.2", verdict: "proceed" },
-        { ecosystem: "crates.io", package: "serde_json", to: "1.0.140", verdict: "review" },
+        { ecosystem: "crates.io", package: "serde_json", to: "1.0.140", to_requested: "1.0.140", verdict: "review" }, // round 20, Q1: the server answers a bare crates.io version as the caret reading
       ],
       { dir: home },
     );

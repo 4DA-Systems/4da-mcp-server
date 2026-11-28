@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
+ * NOTES: how it reads; not part of the contract (what-should-i-know.ts THE CONTRACT).
+ *
  * what_should_i_know and private packages (pre-publish audit 2026-11-13, S3). A task that upgrades
  * a private package (`@acme/vault-core`, private by the project's `.npmrc`) came back "No
  * dependency of this project is named in the task" and safe_to_delegate: private copies are kept
@@ -11,6 +13,7 @@
 import { AMBIGUOUS_SPEC_MARK, NOT_REGISTRY_MARK, UNREAD_CATALOG_MARK } from "../live/private-packages.js";
 import type { ResolvedDependency } from "../live/types.js";
 import { detectTaskPackages } from "./briefing-task-scope.js";
+import { boundWords, MAX_TASK_WORD } from "./briefing-task-screen.js";
 
 export interface PrivateTaskPackage {
   package: string;
@@ -35,10 +38,15 @@ export interface PrivateLookup {
 /** Tokens that can be a package name the project does not install yet: a scoped npm name, a module path, a plain name. */
 const NAME_TOKEN = /(@[a-z0-9][\w.-]*\/[a-z0-9][\w.-]*|[a-z0-9][\w.-]*(?:\/[\w.-]+)+|[a-z0-9][\w.-]{2,})/gi;
 const ECOSYSTEMS = ["npm", "crates.io", "PyPI", "Go", "RubyGems", "Packagist"];
+/** How many distinct words of a task are asked of the private rules. */
+const MAX_PRIVATE_WORDS = 1_000;
 
 /** The private packages a task names: installed private dependencies it touches, and any name the private rules cover. */
 export function privateTaskPackages(task: string, files: string[], live: PrivateLookup | null): PrivateTaskPackage[] {
   if (!live) return [];
+  // No package name is longer than MAX_TASK_WORD, and no reader reads a longer word (briefing-task-screen.ts):
+  // the forms of a 199,000-character word took 89 s (pre-publish audit 2026-11-25, F-M3).
+  task = boundWords(task);
   const out = new Map<string, PrivateTaskPackage>();
   const why = new Map((live.getPrivateDependencies?.() ?? []).map((p) => [`${p.ecosystem}\0${p.name}`, p.why]));
   const unread = new Map((live.getPrivateDependencies?.() ?? []).filter((p) => p.unreadable_file).map((p) => [`${p.ecosystem}\0${p.name}`, p.unreadable_file!]));
@@ -77,7 +85,15 @@ export function privateTaskPackages(task: string, files: string[], live: Private
     });
   }
   if (live.privateReason) {
-    for (const token of task.match(NAME_TOKEN) ?? []) {
+    // Each distinct word once: "x@y.x@y.x@y..." is 20,000 words of one spelling, each asked of every
+    // ecosystem's rules (1.4 s at 80,000 characters).
+    // At most MAX_PRIVATE_WORDS of them (199,000 characters of distinct words took 1.5 s here): past it no
+    // word is labelled private, but none is sent either, since a reader reads at most MAX_READ_PACKAGES
+    // names and every one is asked of the private rules again before any lookup (re-check, item 3).
+    let asked = 0;
+    for (const token of new Set(task.match(NAME_TOKEN) ?? [])) {
+      if (token.length > MAX_TASK_WORD) continue;
+      if (++asked > MAX_PRIVATE_WORDS) break;
       const name = token.replace(/[.,;:]+$/, "");
       for (const asked of ECOSYSTEMS) {
         // The ecosystem that makes it private, not the first one asked (blind audit round 5, 5).
@@ -121,8 +137,18 @@ export function privateAdvisoryText(found: PrivateTaskPackage[]): string {
   const unread = found.filter((p) => p.unreadable_file);
   const notRegistry = (p: PrivateTaskPackage) => p.why.includes(NOT_REGISTRY_MARK) || p.why.includes(UNREAD_CATALOG_MARK) || p.why.includes(AMBIGUOUS_SPEC_MARK);
   const local = found.filter((p) => !p.unreadable_file && notRegistry(p));
-  const priv = found.filter((p) => !p.unreadable_file && !notRegistry(p));
+  // Round 7, C9a: a dependency the project has that the caller marked private was still read by the project's own
+  // scan: never "nothing about it was looked up" for it.
+  const scanned = (p: PrivateTaskPackage) => /^marked private by the caller: not looked up for the task/.test(p.why);
+  const yours = found.filter((p) => !p.unreadable_file && scanned(p));
+  const priv = found.filter((p) => !p.unreadable_file && !notRegistry(p) && !scanned(p));
   const parts: string[] = [];
+  if (yours.length > 0) {
+    const one = yours.length === 1;
+    parts.push(
+      `the task touches ${yours.map(label).join(", ")}, which you marked private: this briefing did not look ${one ? "it" : "them"} up for the task, and this project's own scan still read ${one ? "it" : "them"} with the installed dependencies (task_packages.checked)`,
+    );
+  }
   if (unread.length > 0) {
     const one = unread.length === 1;
     const files = [...new Set(unread.map((p) => p.unreadable_file!))].join(", ");

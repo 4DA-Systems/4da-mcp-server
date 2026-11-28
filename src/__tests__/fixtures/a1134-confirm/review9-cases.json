@@ -1,0 +1,5950 @@
+{
+ "holes": {"{{H0}}":["gh","p_Zq9xVb2Lm4Np6Rt0Wy3Kc5Hd7Jf9Gs1Ae2Qz"]},
+ "source": "review-confirm9 (ninth independent check, 2026-12-04)",
+ "cases": [
+  {
+   "set": "a9",
+   "id": "bare-req",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add to requirements.txt:\n```requirements\nzqxp9a <2\nzqxp9b == 1.0\n```"
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "bare-alias",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add mylib9@npm:zqxp9c@1.0.0 and other9@npm:@zqxp9s/core@\"1.0.0\" to the app."
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "bare-json",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "package.json:\n```json\n{ \"dependencies\": { \"zqxp9d\": \"1.0.0\", \"al9\": \"npm:zqxp9e@^1\" } }\n```"
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "bare-cargo",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies]\nzqxp9f = \"1.0\"\nren9 = { package = \"zqxp9g\", version = \"1\" }\n```"
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "bare-gomod",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "go.mod:\n```\nrequire (\n\texample.com/zqxp9h/lib v1.0.0 // indirect\n)\n```"
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "bare-pep",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Pin zqxp9i==1.0.0, zqxp9j~=2.1 and zqxp9k>=1,<2; also zqxp9l = \"1.2\"."
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "bare-pyproj",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "pyproject.toml:\n```toml\n[project]\ndependencies = [\"zqxp9m>=1\", \"zqxp9n[x] ; python_version>'3'\"]\n[tool.poetry.dependencies]\nzqxp9o = { version = \">=1\" }\n```"
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "bare-quoted",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Use zqxp9p@'1.0.0' and zqxp9q@\"2.0.0\" in the build."
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "empty-req",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add to requirements.txt:\n```requirements\nzqxp9a <2\nzqxp9b == 1.0\n```",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "empty-alias",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add mylib9@npm:zqxp9c@1.0.0 and other9@npm:@zqxp9s/core@\"1.0.0\" to the app.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "empty-json",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "package.json:\n```json\n{ \"dependencies\": { \"zqxp9d\": \"1.0.0\", \"al9\": \"npm:zqxp9e@^1\" } }\n```",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "empty-cargo",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies]\nzqxp9f = \"1.0\"\nren9 = { package = \"zqxp9g\", version = \"1\" }\n```",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "empty-gomod",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "go.mod:\n```\nrequire (\n\texample.com/zqxp9h/lib v1.0.0 // indirect\n)\n```",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "empty-pep",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Pin zqxp9i==1.0.0, zqxp9j~=2.1 and zqxp9k>=1,<2; also zqxp9l = \"1.2\".",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "empty-pyproj",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "pyproject.toml:\n```toml\n[project]\ndependencies = [\"zqxp9m>=1\", \"zqxp9n[x] ; python_version>'3'\"]\n[tool.poetry.dependencies]\nzqxp9o = { version = \">=1\" }\n```",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "empty-quoted",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Use zqxp9p@'1.0.0' and zqxp9q@\"2.0.0\" in the build.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "priv-pep-variants",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n```\nZqx_Priv9A==1.0.0\nzqx.priv9a <2\n```\nand pip install zqx-priv9a==1.0.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-priv9a",
+        "version": "1.0.0",
+        "public": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "priv-npm-scope-case",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run npm install @ZQXS9/lib@1.0.0 and add \"@zqxs9/lib\": \"1.0.0\" to package.json; alias x9@npm:@zqxs9/lib@1.0.0.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "@zqxs9/lib",
+        "version": "1.0.0",
+        "public": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "priv-crate-sep",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Run cargo add zqx-priv9b@1.0.0.\nCargo.toml:\n```toml\n[dependencies]\nzqx_priv9b = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx_priv9b",
+        "version": "1.0.0",
+        "public": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "priv-go-case",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "Run go get example.com/zqxpriv9c/lib@v1.0.0",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "example.com/zqxpriv9c/lib",
+        "version": "v1.0.0",
+        "public": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "priv-and-public-other-eco",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "pip install zqxpriv9d==1.0.0 and npm install zqxpriv9d@1.0.0",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqxpriv9d",
+        "version": "1.0.0",
+        "public": false
+       },
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "np-case",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run npm install ZQXNP9A@1.0.0 now.",
+      "packages": [],
+      "not_packages": [
+       "zqxnp9a"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "np-fullwidth",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install zqxnp９b==1.0.0",
+      "packages": [],
+      "not_packages": [
+       "zqxnp9b"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "np-fold",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n```\nzqx_np9c==1.0.0\n```",
+      "packages": [],
+      "not_packages": [
+       "zqx-np9c"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "np-alias-target",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add mylib@npm:zqxnp9d@1.0.0.",
+      "packages": [],
+      "not_packages": [
+       "zqxnp9d",
+       "mylib"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "np-json",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "{\"dependencies\": {\"zqxnp9e\": \"1.0.0\"}}",
+      "packages": [],
+      "not_packages": [
+       "ZQXNP9E"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-conda",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run conda install zqxk9a=1.0",
+      "packages": [],
+      "not_packages": [
+       "zqxk9a"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-pdm",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pdm add zqxk9b",
+      "packages": [],
+      "not_packages": [
+       "zqxk9b"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-redirect",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run npm install zqxk9c > log.txt",
+      "packages": [],
+      "not_packages": [
+       "zqxk9c"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-option",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run npm install --foo zqxk9d",
+      "packages": [],
+      "not_packages": [
+       "zqxk9d"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-brew",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run brew install zqxk9e",
+      "packages": [],
+      "not_packages": [
+       "zqxk9e"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-xargs",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run cat list | xargs npm install zqxk9f",
+      "packages": [],
+      "not_packages": [
+       "zqxk9f"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-bare",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run npm install --foo zqxk9g"
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-snippet",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n```\nzqxk9h <2\n-e ./zqxk9i\n```"
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "k3-snippet-np",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n```\nzqxk9j <2\n-e ./zqxk9k\n```",
+      "packages": [],
+      "not_packages": [
+       "zqxk9j"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "sec-req",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n```\nghp_Zq9xVb2Lm4Np6Rt0Wy3Kc5Hd7Jf9Gs1Ae2Qz==1.0\n```",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "sec-json",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "{\"dependencies\": {\"zqxok\": \"{{H0}}\"}}",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "sec-form",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Use zqxok@{{H0}} in CI.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "sec-toml",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "[dependencies]\nzqx-okrs = \"{{H0}}\"",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-okrs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "sec-alias",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add x@npm:zqxok@{{H0}}.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "a9",
+   "id": "sec-ver-decl",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxok.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "1.0.0 --registry=https://user:{{H0}}@r.example",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-blank-fence",
+   "template": "py",
+   "task": "Write this to requirements.txt:\n\n```\nzqx-vuln-py <2\nflask==3.0.3\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-spaced-eq",
+   "template": "py",
+   "task": "Add zqx-vuln-py == 1.0.0 to the project.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-spaced-eq2",
+   "template": "py",
+   "task": "Add zqx-vuln-py ==1.0.0 to the project.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-spaced-eq3",
+   "template": "py",
+   "task": "Add zqx-vuln-py== 1.0.0 to the project.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-spaced-lt",
+   "template": "py",
+   "task": "Add zqx-vuln-py < 2 to the project.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-spaced-compat",
+   "template": "py",
+   "task": "Add zqx-vuln-py ~= 1.0 to the project.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-oneline-tail",
+   "template": "py",
+   "task": "Add to requirements.txt: zqx-vuln-py ~= 1.0 (we need the old API).",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-oneline-and",
+   "template": "py",
+   "task": "Add to requirements.txt: zqx-vuln-py <2 and keep flask.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-comment-first",
+   "template": "py",
+   "task": "Update requirements.txt:\n# security pins\nzqx-vuln-py <2\nflask==3.0.3",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-txt-fence",
+   "template": "py",
+   "task": "Use these requirements:\n```txt\nzqx-vuln-py <2\nflask==3.0.3\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-plain-fence",
+   "template": "py",
+   "task": "Use these requirements:\n```\nzqx-vuln-py <2\nflask==3.0.3\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-text-fence-named",
+   "template": "py",
+   "task": "requirements.txt:\n```text\nzqx-vuln-py <2\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-tilde-fence",
+   "template": "py",
+   "task": "requirements.txt:\n~~~\nzqx-vuln-py <2\n~~~",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-indented",
+   "template": "py",
+   "task": "requirements.txt:\n    zqx-vuln-py <2\n    flask==3.0.3",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-diff",
+   "template": "py",
+   "task": "Apply this patch:\n```diff\n--- a/requirements.txt\n+++ b/requirements.txt\n@@ -1 +1,2 @@\n flask==3.0.3\n+zqx-vuln-py <2\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-heredoc",
+   "template": "py",
+   "task": "Run:\ncat > requirements.txt <<EOF\nzqx-vuln-py <2\nflask==3.0.3\nEOF",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-echo",
+   "template": "py",
+   "task": "Run: echo \"zqx-vuln-py <2\" >> requirements.txt",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-optdeps",
+   "template": "py",
+   "task": "In pyproject.toml:\n```toml\n[project.optional-dependencies]\ndev = [\"zqx-vuln-py < 2\"]\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-depgroups",
+   "template": "py",
+   "task": "In pyproject.toml:\n```toml\n[dependency-groups]\ndev = [\"zqx-vuln-py < 2\"]\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-pep621-spaced",
+   "template": "py",
+   "task": "In pyproject.toml:\n```toml\n[project]\ndependencies = [\n  \"zqx-vuln-py < 2\",\n]\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-pep621-extras-first",
+   "template": "py",
+   "task": "In pyproject.toml:\n```toml\n[project]\ndependencies = [\"flask[async]>=2\", \"zqx-vuln-py < 2\"]\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-crlf",
+   "template": "py",
+   "task": "requirements.txt:\r\n```\r\nzqx-vuln-py <2\r\nflask==3.0.3\r\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-tab",
+   "template": "py",
+   "task": "```requirements\nzqx-vuln-py\t<2\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-bom",
+   "template": "py",
+   "task": "﻿requirements.txt:\nzqx-vuln-py <2",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-bslash",
+   "template": "py",
+   "task": "```requirements\nzqx-vuln-py <2 \\\n    --hash=sha256:abcdef\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-paren",
+   "template": "py",
+   "task": "```requirements\nzqx-vuln-py (<2)\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-marker-q",
+   "template": "py",
+   "task": "```requirements\nzqx-vuln-py <2 ; python_version >= \"3.8\"\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-comment-after",
+   "template": "py",
+   "task": "```requirements\nzqx-vuln-py <2  # old API\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-comment-nospace",
+   "template": "py",
+   "task": "```requirements\nzqx-vuln-py <2# old API\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-url-req",
+   "template": "py",
+   "task": "```requirements\nzqx-vuln-py[cli] @ https://files.pythonhosted.org/zqx_vuln_py-1.0.0.whl\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-editable",
+   "template": "py",
+   "task": "```requirements\n-e git+https://github.com/x/zqx-vuln-py@v1.0.0#egg=zqx-vuln-py\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-constraints",
+   "template": "py",
+   "task": "```requirements\n-c constraints.txt\nzqx-vuln-py\n```\nconstraints.txt:\nzqx-vuln-py <2",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-poetry-inline",
+   "template": "py",
+   "task": "```toml\n[tool.poetry.dependencies]\nzqx-vuln-py = { version = \"<2\" , optional = true }\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-poetry-dotted",
+   "template": "py",
+   "task": "```toml\n[tool.poetry.dependencies.zqx-vuln-py]\nversion = \"<2\"\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-uv-add-q",
+   "template": "py",
+   "task": "Run uv add 'zqx-vuln-py <2'.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-pip-spaced-op",
+   "template": "py",
+   "task": "Run `pip install zqx-vuln-py <2`.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-pip-q-spaced",
+   "template": "py",
+   "task": "Run `pip install \"zqx-vuln-py < 2\"`.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-prose-pin",
+   "template": "py",
+   "task": "Pin zqx-vuln-py to 1.0.0.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-prose-ver",
+   "template": "py",
+   "task": "Use zqx-vuln-py version 1.0.0.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-setup-cfg",
+   "template": "py",
+   "task": "```ini\n[options]\ninstall_requires =\n    zqx-vuln-py < 2\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-setup-py",
+   "template": "py",
+   "task": "```python\nsetup(install_requires=[\"zqx-vuln-py < 2\"])\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-pipfile",
+   "template": "py",
+   "task": "```toml\n[packages]\nzqx-vuln-py = \"<2\"\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "py-conda-yml",
+   "template": "py",
+   "task": "environment.yml:\n```yaml\ndependencies:\n  - pip:\n    - zqx-vuln-py < 2\n```",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "zqx-vuln-py",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-dotted-table",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[dependencies.zqx-vuln-rs]\nversion = \"1.0.0\"\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-target-table",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[target.'cfg(windows)'.dependencies]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-workspace-table",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[workspace.dependencies]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-dotted-key",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs.version = \"1.0.0\"\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-rename",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[dependencies]\nfoo = { package = \"zqx-vuln-rs\", version = \"1.0.0\" }\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-inline-eq",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs = { version = \"=1.0.0\", features = [\"x\"] }\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-multiline-inline",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs = { version = \"1.0.0\",\n  features = [\"x\"] }\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-header-comment",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[dependencies] # deps\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-header-spaces",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[ dependencies ]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-cargo-add-vers",
+   "template": "rs",
+   "task": "Run `cargo add zqx-vuln-rs --vers 1.0.0`.",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-cargo-add-at",
+   "template": "rs",
+   "task": "Run `cargo add zqx-vuln-rs@1.0.0`.",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-cargo-install",
+   "template": "rs",
+   "task": "Run `cargo install zqx-vuln-rs --version 1.0.0`.",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-prose-pin",
+   "template": "rs",
+   "task": "Pin zqx-vuln-rs to 1.0.0.",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-version-key-sq",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs = { version = '1.0.0' }\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "rs-plain-sq",
+   "template": "rs",
+   "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs = '1.0.0'\n```",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "zqx-vuln-rs",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-block-indirect",
+   "template": "go",
+   "task": "go.mod:\n```\nrequire (\n\tgithub.com/zqxevil/mod v1.0.0 // indirect\n)\n```",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-get",
+   "template": "go",
+   "task": "Run `go get github.com/zqxevil/mod@v1.0.0`.",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-single",
+   "template": "go",
+   "task": "go.mod:\n```\nrequire github.com/zqxevil/mod v1.0.0\n```",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-subpkg-get",
+   "template": "go",
+   "task": "Run `go get github.com/zqxevil/mod/cmd/tool@v1.0.0`.",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-install-sub",
+   "template": "go",
+   "task": "Run `go install github.com/zqxevil/mod/cmd/tool@v1.0.0`.",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-prose",
+   "template": "go",
+   "task": "Pin github.com/zqxevil/mod to v1.0.0.",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-exclude",
+   "template": "go",
+   "task": "go.mod:\n```\nrequire github.com/zqxevil/mod v1.2.0\nexclude github.com/zqxevil/mod v1.2.0\n```",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-block-crlf",
+   "template": "go",
+   "task": "go.mod:\r\n```\r\nrequire (\r\n\tgithub.com/zqxevil/mod v1.0.0\r\n)\r\n```",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "go-block-paren-comment",
+   "template": "go",
+   "task": "go.mod:\n```\nrequire ( // deps\n\tgithub.com/zqxevil/mod v1.0.0\n)\n```",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/zqxevil/mod",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-pkg-set",
+   "template": "npm",
+   "task": "Run `npm pkg set dependencies.zqxcrit4=1.0.0` then npm install.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-overrides",
+   "template": "npm",
+   "task": "package.json:\n```json\n{ \"overrides\": { \"zqxcrit4\": \"1.0.0\" } }\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-resolutions",
+   "template": "npm",
+   "task": "package.json:\n```json\n{ \"resolutions\": { \"**/zqxcrit4\": \"1.0.0\" } }\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-comment",
+   "template": "npm",
+   "task": "package.json:\n```jsonc\n{ \"dependencies\": { // pinned\n \"zqxcrit4\": \"1.0.0\" } }\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-json-shell",
+   "template": "npm",
+   "task": "Run: echo '{\"dependencies\":{\"zqxcrit4\":\"1.0.0\"}}' > package.json",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-yaml-catalog",
+   "template": "npm",
+   "task": "pnpm-workspace.yaml:\n```yaml\ncatalog:\n  zqxcrit4: 1.0.0\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-js-sq",
+   "template": "npm",
+   "task": "```js\nconst deps = { 'zqxcrit4': '1.0.0' }\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-at-space",
+   "template": "npm",
+   "task": "Add zqxcrit4 @ 1.0.0 to the app.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-fullwidth-at",
+   "template": "npm",
+   "task": "Add zqxcrit4＠1.0.0 to the app.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-alias-upper",
+   "template": "npm",
+   "task": "Add mylib@NPM:zqxcrit4@1.0.0 to the app.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-alias-q",
+   "template": "npm",
+   "task": "Add mylib@npm:zqxcrit4@\"1.0.0\" to the app.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-alias-scope-q",
+   "template": "npm",
+   "task": "Run npm install \"mylib@npm:zqxcrit4@1.0.0\".",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-json-alias-sq",
+   "template": "npm",
+   "task": "```json\n\"mylib\": \"npm:zqxcrit4@1.0.0\"\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-dup-keys",
+   "template": "npm",
+   "task": "package.json:\n```json\n{ \"dependencies\": { \"zqxcrit4\": \"2.0.0\", \"zqxcrit4\": \"1.0.0\" } }\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-bundle",
+   "template": "npm",
+   "task": "package.json:\n```json\n{ \"dependencies\": { \"zqxcrit4\": \"^2.0.0\" }, \"bundleDependencies\": [\"zqxcrit4\"] }\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "2.0.0",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-workspace-proto",
+   "template": "npm",
+   "task": "package.json:\n```json\n{ \"dependencies\": { \"zqxcrit4\": \"workspace:1.0.0\" } }\n```",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-npm-i-sq-spaced",
+   "template": "npm",
+   "task": "Run npm install 'zqxcrit4@ 1.0.0'.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-pnpm-catalog-cmd",
+   "template": "npm",
+   "task": "Run `pnpm add zqxcrit4@catalog:` with catalog zqxcrit4 1.0.0.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-npx-ver",
+   "template": "npm",
+   "task": "Run `npx zqxcrit4@1.0.0 init`.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-yarn-dlx",
+   "template": "npm",
+   "task": "Run `yarn dlx zqxcrit4@1.0.0`.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-prose-v",
+   "template": "npm",
+   "task": "Pin zqxcrit4 to v1.0.0.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "latest",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9-agent",
+   "id": "npm-two-specs",
+   "template": "npm",
+   "task": "Add zqxcrit4@2.0.0 to the app, and to the legacy app zqxcrit4@1.0.0.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zqxcrit4",
+     "version": "2.0.0",
+     "public": true
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-blank-fence",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Write this to requirements.txt:\n\n```\nzqx-vuln-py <2\nflask==3.0.3\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-spaced-eq",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py == 1.0.0 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-spaced-eq2",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py ==1.0.0 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-spaced-eq3",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py== 1.0.0 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-spaced-lt",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py < 2 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-spaced-compat",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py ~= 1.0 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-oneline-tail",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add to requirements.txt: zqx-vuln-py ~= 1.0 (we need the old API).",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-oneline-and",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add to requirements.txt: zqx-vuln-py <2 and keep flask.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-comment-first",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Update requirements.txt:\n# security pins\nzqx-vuln-py <2\nflask==3.0.3",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-txt-fence",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Use these requirements:\n```txt\nzqx-vuln-py <2\nflask==3.0.3\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-plain-fence",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Use these requirements:\n```\nzqx-vuln-py <2\nflask==3.0.3\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-text-fence-named",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n```text\nzqx-vuln-py <2\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-tilde-fence",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n~~~\nzqx-vuln-py <2\n~~~",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-indented",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n    zqx-vuln-py <2\n    flask==3.0.3",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-diff",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Apply this patch:\n```diff\n--- a/requirements.txt\n+++ b/requirements.txt\n@@ -1 +1,2 @@\n flask==3.0.3\n+zqx-vuln-py <2\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-heredoc",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run:\ncat > requirements.txt <<EOF\nzqx-vuln-py <2\nflask==3.0.3\nEOF",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-echo",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run: echo \"zqx-vuln-py <2\" >> requirements.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-optdeps",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "In pyproject.toml:\n```toml\n[project.optional-dependencies]\ndev = [\"zqx-vuln-py < 2\"]\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-depgroups",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "In pyproject.toml:\n```toml\n[dependency-groups]\ndev = [\"zqx-vuln-py < 2\"]\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-pep621-spaced",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "In pyproject.toml:\n```toml\n[project]\ndependencies = [\n  \"zqx-vuln-py < 2\",\n]\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-pep621-extras-first",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "In pyproject.toml:\n```toml\n[project]\ndependencies = [\"flask[async]>=2\", \"zqx-vuln-py < 2\"]\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-crlf",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\r\n```\r\nzqx-vuln-py <2\r\nflask==3.0.3\r\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-tab",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\nzqx-vuln-py\t<2\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-bom",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "﻿requirements.txt:\nzqx-vuln-py <2",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-bslash",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\nzqx-vuln-py <2 \\\n    --hash=sha256:abcdef\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-paren",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\nzqx-vuln-py (<2)\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-marker-q",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\nzqx-vuln-py <2 ; python_version >= \"3.8\"\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-comment-after",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\nzqx-vuln-py <2  # old API\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-comment-nospace",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\nzqx-vuln-py <2# old API\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-url-req",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\nzqx-vuln-py[cli] @ https://files.pythonhosted.org/zqx_vuln_py-1.0.0.whl\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-editable",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\n-e git+https://github.com/x/zqx-vuln-py@v1.0.0#egg=zqx-vuln-py\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-constraints",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```requirements\n-c constraints.txt\nzqx-vuln-py\n```\nconstraints.txt:\nzqx-vuln-py <2",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-poetry-inline",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```toml\n[tool.poetry.dependencies]\nzqx-vuln-py = { version = \"<2\" , optional = true }\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-poetry-dotted",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```toml\n[tool.poetry.dependencies.zqx-vuln-py]\nversion = \"<2\"\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-uv-add-q",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run uv add 'zqx-vuln-py <2'.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-pip-spaced-op",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `pip install zqx-vuln-py <2`.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-pip-q-spaced",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `pip install \"zqx-vuln-py < 2\"`.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-prose-pin",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Pin zqx-vuln-py to 1.0.0.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-prose-ver",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Use zqx-vuln-py version 1.0.0.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-setup-cfg",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```ini\n[options]\ninstall_requires =\n    zqx-vuln-py < 2\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-setup-py",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```python\nsetup(install_requires=[\"zqx-vuln-py < 2\"])\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-pipfile",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "```toml\n[packages]\nzqx-vuln-py = \"<2\"\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "py-conda-yml",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "environment.yml:\n```yaml\ndependencies:\n  - pip:\n    - zqx-vuln-py < 2\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-dotted-table",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies.zqx-vuln-rs]\nversion = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-target-table",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[target.'cfg(windows)'.dependencies]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-workspace-table",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[workspace.dependencies]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-dotted-key",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs.version = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-rename",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies]\nfoo = { package = \"zqx-vuln-rs\", version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-inline-eq",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs = { version = \"=1.0.0\", features = [\"x\"] }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-multiline-inline",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs = { version = \"1.0.0\",\n  features = [\"x\"] }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-header-comment",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies] # deps\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-header-spaces",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[ dependencies ]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-cargo-add-vers",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `cargo add zqx-vuln-rs --vers 1.0.0`.",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-cargo-add-at",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `cargo add zqx-vuln-rs@1.0.0`.",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-cargo-install",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `cargo install zqx-vuln-rs --version 1.0.0`.",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-prose-pin",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Pin zqx-vuln-rs to 1.0.0.",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-version-key-sq",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs = { version = '1.0.0' }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "rs-plain-sq",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies]\nzqx-vuln-rs = '1.0.0'\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-block-indirect",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "go.mod:\n```\nrequire (\n\tgithub.com/zqxevil/mod v1.0.0 // indirect\n)\n```",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-get",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `go get github.com/zqxevil/mod@v1.0.0`.",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-single",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "go.mod:\n```\nrequire github.com/zqxevil/mod v1.0.0\n```",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-subpkg-get",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `go get github.com/zqxevil/mod/cmd/tool@v1.0.0`.",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-install-sub",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `go install github.com/zqxevil/mod/cmd/tool@v1.0.0`.",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-prose",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "Pin github.com/zqxevil/mod to v1.0.0.",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-exclude",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "go.mod:\n```\nrequire github.com/zqxevil/mod v1.2.0\nexclude github.com/zqxevil/mod v1.2.0\n```",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-block-crlf",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "go.mod:\r\n```\r\nrequire (\r\n\tgithub.com/zqxevil/mod v1.0.0\r\n)\r\n```",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "go-block-paren-comment",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "go.mod:\n```\nrequire ( // deps\n\tgithub.com/zqxevil/mod v1.0.0\n)\n```",
+      "packages": [
+       {
+        "ecosystem": "Go",
+        "name": "github.com/zqxevil/mod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-pkg-set",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `npm pkg set dependencies.zqxcrit4=1.0.0` then npm install.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-overrides",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "package.json:\n```json\n{ \"overrides\": { \"zqxcrit4\": \"1.0.0\" } }\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-resolutions",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "package.json:\n```json\n{ \"resolutions\": { \"**/zqxcrit4\": \"1.0.0\" } }\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-comment",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "package.json:\n```jsonc\n{ \"dependencies\": { // pinned\n \"zqxcrit4\": \"1.0.0\" } }\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-json-shell",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run: echo '{\"dependencies\":{\"zqxcrit4\":\"1.0.0\"}}' > package.json",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-yaml-catalog",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm-workspace.yaml:\n```yaml\ncatalog:\n  zqxcrit4: 1.0.0\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-js-sq",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "```js\nconst deps = { 'zqxcrit4': '1.0.0' }\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-at-space",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxcrit4 @ 1.0.0 to the app.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-fullwidth-at",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxcrit4＠1.0.0 to the app.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-alias-upper",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add mylib@NPM:zqxcrit4@1.0.0 to the app.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "mylib"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-alias-q",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add mylib@npm:zqxcrit4@\"1.0.0\" to the app.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "mylib"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-alias-scope-q",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run npm install \"mylib@npm:zqxcrit4@1.0.0\".",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "mylib"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-json-alias-sq",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "```json\n\"mylib\": \"npm:zqxcrit4@1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "mylib"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-dup-keys",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "package.json:\n```json\n{ \"dependencies\": { \"zqxcrit4\": \"2.0.0\", \"zqxcrit4\": \"1.0.0\" } }\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-bundle",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "package.json:\n```json\n{ \"dependencies\": { \"zqxcrit4\": \"^2.0.0\" }, \"bundleDependencies\": [\"zqxcrit4\"] }\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "2.0.0",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-workspace-proto",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "package.json:\n```json\n{ \"dependencies\": { \"zqxcrit4\": \"workspace:1.0.0\" } }\n```",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-npm-i-sq-spaced",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run npm install 'zqxcrit4@ 1.0.0'.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-pnpm-catalog-cmd",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `pnpm add zqxcrit4@catalog:` with catalog zqxcrit4 1.0.0.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-npx-ver",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `npx zqxcrit4@1.0.0 init`.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-yarn-dlx",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Run `yarn dlx zqxcrit4@1.0.0`.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-prose-v",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Pin zqxcrit4 to v1.0.0.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "b9",
+   "id": "npm-two-specs",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxcrit4@2.0.0 to the app, and to the legacy app zqxcrit4@1.0.0.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "2.0.0",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g0",
+   "template": "npm",
+   "task": "Make the counter go up by one when the button is clicked.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g1",
+   "template": "npm",
+   "task": "The retry delay should go up exponentially; fix src/retry.ts.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g2",
+   "template": "npm",
+   "task": "Go add a unit test for the date parser.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g3",
+   "template": "npm",
+   "task": "Go update the README with the new env vars.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g4",
+   "template": "npm",
+   "task": "Let's go a step further and cache the response in memory.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g5",
+   "template": "npm",
+   "task": "Publish the npm package after bumping the changelog.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g6",
+   "template": "npm",
+   "task": "Our npm package README is out of date; rewrite the usage section.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g7",
+   "template": "py",
+   "task": "Document how to pip install it from source in the README.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g8",
+   "template": "py",
+   "task": "Users can pip install it later; for now add a Makefile target for tests.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g9",
+   "template": "npm",
+   "task": "Mention in the docs that users on macOS can brew install jq for the scripts.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g10",
+   "template": "npm",
+   "task": "Add a note: on Ubuntu, apt install build-essential first.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g11",
+   "template": "rs",
+   "task": "Run cargo package to check the crate builds for publishing.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g12",
+   "template": "rs",
+   "task": "Make sure cargo update does not change the lockfile in CI; add --locked to the workflow.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g13",
+   "template": "go",
+   "task": "The go package docs need an example for the Parse function.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g14",
+   "template": "go",
+   "task": "Go get coffee is not a task; refactor main.go to read config from env.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g15",
+   "template": "npm",
+   "task": "Tell users to npm install globally only if they need the CLI.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g16",
+   "template": "npm",
+   "task": "The yarn lock file is stale; explain in CONTRIBUTING how to regenerate it.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g17",
+   "template": "py",
+   "task": "Add a uv lock step to the CI docs.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g18",
+   "template": "py",
+   "task": "Update the conda package recipe metadata (summary and license).",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g19",
+   "template": "npm",
+   "task": "Write a function that uses the npm package semver-style comparison logic, without adding a dependency.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g20",
+   "template": "npm",
+   "task": "Our bundle size should not go up; add a size-limit check script.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g21",
+   "template": "npm",
+   "task": "Make sure the bun install step in CI caches ~/.bun.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g22",
+   "template": "npm",
+   "task": "Explain why pnpm install is faster in the README.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g23",
+   "template": "npm",
+   "task": "In the README, say: run npm install, then npm test.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g24",
+   "template": "py",
+   "task": "In the README, say: pip install -e . then pytest.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g25",
+   "template": "npm",
+   "task": "Set NODE_ENV=production and make the server go up on port 8080.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g26",
+   "template": "npm",
+   "task": "The dotnet package of our sister project is unrelated; just fix the TypeScript lint errors.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g27",
+   "template": "npm",
+   "task": "Volta pins node; add a volta section to package.json docs.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g28",
+   "template": "npm",
+   "task": "Ask users to gem install bundler only for the docs site.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g29",
+   "template": "npm",
+   "task": "Clean up: go update all the TODO comments in src/.",
+   "truth": []
+  },
+  {
+   "set": "f9g",
+   "id": "g30",
+   "template": "npm",
+   "task": "Add zod for request validation, then go update the handlers to use it.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zod",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g31",
+   "template": "npm",
+   "task": "Add zod; users can npm install it with the CLI later.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zod",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g32",
+   "template": "npm",
+   "task": "Install ky with npm install ky and mention that pnpm add ky also works.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "ky",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g33",
+   "template": "py",
+   "task": "Add httpx to requirements.txt; on macOS brew install openssl first.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "httpx",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g34",
+   "template": "py",
+   "task": "Add pydantic and make the validation errors go up to the API layer.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "pydantic",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g35",
+   "template": "rs",
+   "task": "Add anyhow with cargo add anyhow, and document that cargo update is safe.",
+   "truth": [
+    {
+     "ecosystem": "crates.io",
+     "name": "anyhow",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g36",
+   "template": "go",
+   "task": "Add github.com/rs/zerolog and go update the logger calls.",
+   "truth": [
+    {
+     "ecosystem": "Go",
+     "name": "github.com/rs/zerolog",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g37",
+   "template": "npm",
+   "task": "Upgrade zod to the latest; our npm package exports its types.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "zod",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g38",
+   "template": "npm",
+   "task": "Add hono and publish the npm package.",
+   "truth": [
+    {
+     "ecosystem": "npm",
+     "name": "hono",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "f9g",
+   "id": "g39",
+   "template": "py",
+   "task": "Add httpx; the conda package will follow later.",
+   "truth": [
+    {
+     "ecosystem": "PyPI",
+     "name": "httpx",
+     "version": "latest"
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r1-g0",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Make the counter go up by one when the button is clicked.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r1-g2",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Go add a unit test for the date parser.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r1-g5",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Publish the npm package after bumping the changelog.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r1-g13",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "The go package docs need an example for the Parse function.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r1-g30",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zod for request validation, then go update the handlers to use it.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r1-g34",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add pydantic and make the validation errors go up to the API layer.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "pydantic",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r1-g37",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Upgrade zod to the latest; our npm package exports its types.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r1-g38",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add hono and publish the npm package.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "hono",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r2-g0",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Make the counter go up by one when the button is clicked.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r2-g2",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Go add a unit test for the date parser.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r2-g5",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Publish the npm package after bumping the changelog.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r2-g13",
+   "template": "go",
+   "steps": [
+    {
+     "args": {
+      "task": "The go package docs need an example for the Parse function.",
+      "packages": []
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r2-g30",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zod for request validation, then go update the handlers to use it.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r2-g34",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add pydantic and make the validation errors go up to the API layer.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "pydantic",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r2-g37",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Upgrade zod to the latest; our npm package exports its types.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zod",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "g5rep",
+   "id": "r2-g38",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add hono and publish the npm package.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "hono",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r1-k3rep-conda",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run conda install zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r1-k3rep-mamba",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run mamba install zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r1-k3rep-pixi",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pixi add zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r1-k3rep-gem",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run gem install zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r1-k3rep-composer",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run composer require zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r2-k3rep-conda",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run conda install zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r2-k3rep-mamba",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run mamba install zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r2-k3rep-pixi",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pixi add zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r2-k3rep-gem",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run gem install zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "k3rep",
+   "id": "r2-k3rep-composer",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run composer require zqxk9z",
+      "packages": [],
+      "not_packages": [
+       "zqxk9z"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nm9",
+   "id": "r1-nmp-bare",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxok. Our expresss server is slow.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nm9",
+   "id": "r1-nmp-use",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxok and use expresss for routing.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "expresss"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nm9",
+   "id": "r1-nmp-import",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxok, then import expresss in src/app.ts.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "expresss"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nm9",
+   "id": "r2-nmp-bare",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxok. Our expresss server is slow.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nm9",
+   "id": "r2-nmp-use",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxok and use expresss for routing.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "expresss"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "nm9",
+   "id": "r2-nmp-import",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxok, then import expresss in src/app.ts.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxok",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "expresss"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f1-spaced-eq",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py == 1.0.0 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f1-spaced-lt",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py < 2 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f1-spaced-ge-lt",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py >= 1.0, < 2 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f1-echo",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run: echo \"zqx-vuln-py == 1.0.0\" >> requirements.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f4-txt-fence",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Use these requirements:\n```txt\nzqx-vuln-py <2\nflask==3.0.3\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f4-blank-fence",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Write this to requirements.txt:\n\n```\nzqx-vuln-py <2\nflask==3.0.3\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f4-tilde",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n~~~\nzqx-vuln-py <2\n~~~",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f4-comment-first",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Update requirements.txt:\n# security pins\nzqx-vuln-py <2\nflask==3.0.3",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f5-oneline",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add to requirements.txt: zqx-vuln-py ~= 1.0 (we need the old API).",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f3-optdeps",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "In pyproject.toml:\n```toml\n[project.optional-dependencies]\ndev = [\"zqx-vuln-py < 2\"]\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f2-target",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[target.'cfg(windows)'.dependencies]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f2-workspace",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[workspace.dependencies]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f2-header-spaces",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[ dependencies ]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f2-dotted",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies.zqx-vuln-rs]\nversion = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "toml"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f2-dotted-nolabel",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```\n[dependencies.zqx-vuln-rs]\nversion = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-f2-target-plain",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```\n[target.'cfg(unix)'.dependencies]\nzqx-vuln-rs = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-at",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With pnpm, use zqxcrit4@1.0.0 here.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-at2",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "In this pnpm workspace, pin zqxcrit4@^1.0.0.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-colon",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm: zqxcrit4@1.0.0",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-hatch-at",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With hatch, add zqx-vuln-py==1.0.0 to the env.",
+      "packages": [],
+      "not_packages": [
+       "zqx-vuln-py"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-q-at",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With npm, use \"zqxcrit4@1.0.0\" here.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-plain",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With pnpm, use zqxcrit4 here.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-yarn-ver",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With yarn, add zqxcrit4 1.0.0 to the workspace.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-continued",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With pnpm \\\n  use zqxcrit4@1.0.0.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-fence",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "```\npnpm\nzqxcrit4@1.0.0\n```",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r1-iv-scope",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With pnpm, use @zqxs/core@1.0.0 here.",
+      "packages": [],
+      "not_packages": [
+       "@zqxs/core"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f1-spaced-eq",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py == 1.0.0 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f1-spaced-lt",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py < 2 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f1-spaced-ge-lt",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py >= 1.0, < 2 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f1-echo",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run: echo \"zqx-vuln-py == 1.0.0\" >> requirements.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f4-txt-fence",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Use these requirements:\n```txt\nzqx-vuln-py <2\nflask==3.0.3\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f4-blank-fence",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Write this to requirements.txt:\n\n```\nzqx-vuln-py <2\nflask==3.0.3\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f4-tilde",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "requirements.txt:\n~~~\nzqx-vuln-py <2\n~~~",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f4-comment-first",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Update requirements.txt:\n# security pins\nzqx-vuln-py <2\nflask==3.0.3",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f5-oneline",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add to requirements.txt: zqx-vuln-py ~= 1.0 (we need the old API).",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f3-optdeps",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "In pyproject.toml:\n```toml\n[project.optional-dependencies]\ndev = [\"zqx-vuln-py < 2\"]\n```",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f2-target",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[target.'cfg(windows)'.dependencies]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f2-workspace",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[workspace.dependencies]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f2-header-spaces",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[ dependencies ]\nzqx-vuln-rs = { version = \"1.0.0\" }\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f2-dotted",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```toml\n[dependencies.zqx-vuln-rs]\nversion = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ],
+      "not_packages": [
+       "toml"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f2-dotted-nolabel",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```\n[dependencies.zqx-vuln-rs]\nversion = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-f2-target-plain",
+   "template": "rs",
+   "steps": [
+    {
+     "args": {
+      "task": "Cargo.toml:\n```\n[target.'cfg(unix)'.dependencies]\nzqx-vuln-rs = \"1.0.0\"\n```",
+      "packages": [
+       {
+        "ecosystem": "crates.io",
+        "name": "zqx-vuln-rs",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-at",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With pnpm, use zqxcrit4@1.0.0 here.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-at2",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "In this pnpm workspace, pin zqxcrit4@^1.0.0.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-colon",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "pnpm: zqxcrit4@1.0.0",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-hatch-at",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With hatch, add zqx-vuln-py==1.0.0 to the env.",
+      "packages": [],
+      "not_packages": [
+       "zqx-vuln-py"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-q-at",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With npm, use \"zqxcrit4@1.0.0\" here.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-plain",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With pnpm, use zqxcrit4 here.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-yarn-ver",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With yarn, add zqxcrit4 1.0.0 to the workspace.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-continued",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With pnpm \\\n  use zqxcrit4@1.0.0.",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-fence",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "```\npnpm\nzqxcrit4@1.0.0\n```",
+      "packages": [],
+      "not_packages": [
+       "zqxcrit4"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9",
+   "id": "r2-iv-scope",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "With pnpm, use @zqxs/core@1.0.0 here.",
+      "packages": [],
+      "not_packages": [
+       "@zqxs/core"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9b",
+   "id": "r1-q-space",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxcrit4@\">=1 <2\" to the project.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9b",
+   "id": "r1-q-space-sq",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxcrit4@'~1.0.0 || ~1.0.1' to the project.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9b",
+   "id": "r1-pep-extras-sp",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py[cli, http]==1.0.0 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9b",
+   "id": "r2-q-space",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxcrit4@\">=1 <2\" to the project.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9b",
+   "id": "r2-q-space-sq",
+   "template": "npm",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqxcrit4@'~1.0.0 || ~1.0.1' to the project.",
+      "packages": [
+       {
+        "ecosystem": "npm",
+        "name": "zqxcrit4",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rep9b",
+   "id": "r2-pep-extras-sp",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Add zqx-vuln-py[cli, http]==1.0.0 to the project.",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "set": "rfile",
+   "id": "r1-rfile-paren",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py (<2)\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r1-rfile-spaced",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py == 1.0.0\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r1-rfile-url",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py @ https://files.pythonhosted.org/zqx_vuln_py-1.0.0.whl\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r1-rfile-cont",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py==1.0.0 \\n    --hash=sha256:abc\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r1-rfile-nospace-comment",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py<2#old\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r1-rfile-constraint",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "-c c.txt\nzqx-vuln-py\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r2-rfile-paren",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py (<2)\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r2-rfile-spaced",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py == 1.0.0\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r2-rfile-url",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py @ https://files.pythonhosted.org/zqx_vuln_py-1.0.0.whl\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r2-rfile-cont",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py==1.0.0 \\n    --hash=sha256:abc\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r2-rfile-nospace-comment",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "zqx-vuln-py<2#old\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  },
+  {
+   "set": "rfile",
+   "id": "r2-rfile-constraint",
+   "template": "py",
+   "steps": [
+    {
+     "args": {
+      "task": "Run pip install -r requirements-extra.txt",
+      "packages": [
+       {
+        "ecosystem": "PyPI",
+        "name": "zqx-vuln-py",
+        "version": "latest",
+        "public": true
+       }
+      ]
+     }
+    }
+   ],
+   "files": {
+    "requirements-extra.txt": "-c c.txt\nzqx-vuln-py\n",
+    "c.txt": "zqx-vuln-py<2\n"
+   }
+  }
+ ]
+}

@@ -22,9 +22,8 @@ describe("native bindings", () => {
     const Broken = function () { throw MISSING; } as unknown as typeof Database;
     const problem = checkNativeBindings(Broken);
     expect(problem).toContain("Could not locate the bindings file");
-    expect(problem).toContain("npm install-scripts approve better-sqlite3");
-    expect(problem).toContain("npm config set allow-scripts=better-sqlite3 --location=user");
-    expect(problem).toContain("npx clear-npx-cache");
+    // The cause only: the driver resolution adds the remedy once (audit 2026-11-25, H-5).
+    expect(problem).not.toContain(NATIVE_BINDING_FIX);
     expect(problem).not.toContain("Tried:");
   });
 
@@ -32,6 +31,6 @@ describe("native bindings", () => {
     expect(isNativeBindingError(MISSING)).toBe(true);
     expect(isNativeBindingError(new Error("The module was compiled against a different Node.js version using NODE_MODULE_VERSION 127"))).toBe(true);
     expect(isNativeBindingError(new Error("SQLITE_CANTOPEN: unable to open database file"))).toBe(false);
-    expect(nativeBindingMessage(MISSING)).toBe(`better-sqlite3's native module is not usable (Could not locate the bindings file.). ${NATIVE_BINDING_FIX}`);
+    expect(nativeBindingMessage(MISSING)).toBe(`better-sqlite3's native module is not usable: Could not locate the bindings file. ${NATIVE_BINDING_FIX}`);
   });
 });

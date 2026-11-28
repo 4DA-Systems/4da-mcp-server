@@ -26,8 +26,12 @@ import { compareIn, rangeAdmits } from "./dependency-check-versions.js";
 
 const ORDER: readonly Verdict[] = ["avoid", "review", "unknown", "wait", "proceed"];
 
-/** The worse of two verdicts (avoid > review > unknown > wait > proceed). */
+/**
+ * The worse of two verdicts: avoid > review > unknown > wait > proceed, except that wait is worse
+ * than review (wait stops an install, review does not), as decide orders them.
+ */
 export function worseVerdict(a: Verdict, b: Verdict): Verdict {
+  if ((a === "wait" && b === "review") || (a === "review" && b === "wait")) return "wait";
   return ORDER.indexOf(a) <= ORDER.indexOf(b) ? a : b;
 }
 
@@ -108,7 +112,11 @@ export function mergeCargoBare(exact: MergeItem, caret: MergeItem, raw: string, 
   const req = `^${version}`;
   // Not looked up (private) or not judged at all: both checks say the same; one answer, read as Cargo reads it.
   if (exact.not_checked) return { ...exact, to_requested: raw, to_read_as: cargoReading(raw, req, version, null) };
-  const fresh = judgedNothing(caret) ? null : caret.to;
+  // The caret check names the release a fresh resolve installs only when it resolved the range
+  // (`to_requested` set); a release list that could not be read leaves `to` as the bare version,
+  // which is no reading of the range (pre-publish audit 2026-11-25, C-6: "0.3.20 is the newest
+  // release it admits" with nothing read).
+  const fresh = judgedNothing(caret) || caret.to_requested === undefined ? null : caret.to;
   const verdict = worseVerdict(exact.verdict, caret.verdict);
   const same = fresh === exact.to;
   const head =

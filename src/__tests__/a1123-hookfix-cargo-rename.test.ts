@@ -20,7 +20,7 @@ afterEach(() => s.dispose());
 
 describe("a renamed Cargo dependency is judged as the crate it installs", () => {
   it("inline form: a proceed verdict for the real crate lets it through", () => {
-    s.ledger([{ ecosystem: "crates.io", package: "serde_json", version: "1.0.128", verdict: "proceed" }]);
+    s.ledger([{ ecosystem: "crates.io", package: "serde_json", version: "1.0.128", requested: "1.0.128", verdict: "proceed" }]);
     const file = s.file("Cargo.toml", CARGO);
     expect(s.edit(file, 'anyhow = "1.0.89"\n', 'anyhow = "1.0.89"\njson = { package = "serde_json", version = "1.0.128" }\n').decision).toBe("allow");
   });
@@ -37,7 +37,7 @@ describe("a renamed Cargo dependency is judged as the crate it installs", () => 
     const file = s.file("Cargo.toml", CARGO);
     const run = s.edit(file, 'anyhow = "1.0.89"\n', 'anyhow = "1.0.89"\n\n[dependencies.json]\npackage = "serde_json"\nversion = "1.0.128"\n');
     expect(run.items).toEqual([{ ecosystem: "crates.io", package: "serde_json", to: "1.0.128" }]);
-    s.ledger([{ ecosystem: "crates.io", package: "serde_json", version: "1.0.128", verdict: "proceed" }]);
+    s.ledger([{ ecosystem: "crates.io", package: "serde_json", version: "1.0.128", requested: "1.0.128", verdict: "proceed" }]);
     expect(s.edit(file, 'anyhow = "1.0.89"\n', 'anyhow = "1.0.89"\n\n[dependencies.json]\npackage = "serde_json"\nversion = "1.0.128"\n').decision).toBe("allow");
   });
 

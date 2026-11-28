@@ -26,6 +26,7 @@
  * release's own document, so that request carries the judged version too.
  */
 
+import { NotFoundMemory } from "./npm-packument.js";
 import { sanitizeThirdParty } from "../untrusted-text.js";
 import type { LiveCache } from "./cache.js";
 import type { RateLimiter } from "./rate-limiter.js";
@@ -105,7 +106,7 @@ export function parseRequiresDist(requiresDist: unknown): ReleaseRequirements {
       if (value === false || (!node && /\bextra\b/.test(marker))) continue;
       if (value === null) gate = node ? { marker: markerText(node) } : {};
     }
-    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/.exec(head);
+    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*(.*)$/.exec(head);
     const rest = m ? m[2].trim() : "";
     const spec = rest.replace(/^\(\s*/, "").replace(/\s*\)$/, "").replace(/\s+/g, "");
     if (!m || !PYPI_NAME.test(m[1]) || m[1].length > 100 || rest.startsWith("@") || !isReadableSpecifier(spec)) {
@@ -149,6 +150,7 @@ export function projectPypiProject(name: string, doc: PyPIProject): PackageRelea
 }
 
 export class PypiReleasesReader implements ReleaseMetadataSource {
+  private readonly absent = new NotFoundMemory();
   constructor(
     private cache: LiveCache,
     private rateLimiter: RateLimiter,
@@ -160,9 +162,10 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     const key = `pypi-releases:v2:${normalized}`;
     const hit = this.cache.get<PackageReleaseIndex>(key);
     if (hit) return { status: "ok", data: hit };
-    if (!this.rateLimiter.consume("pypi")) {
-      return { status: "unreachable", detail: "PyPI rate limit reached for this minute" };
-    }
+    // V5: a not-found answer is cached like any other, for a short time (npm-packument.ts NOT_FOUND_TTL_SECONDS).
+    const absentKey = normalized;
+    if (this.absent.has(absentKey)) return { status: "not_found", detail: `"${name}" is not on PyPI` };
+    if (!this.rateLimiter.consume("pypi")) return ownLimit(this.rateLimiter, "pypi");
     let response: Response;
     try {
       response = await fetchWithTimeout(
@@ -173,7 +176,10 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     } catch (err) {
       return { status: "unreachable", detail: `PyPI: ${errorText(err)}` };
     }
-    if (response.status === 404) return { status: "not_found", detail: `"${name}" is not on PyPI` };
+    if (response.status === 404) {
+      this.absent.add(absentKey);
+      return { status: "not_found", detail: `"${name}" is not on PyPI` };
+    }
     if (!response.ok) return { status: "unreachable", detail: `PyPI answered HTTP ${response.status}` };
     let doc: PyPIProject;
     try {
@@ -207,7 +213,7 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     if (hit) return { status: "ok", data: hit };
     if (!parsePep440(version)) return { status: "not_found", detail: "not a PEP 440 version" };
     // The registry-CDN bucket (as fix-path lookups): a requirement read never starves the release lists.
-    if (!this.rateLimiter.consume("fixpath-registry")) return { status: "unreachable", detail: "PyPI rate limit reached for this minute" };
+    if (!this.rateLimiter.consume("fixpath-registry")) return ownLimit(this.rateLimiter, "fixpath-registry");
     let response: Response;
     try {
       response = await fetchWithTimeout(`${PYPI_URL}/${encodeURIComponent(normalized)}/${encodeURIComponent(version)}/json`, { headers: { Accept: "application/json" } }, TIMEOUT_MS);
@@ -232,6 +238,19 @@ export class PypiReleasesReader implements ReleaseMetadataSource {
     const lookup = await this.getReleases(name);
     return lookup.status === "ok" ? { status: "ok", data: lookup.data.createdAt } : lookup;
   }
+}
+
+/**
+ * A PyPI read this server's own request limit held back: never sent, so PyPI is not blamed, and the
+ * answer says when to ask again (pre-publish audit 2026-11-25, C-4, as 6.5.0 did for the Go proxy).
+ */
+function ownLimit(rateLimiter: RateLimiter, bucket: "pypi" | "fixpath-registry"): Extract<RegistryLookup<never>, { status: "unreachable" }> {
+  const retryAfterSeconds = rateLimiter.retryAfterSeconds(bucket);
+  return {
+    status: "unreachable",
+    detail: `this server's own request limit for PyPI was reached, so the read was not sent (it can be made in ${retryAfterSeconds} s)`,
+    ownLimit: { registry: "PyPI", retryAfterSeconds },
+  };
 }
 
 function errorText(err: unknown): string {

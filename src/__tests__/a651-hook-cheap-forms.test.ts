@@ -22,6 +22,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { installsIn, respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 let dir: string;
 let home: string;
@@ -63,10 +65,14 @@ describe("commands", () => {
   });
 
   it("another index or registry still leaves the command unread", () => {
-    expect(read("pip install -i https://pypi.example.com/simple requests==2.25.0")).toEqual([]);
+    // Round 16 (J3): only an index private by shape is the project's own; any other host's names are read.
+    expect(read("pip install -i https://pypi.internal/simple requests==2.25.0")).toEqual([]);
+    expect(read("pip install -i https://mirrors.example.com/simple requests==2.25.0")).toEqual(["PyPI requests ==2.25.0"]);
     expect(read("pip install --index-url https://pypi.org.evil.example/simple requests==2.25.0")).toEqual([]);
-    expect(read("pip install --find-links https://pypi.org/simple requests==2.25.0")).toEqual([]);
-    expect(read("cargo add --registry my-company serde@1.0.100")).toEqual([]);
+    // Round 10 (S6): a find-links location, like an extra index, keeps the public index in play: the name is read.
+    expect(read("pip install --find-links https://pypi.org/simple requests==2.25.0")).toEqual(["PyPI requests ==2.25.0"]);
+    expect(read("pip install --no-index --find-links ./wheels requests==2.25.0")).toEqual([]);
+    expect(read("cargo add --registry my-company serde@1.0.100")).toEqual(["crates.io serde 1.0.100"]);
   });
 
   it("a PEP 508 specifier in parentheses", () => {
@@ -78,7 +84,8 @@ describe("commands", () => {
     expect(read("npm i yargs-parser@npm:minimist@1.2.6")).toEqual(["npm minimist 1.2.6"]);
     expect(read("pnpm add my-lodash@npm:lodash@^4.17.0")).toEqual(["npm lodash ^4.17.0"]);
     expect(read("npm i x@npm:@scope/pkg@1.0.0")).toEqual(["npm @scope/pkg 1.0.0"]);
-    expect(read("npm i x@npm:lodash")).toEqual([]);
+    // An alias with no version installs its target's newest release (wave 2: the request "latest").
+    expect(read("npm i x@npm:lodash")).toEqual(["npm lodash latest"]);
   });
 
   it("a PowerShell block comment is not a command", () => {
@@ -93,10 +100,10 @@ describe("manifest edits", () => {
     expect(reason).toContain('"minimist" "1.2.6" (npm)');
   });
 
-  it('Cargo `registry = "crates-io"` is the public registry: held; another registry goes ahead', () => {
+  it('Cargo `registry = "crates-io"` is the public registry: held; another registry is judged too (round 26b, D1: a named source is not resolved)', () => {
     const before = '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\ntokio = "1.35.0"\n';
     expect(editDecision("Cargo.toml", before, 'tokio = "1.35.0"', 'tokio = { version = "1.18.0", registry = "crates-io" }')).toContain('"tokio" "1.18.0" (crates.io)');
-    expect(editDecision("Cargo.toml", before, 'tokio = "1.35.0"', 'tokio = { version = "1.18.0", registry = "corp" }')).toBeNull();
+    expect(editDecision("Cargo.toml", before, 'tokio = "1.35.0"', 'tokio = { version = "1.18.0", registry = "corp" }')).toContain('"tokio" "1.18.0" (crates.io)');
   });
 
   it('"latest" is held with a call for latest', () => {

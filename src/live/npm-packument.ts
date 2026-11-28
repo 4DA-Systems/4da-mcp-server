@@ -57,7 +57,32 @@ export interface NpmPackument {
   "dist-tags"?: { latest?: string };
 }
 
+/** How long a registry's "no such package" is believed (V5): a name may be published, so not for long. */
+export const NOT_FOUND_TTL_SECONDS = 600;
+
+/**
+ * "Not on the registry" answers, kept in this process only (never on disk) for NOT_FOUND_TTL_SECONDS: calls
+ * repeated against a slow registry move forward instead of asking again for the same missing names (V5).
+ */
+export class NotFoundMemory {
+  private readonly at = new Map<string, number>();
+  has(key: string): boolean {
+    const t = this.at.get(key);
+    if (t === undefined) return false;
+    if (Date.now() - t > NOT_FOUND_TTL_SECONDS * 1000) {
+      this.at.delete(key);
+      return false;
+    }
+    return true;
+  }
+  add(key: string): void {
+    if (this.at.size >= 5000) this.at.delete(this.at.keys().next().value as string);
+    this.at.set(key, Date.now());
+  }
+}
+
 export class NpmPackumentReader implements ReleaseMetadataSource {
+  private readonly absent = new NotFoundMemory();
   constructor(
     private cache: LiveCache,
     private rateLimiter: RateLimiter,
@@ -70,8 +95,18 @@ export class NpmPackumentReader implements ReleaseMetadataSource {
     if (cached && Date.now() - cached.fetchedAtMs < FRESH_MS) {
       return { status: "ok", data: cached.index };
     }
+    // V5: "not on the registry" is an answer too, cached for NOT_FOUND_TTL_SECONDS like any other, so calls
+    // repeated against a slow registry move forward instead of asking again for the same missing names.
+    const absentKey = name;
+    if (!cached && this.absent.has(absentKey)) return { status: "not_found", detail: `"${name}" is not on the public npm registry` };
     if (!this.rateLimiter.consume("npm")) {
-      return { status: "unreachable", detail: "npm registry rate limit reached for this minute" };
+      // This server's own limit, never the registry's: named as such, with when to ask again (C-4, as 6.5.0 did for Go).
+      const retryAfterSeconds = this.rateLimiter.retryAfterSeconds("npm");
+      return {
+        status: "unreachable",
+        detail: `this server's own request limit for the npm registry was reached, so the read was not sent (it can be made in ${retryAfterSeconds} s)`,
+        ownLimit: { registry: "the npm registry", retryAfterSeconds },
+      };
     }
 
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -93,6 +128,7 @@ export class NpmPackumentReader implements ReleaseMetadataSource {
       return { status: "ok", data: cached.index };
     }
     if (response.status === 404) {
+      this.absent.add(absentKey);
       return { status: "not_found", detail: `"${name}" is not on the public npm registry` };
     }
     if (!response.ok) {

@@ -12,6 +12,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect } from "vitest";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./a1125-manager-stubs.js";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "hooks", "manifest-edit.mjs");
 
@@ -68,7 +70,7 @@ export function sandbox(): Sandbox {
     },
     ledger(entries) {
       const t = new Date(Date.now() - 60_000).toISOString();
-      writeFileSync(join(home, "check-ledger.jsonl"), entries.map((e) => JSON.stringify({ t, ecosystem: "npm", ...e })).join("\n") + "\n");
+      writeFileSync(join(home, "check-ledger.jsonl"), entries.map((e) => JSON.stringify({ t, sv: "6.6.0", ecosystem: "npm", ...e })).join("\n") + "\n");
     },
     edit: (path, oldString, newString, extra = {}) => run(pre("Edit", { file_path: path, old_string: oldString, new_string: newString, replace_all: false, ...extra })),
     write: (path, content) => run(pre("Write", { file_path: path, content })),

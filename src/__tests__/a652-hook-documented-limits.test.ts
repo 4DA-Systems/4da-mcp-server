@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * The guard hook's limits that 6.5.2's changelog lists under "Known limits", held as they are.
+ * The guard hook's limits that the 6.6.0 changelog's 6.5.2 draft listed under "Known limits", held as they are now (most are read or held since; the rows say which).
  *
  * An independent check of the 6.5.1 hook (2026-11-25) found six spellings that go ahead unread
  * while the plain spelling beside each is held. They are documented, not fixed: a fix for one of
@@ -15,10 +15,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import "./helpers/a1125-poetry-on-path.js";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 let dir: string;
 let home: string;
@@ -45,7 +49,7 @@ function write(file: string, content: string) {
 }
 /** A `proceed` for one PyPI release, a minute old. */
 function proceed(pkg: string, version: string): void {
-  writeFileSync(join(home, LEDGER_FILE), JSON.stringify({ t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "PyPI", package: pkg, version, verdict: "proceed", reason: "ok" }) + "\n");
+  writeFileSync(join(home, LEDGER_FILE), JSON.stringify({ sv: "6.6.0", t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "PyPI", package: pkg, version, verdict: "proceed", reason: "ok" }) + "\n");
 }
 
 const LONG = "1." + "0".repeat(80); // a version over 80 characters
@@ -53,7 +57,8 @@ const NINE = ">=1,>=1,>=1,>=1,>=1,>=1,>=1,>=1,<2";
 const EXTRAS = Array.from({ length: 30 }, (_, i) => `extra${i}`).join(","); // 229 characters
 const pyproject = (dependencies: string) => `[project]\nname = "a"\nversion = "1"\ndependencies = ${dependencies}\n`;
 
-describe("a part past a bound holds a command only where the quick look sees the install", () => {
+// Round 8 (R8-1): no longer a limit: the detector reads the raw text, so a wrapped install with a part past a bound is held too.
+describe("a part past a bound holds a command wherever the detector sees the install", () => {
   it("the plain command is held as not read", () => {
     expect(bash(`pip install 'requests==${LONG}'`).decision).toBe("not read");
   });
@@ -64,17 +69,18 @@ describe("a part past a bound holds a command only where the quick look sees the
     ["after if", (i) => `if ${i}; then :; fi`],
     ["after a leading redirection", (i) => `2>/dev/null ${i}`],
   ];
-  it.each(WRAPPED)("%s: the unreadable install goes ahead, the readable one is held", (_label, wrap) => {
-    expect(bash(wrap(`pip install 'requests==${LONG}'`)).decision).toBe("allow");
+  it.each(WRAPPED)("%s: the unreadable install is held as not read, the readable one for its verdict", (_label, wrap) => {
+    expect(bash(wrap(`pip install 'requests==${LONG}'`)).decision).toBe("not read");
     expect(bash(wrap("pip install 'requests==2.31.0'")).decision).toBe("no verdict");
   });
 });
 
-describe("a requirement continued with a backslash is read as its first line", () => {
-  it("the second line's exclusion is not seen", () => {
+// Round 8: no longer a limit: pip joins a line ending in a backslash with the next, and so does the hook.
+describe("a requirement continued with a backslash is read whole", () => {
+  it("the second line's exclusion is seen", () => {
     proceed("requests", "2.31.0");
     expect(write("requirements.txt", "requests<=2.31.0,!=2.31.0\n").decision).toBe("no verdict");
-    expect(write("requirements.txt", "requests<=2.31.0,\\\n!=2.31.0\n").decision).toBe("allow");
+    expect(write("requirements.txt", "requests<=2.31.0,\\\n!=2.31.0\n").decision).toBe("no verdict");
   });
 
   it("a pin whose continuation lines hold only --hash options is read whole", () => {
@@ -85,40 +91,42 @@ describe("a requirement continued with a backslash is read as its first line", (
 });
 
 describe("a pip requirement with more than eight version clauses", () => {
-  it("goes ahead unread in a command and in a pyproject array", () => {
-    expect(bash(`pip install 'requests${NINE}'`).decision).toBe("allow");
-    expect(bash(`uv add 'requests${NINE}'`).decision).toBe("allow");
-    expect(bash(`poetry add 'requests${NINE}'`).decision).toBe("allow");
-    expect(write("pyproject.toml", pyproject(`["requests${NINE}"]`)).decision).toBe("allow");
+  // Round 8 (R8-2): a command whose operand is not read is held as not read; the array is still a limit.
+  // Round 24 (Y1 b, default deny): the pyproject array is no longer a limit.
+  it("is held as not read in a command and in a pyproject array", () => {
+    expect(bash(`pip install 'requests${NINE}'`).decision).toBe("not read");
+    expect(bash(`uv add 'requests${NINE}'`).decision).toBe("not read");
+    expect(bash(`poetry add 'requests${NINE}'`).decision).toBe("not read");
+    expect(write("pyproject.toml", pyproject(`["requests${NINE}"]`)).decision).toBe("not read");
   });
 
-  it("is judged on its first eight clauses in a requirements file", () => {
-    const r = write("requirements.txt", `requests${NINE}\n`);
-    expect(r.decision).toBe("no verdict");
-    expect(r.text).toContain('">=1,>=1,>=1,>=1,>=1,>=1,>=1,>=1"');
-    expect(r.text).not.toContain("<2");
+  // Round 34 (B2): after the specifier a requirements line holds only a marker, hash options or a
+  // comment: the clauses past the eighth are text the hook does not read, so the line is not read.
+  it("is held as not read in a requirements file", () => {
+    expect(write("requirements.txt", `requests${NINE}\n`).decision).toBe("not read");
   });
 });
 
 describe("extras over 200 characters", () => {
-  it("the requirement is read as naming no version", () => {
+  it("the requirement is held as not read in a command (round 8) and in a file (round 24, Y1 b)", () => {
     expect(bash("pip install 'requests[socks]==2.31.0'").decision).toBe("no verdict");
-    expect(bash(`pip install 'requests[${EXTRAS}]==2.31.0'`).decision).toBe("allow");
-    expect(write("requirements.txt", `requests[${EXTRAS}]==2.31.0\n`).decision).toBe("allow");
+    expect(bash(`pip install 'requests[${EXTRAS}]==2.31.0'`).decision).toBe("not read");
+    expect(write("requirements.txt", `requests[${EXTRAS}]==2.31.0\n`).decision).toBe("not read");
   });
 });
 
-describe("two TOML spellings of a pyproject requirement are not decoded", () => {
-  it("a multi-line basic string broken with a line-ending backslash, and project as a root inline table", () => {
+describe("two TOML spellings of a pyproject requirement (no longer limits since round 7 of the a1125 hook lane)", () => {
+  // Round 29: the reader decodes the line-ending backslash (tomlString): the requirement is read and judged.
+  it("a line-ending backslash in a multi-line basic string is read; project as a root inline table is read", () => {
     expect(write("pyproject.toml", pyproject(`["requests==2.31.0"]`)).decision).toBe("no verdict");
-    expect(write("pyproject.toml", pyproject(`["""requests==\\\n    2.31.0"""]`)).decision).toBe("allow");
-    expect(write("pyproject.toml", `project = { name = "a", version = "1", dependencies = ["requests==2.31.0"] }\n`).decision).toBe("allow");
+    expect(write("pyproject.toml", pyproject(`["""requests==\\\n    2.31.0"""]`)).decision).toBe("no verdict");
+    expect(write("pyproject.toml", `project = { name = "a", version = "1", dependencies = ["requests==2.31.0"] }\n`).decision).toBe("no verdict");
   });
 });
 
 describe("a Poetry constraint with clauses separated by a blank", () => {
-  it("is not read; with a comma it is", () => {
+  it("is held as not read (round 8); with a comma it is read", () => {
     expect(bash(`poetry add "requests@>=2.0,!=2.31.0"`).decision).toBe("no verdict");
-    expect(bash(`poetry add "requests@>=2.0 !=2.31.0"`).decision).toBe("allow");
+    expect(bash(`poetry add "requests@>=2.0 !=2.31.0"`).decision).toBe("not read");
   });
 });

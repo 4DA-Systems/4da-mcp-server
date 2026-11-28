@@ -1,0 +1,4 @@
+{
+ "app.py": "from flask import Flask\napp = Flask(__name__)\n",
+ "requirements.txt": "flask==3.0.3\n"
+}

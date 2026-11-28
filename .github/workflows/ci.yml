@@ -36,7 +36,10 @@ jobs:
           # better-sqlite3 here (src/sqlite-driver.ts).
           - { os: ubuntu-latest, node: "22.12" }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The suite takes about 10 minutes on Linux, 19 on Windows and more than 20 on
+    # macOS since the vendored review sets (15,700 tests), and the Node 24 leg
+    # runs it twice (both SQLite drivers).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -73,7 +76,7 @@ jobs:
   checks:
     name: Checks (gates, audit, package, contract)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -128,6 +131,27 @@ jobs:
 
       - name: App-schema contract (vendored contract/app-schema.sql)
         run: pnpm run contract
+
+  # Its own job: each contract run records the whole suite's SQL (about ten
+  # minutes since the vendored review sets), and two of them in one job passed
+  # the 20-minute limit.
+  contract-upstream:
+    name: App-schema contract (4DA main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
 
       - name: App-schema contract (the desktop app's current main)
         run: |
@@ -331,7 +355,7 @@ jobs:
     name: Report a nightly failure
     # Every job of the nightly: a failed install smoke or bundle build is a
     # nightly failure too, and one this job does not need would go unreported.
-    needs: [test, checks, install-smoke, bundle, conformance, conformance-main]
+    needs: [test, checks, contract-upstream, install-smoke, bundle, conformance, conformance-main]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:

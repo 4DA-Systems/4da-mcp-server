@@ -41,9 +41,29 @@ export interface PrivateSetting {
   from: string;
 }
 
-/** FOURDA_PUBLIC_MIRRORS: hosts (or URLs) the user declares mirror only the public registries. */
+/**
+ * Well-known public mirrors of PyPI, crates.io and the Go module proxy, which serve only the public
+ * registries: with one of them configured as the default index, names are checked as public. Each
+ * was verified on 2026-11-27 to serve the public registry (PyPI: /simple/requests/ lists
+ * requests-2.19.0; crates.io: the index's config.json; Go: golang.org/x/text/@v/list lists v0.3.0).
+ * npm's registry.npmmirror.com is a public host already (private-hosts.ts).
+ */
+export const BUILTIN_PUBLIC_MIRRORS: readonly string[] = [
+  "pypi.tuna.tsinghua.edu.cn",
+  "mirrors.aliyun.com",
+  "mirrors.cloud.tencent.com",
+  "repo.huaweicloud.com",
+  "pypi.mirrors.ustc.edu.cn",
+  "mirrors.ustc.edu.cn",
+  "rsproxy.cn",
+  "mirrors.tuna.tsinghua.edu.cn",
+  "goproxy.cn",
+  "goproxy.io",
+];
+
+/** FOURDA_PUBLIC_MIRRORS: hosts (or URLs) the user declares mirror only the public registries, with the built-in ones. */
 export function publicMirrorHosts(env: NodeJS.ProcessEnv): Set<string> {
-  const out = new Set<string>();
+  const out = new Set<string>(BUILTIN_PUBLIC_MIRRORS);
   for (const raw of (env.FOURDA_PUBLIC_MIRRORS ?? "").split(/[,\s]+/)) {
     const entry = raw.trim();
     if (!entry) continue;
@@ -465,7 +485,7 @@ export function privateDirectReference(location: string): boolean {
 export function pep508DirectReferences(content: string): Array<{ name: string; location: string }> {
   const out: Array<{ name: string; location: string }> = [];
   for (const s of tomlStrings(content)) {
-    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*@\s*((?:git\+)?[a-z][a-z0-9+.-]*:\S+)/i.exec(s);
+    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\s*\[[^\]]*\])?\s*@\s*((?:git\+)?[a-z][a-z0-9+.-]*:\S+)/i.exec(s);
     if (m) out.push({ name: m[1], location: m[2] });
   }
   return out;

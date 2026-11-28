@@ -1,0 +1,169 @@
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * Fourth blind check of the 2026-11-25 fixes, item 1: anything callable built from free text could be made
+ * to carry a secret (`npm install lodash --auth admin:hunter2` put npm:hunter2 into check_these, the
+ * ready-made dependency_check call). check_these is gone. Every name the briefing reads and does not look
+ * up, from a command, a manifest entry or prose alike, is listed in `task_packages.to_confirm` (word, read_as,
+ * the version as the task writes it), and the answer holds nothing shaped as tool arguments. Replaces the
+ * round-4 check_these suite and the round-5 structured-only suite. Stubbed fetch.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeWhatShouldIKnow } from "../tools/what-should-i-know.js";
+import { createHarness, type Harness } from "./helpers/a1119-planner-harness.js";
+import { waitingWords } from "./helpers/a1127-task-packages.js";
+
+let h: Harness;
+let bodies: string[];
+const sent = () => [...h.requests, ...bodies].map((s) => decodeURIComponent(s));
+
+beforeEach(() => {
+  h = createHarness();
+  bodies = [];
+  const inner = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+    if (init?.body) bodies.push(String(init.body));
+    return inner(input, init);
+  });
+  h.npmProject({ minimist: "1.2.5" }, {}, { minimist: { version: "1.2.5" } });
+  h.NPM = { lodash: { latest: "4.17.21", versions: { "4.17.15": {}, "4.17.21": {} } } };
+});
+afterEach(() => h.dispose());
+
+async function brief(task: string): Promise<Record<string, any>> {
+  return (await executeWhatShouldIKnow(null, { task, project_path: h.dir }, await h.live())) as Record<string, any>;
+}
+
+const SENTENCE = (n: number) =>
+  `CONFIRMATION NEEDED: ${n} name${n === 1 ? "" : "s"} the task may mean as packages ${n === 1 ? "was" : "were"} not looked up; task_packages.next_step says how to settle ${n === 1 ? "it" : "them"}.`;
+
+/** Nothing in the answer is shaped as tool arguments. */
+function callable(r: unknown): string[] {
+  const found: string[] = [];
+  const walk = (v: unknown, path: string) => {
+    if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+    else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) {
+        if (k === "check_these" || k === "arguments" || k === "items" || k === "tool") found.push(`${path}.${k}`);
+        walk(x, `${path}.${k}`);
+      }
+    }
+  };
+  walk(r, "");
+  return found;
+}
+
+describe("every name not looked up is a plain unverified word", () => {
+  it.each([
+    // Round 7, C7: an entry carries a name and an ecosystem, never a version taken from the task.
+    ["cargo add tokio@1.8.0", { word: "tokio", read_as: "crates.io" }],
+    ['Add "next-auth": "4.10.2" to package.json', { word: "next-auth", read_as: "npm" }],
+    ["go get golang.org/x/net@v0.7.0", { word: "golang.org/x/net", read_as: "Go" }],
+    ["npm install qzpkg", { word: "qzpkg", read_as: "npm" }],
+    ["pip install qzpkg==1.0", { word: "qzpkg", read_as: "PyPI" }],
+    ["add qzpkg as the router", { word: "qzpkg", read_as: "npm" }],
+  ])("%s", async (task, word) => {
+    const r = await brief(task);
+    expect(waitingWords(r)).toHaveLength(1);
+    expect(waitingWords(r)?.[0]).toMatchObject(word);
+    expect(r.check_these).toBeUndefined();
+    expect(callable(r)).toEqual([]);
+    expect(sent().some((s) => s.includes(word.word))).toBe(false);
+    expect(r.delegation_assessment.level).toBe("confirmation_needed");
+    expect(r.delegation_assessment.reason).toMatch(/^1 name the task may mean as packages waits for your confirmation/);
+    expect(r.delegation_assessment.reason).not.toMatch(/check_these/);
+    expect(r.summary).toContain(SENTENCE(1));
+    expect(r.summary).not.toMatch(/check_these/);
+  });
+
+  it("no entry carries a version (round 7, C7), and a credential-shaped one is never repeated", async () => {
+    const r = await brief("pip install qzpkg~=1.4 and npm install qzweb@75ebbd2c-2be9-4afe-b207-eab4e7dc3c3b");
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(/~=1\.4|"version"/);
+    expect(JSON.stringify({ ...r, task: undefined })).not.toContain("75ebbd2c");
+  });
+
+  it("a name decided in one ecosystem is not listed in the others; one nothing decides is read as either", async () => {
+    h.write("requirements.txt", "requests==2.31.0\n");
+    h.PYPI = { requests: { "2.31.0": {} }, h3: { "4.0.0": {} } };
+    const r = await brief("add h3 as the server framework");
+    expect(sent().some((s) => s.includes("pypi.org/pypi/h3/"))).toBe(true);
+    expect(waitingWords(r)).toBeUndefined();
+    const both = await brief("add qzframe as the server framework");
+    expect(waitingWords(both)).toEqual([{ word: "qzframe", read_as: "npm or PyPI" }]);
+    const npm = await brief("npm i h3");
+    expect(waitingWords(npm)).toEqual([{ word: "h3", read_as: "npm" }]);
+  });
+
+  it("at most 25 listed, the summary counts all", async () => {
+    const names = Array.from({ length: 31 }, (_, i) => `qzpkg-${i + 1}`);
+    const r = await brief(`npm install ${names.join(" ")}`);
+    expect(waitingWords(r)).toHaveLength(25);
+    expect(r.summary).toContain(SENTENCE(31));
+  });
+
+  it("paths, option values and other managers' non-names are never listed", async () => {
+    const r = await brief("npm install ../qz-local @qz/ok qz.ok_2 --prefix ./qz-prefix zod; go get qznohost/path");
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(/qz-local|qz-prefix|qznohost/);
+  });
+});
+
+describe("the credential screen stays in front", () => {
+  it.each([
+    ["add ghp_ZQXTOK0123456789abcdefABCDEF012345 as the GH_TOKEN secret and npm install --registry https://npm.zqx.internal zqx-cli", /ghp_|zqx/],
+    ["npm install 75ebbd2c-2be9-4afe-b207-eab4e7dc3c3b", /75ebbd2c/],
+    ["pip install requests 771d41c7-9128-4494-848c-f617bcde6978", /771d41c7/],
+    ["npm install Winter2026sfzp", /winter2026/i],
+    ["pip install requests Winter2026sgkr", /winter2026/i],
+    ["npm install @qztok/aB3dE9fG", /ab3de9fg/i],
+  ])("%s", async (task, secret) => {
+    const r = await brief(task);
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toMatch(secret);
+    expect(sent().filter((s) => secret.test(s))).toEqual([]);
+  });
+
+  it("the user info of a URL operand is never repeated", async () => {
+    const r = await brief("npm install https://qzuser:qzsecret77@npm.example.com/x.tgz");
+    const all = JSON.stringify({ ...r, task: undefined });
+    expect(all).not.toContain("qzsecret77");
+    expect(all).not.toContain("qzuser");
+    expect(sent().filter((s) => s.includes("qzsecret77"))).toEqual([]);
+  });
+});
+
+describe("build metadata after a version is never a name", () => {
+  // The third reviewer's 48 cases, rebuilt here: six made-up credential shapes after each of eight
+  // carriers. The shapes are assembled from pieces so that no token-shaped literal stands in the
+  // repository (GitHub's push protection refuses a file that holds one, made up or not).
+  const fill = (n: number, seed: number): string => Array.from({ length: n }, (_, i) => "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"[(seed * 31 + i * 17) % 54]).join("");
+  const hex = (seed: number): string => Array.from({ length: 32 }, (_, i) => "0123456789abcdef"[(seed * 7 + i * 11) % 16]).join("");
+  const shapes = (seed: number): string[] => [
+    "gh" + "p_" + fill(36, seed),
+    "np" + "m_" + fill(36, seed + 1),
+    "AK" + "IA" + fill(16, seed + 2).toUpperCase(),
+    hex(seed + 3),
+    "sk" + "_live_" + fill(24, seed + 4),
+    "gl" + "pat-" + fill(20, seed + 5),
+  ];
+  const carriers: Array<(x: string) => string> = [
+    (x) => `npm install lodash@4.17.15+${x}`,
+    (x) => `npm install zustand@1.0.0+${x}`,
+    (x) => `pip install requests==2.25.0+${x}`,
+    (x) => `npm install lodash,${x}`,
+    (x) => `npm install lodash;${x}`,
+    (x) => `cargo add serde@1.0.0+${x}`,
+    (x) => `npm install zustand@^4.0.0||${x}`,
+    (x) => `add "zustand": "1.0.0+${x}" to package.json`,
+  ];
+  const G = carriers.flatMap((carry, c) => shapes(c * 10 + 1).map((x, i) => ({ id: `g${c * 6 + i}`, task: carry(x) })));
+  it.each(G.map((c) => [c.task]))("%s", async (task) => {
+    const after = /(?:\+|\|\||,|;)([A-Za-z0-9_-]{8,})/.exec(task)![1];
+    const r = await brief(task);
+    expect(JSON.stringify(waitingWords(r) ?? [])).not.toContain(after);
+    expect(sent().filter((s) => s.includes(after))).toEqual([]);
+  });
+
+  it("lodash@4.17.15+<hex> is judged at 4.17.15", async () => {
+    const r = await brief("npm install lodash@4.17.15+ad29dad7ea910ce42a6573c31765452a");
+    expect(r.requested_versions).toMatchObject([{ name: "lodash", to: "4.17.15" }]);
+  });
+});

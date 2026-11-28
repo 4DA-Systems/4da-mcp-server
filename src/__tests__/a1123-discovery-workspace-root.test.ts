@@ -216,7 +216,7 @@ describe("a1123 discovery: a workspace member, and a project with no lockfile", 
     const plan = (await executeUpgradePlanner(memoryDb(), {}, live)) as Record<string, any>;
     expect(plan.vulnerabilityDataAvailable).toBe(false);
 
-    const briefing = await executeWhatShouldIKnow(memoryDb(), { task: "upgrade lodash, minimist and debug" }, live);
+    const briefing = await executeWhatShouldIKnow(memoryDb(), { packages: [], task: "upgrade lodash, minimist and debug" }, live);
     expect(briefing.delegation_assessment.level).not.toBe("safe_to_delegate");
     expect(briefing.delegation_assessment.reason).toMatch(/no lockfile was read/i);
     for (const d of briefing.task_dependencies) expect(d.installed).toEqual([]);

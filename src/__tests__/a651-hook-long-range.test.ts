@@ -18,6 +18,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { respond } from "../../hooks/manifest-edit.mjs";
 import { LEDGER_FILE } from "../check-ledger.js";
+// The hook's PATH lookups see a stub for each manager and runner word, whatever the machine (Windows).
+import "./helpers/a1125-manager-stubs.js";
 
 const R = "^3.0.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0-0 || ^9.0.0 || ^10.0.0-0";
 const R2 = ">=16.14.0 <17.0.0 || >=17.0.2 <18.0.0 || >=18.2.0 <19.0.0 || >=19.0.0 <20.0.0";
@@ -32,7 +34,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function ledger(entries: Array<Record<string, unknown>>) {
-  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "npm", ...e })).join("\n") + "\n");
+  writeFileSync(join(home, LEDGER_FILE), entries.map((e) => JSON.stringify({ sv: "6.6.0", t: new Date(Date.now() - 60_000).toISOString(), ecosystem: "npm", ...e })).join("\n") + "\n");
 }
 function decide(input: Record<string, unknown>): { decision: "allow" | "deny"; text: string } {
   const out = respond({ hook_event_name: "PreToolUse", cwd: dir, ...input }, { FOURDA_MCP_HOME: home }, Date.now());
