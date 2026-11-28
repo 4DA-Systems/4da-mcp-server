@@ -223,10 +223,12 @@ describe("M5: one source rule: no state without a way through, avoid always deni
   });
 });
 
-describe("M6: a range of exclusions only bounds nothing", () => {
-  it.each(['"!=1.0"', '"!=1.0, !=2.0"', '"!= 1.0"', '"!=1.0.0"', '{ version = "!=1.0" }', '"*, !=1.0"'])("poetry packaging = %s: latest", (v) => {
+// Round 34: a spec of exclusions is a range (the newest release may be the one excluded), not latest.
+describe("M6: a range of exclusions only is a range", () => {
+  it.each(['"!=1.0"', '"!=1.0, !=2.0"', '"!= 1.0"', '"!=1.0.0"', '{ version = "!=1.0" }', '"*, !=1.0"'])("poetry packaging = %s: held, not judged as latest", (v) => {
     const r = s.write(`${s.project}/pyproject.toml`, `[tool.poetry.dependencies]\npackaging = ${v}\n`);
-    expect(r.items, r.text).toEqual([{ ecosystem: "PyPI", package: "packaging", to: "latest" }]);
+    expect(r.decision, r.text).toBe("deny");
+    expect(r.items ?? []).not.toEqual([{ ecosystem: "PyPI", package: "packaging", to: "latest" }]);
   });
   it('">=1,!=2" is a bounded range, judged as written', () => {
     expect(s.write(`${s.project}/pyproject.toml`, '[tool.poetry.dependencies]\npackaging = ">=1,!=2"\n').items).not.toEqual([{ ecosystem: "PyPI", package: "packaging", to: "latest" }]);

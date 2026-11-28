@@ -100,11 +100,10 @@ describe("a pip requirement with more than eight version clauses", () => {
     expect(write("pyproject.toml", pyproject(`["requests${NINE}"]`)).decision).toBe("not read");
   });
 
-  it("is judged on its first eight clauses in a requirements file", () => {
-    const r = write("requirements.txt", `requests${NINE}\n`);
-    expect(r.decision).toBe("no verdict");
-    expect(r.text).toContain('">=1,>=1,>=1,>=1,>=1,>=1,>=1,>=1"');
-    expect(r.text).not.toContain("<2");
+  // Round 34 (B2): after the specifier a requirements line holds only a marker, hash options or a
+  // comment: the clauses past the eighth are text the hook does not read, so the line is not read.
+  it("is held as not read in a requirements file", () => {
+    expect(write("requirements.txt", `requests${NINE}\n`).decision).toBe("not read");
   });
 });
 
